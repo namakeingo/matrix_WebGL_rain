@@ -1,0 +1,1364 @@
+{
+	"contentrating" : "Everyone",
+	"description" : "Matrix-style digital rain in 3D, drawn with WebGL. Drops fall at different distances onto a reflective water plane, where they splash and make ripples, and fade into layers of drifting fog that blur what is behind them. Now and then lightning strikes, lighting up the sky and the water. A clock and a message can be shown, formed by the rain that freezes inside their letters.\n\n[h1]Support[/h1]\nIf you can, please sponsor me at https://github.com/sponsors/namakeingo \n\n[h1]Customizable elements:[/h1]\n[h3]Rain[/h3]\n[list]\n    [*]Drops: characters, density, speed and trail length, falling in columns at different distances\n    [*]Distance: font size range; smaller drops are further back, slower and dimmer\n    [*]Glow: head brightness and bloom, both stronger at the front\n    [*]Colors: 4 custom colors or a rainbow color wave (speed and width), high contrast text\n    [*]Lightning: playing time (a random one between a shortest and a longest), brightness, flash intensity and average time between strikes; branching bolts at random places and distances, several at once, as a glowing line or made of rain characters, flickering as they fade\n[/list]\n[h3]Physics[/h3]\n[list]\n    [*]Planes: height and tone; a collision plane where drops land and a reflection plane that mirrors the rain, the lightning and the text\n    [*]Splashes: height; they fly forwards, backwards and sideways in 3D\n    [*]Reflection: strength, up to mirror-like\n    [*]Ripples: intensity, darkening, lightening, speed and duration of the rings spreading on the water\n    [*]Distance fog: two colors, intensity, blurring, number of layers and movement; drifting layers that cover and blur what is behind them\n[/list]\n[h3]Music[/h3]\n[list]\n    [*]Reaction: sensitivity of the rain and of the lightning, how quickly the rain follows the music when it gets louder, and how much a peak's loudness, its suddenness, the tempo, the music's brightness and the energy of the part of the song playing count (under Advanced lightning tuning); both react to the music that is playing, with strikes on its sudden, loud peaks, more often in fast, bright music and in its loudest parts\n    [*]Idle animation: after a set time of silence, the rain and the lightning go on as without music\n[/list]\n[h3]Clock[/h3]\n[list]\n    [*]Clock: 24h or 12h, formed by the rain that freezes inside its digits, never covered by the fog\n    [*]Size and position: absolute, or relative to the screen\n[/list]\n[h3]Message[/h3]\n[list]\n    [*]Message: custom text, formed by the frozen rain like the clock, shown with the clock or on its own\n    [*]Size and position: absolute, or relative to the screen\n[/list]\n[h3]Miscellaneous[/h3]\n[list]\n    [*]OLED pixel shift: moves the rain and the text a few pixels now and then, against burn-in\n    [*]Frame cap: the frame rate to aim for (24 FPS recommended for the film look); the wallpaper draws at the highest rate the PC holds up to it (and never above Wallpaper Engine's FPS or the monitor's refresh rate), the rain keeps its speed at any rate, and above the rain's own speed the drops and splashes glide smoothly\n    [*]Debug mode: tools for testing: readouts of the music's reaction, of the performance (with the frame cap in use and where it comes from) and of the OLED pixel shift, simulated music (genres, beats, song parts, dark and bright music, steady and pulsing sound, test tones), a strike on demand at a chosen distance, a view of how near each pixel is, switches for the lightning's flash and the splashes, a freeze, and a start as the settled rain\n[/list]",
+	"file" : "index.html",
+	"general" : 
+	{
+		"localization" : 
+		{
+			"de-de" : 
+			{
+				"ui_100_label_Rain" : "<small>Regen-Einstellungen ein-/ausblenden&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</small><hr>",
+				"ui_101_setting_Symbols" : "Symbole",
+				"ui_102_setting_FontSizeMin" : "Symbolgröße Min",
+				"ui_103_setting_FontSizeMax" : "Symbolgröße Max",
+				"ui_104_setting_RainDensity" : "Dichte",
+				"ui_106_setting_HeadBrightness" : "Helligkeit der Tropfenspitze",
+				"ui_107_setting_Bloom" : "Leuchten",
+				"ui_108_setting_CustomColors" : "Eigene Farben",
+				"ui_109_setting_Color1" : "Farbe 1",
+				"ui_110_setting_Color2" : "Farbe 2",
+				"ui_111_setting_Color3" : "Farbe 3",
+				"ui_112_setting_Color4" : "Farbe 4",
+				"ui_113_setting_ColorWave" : "Farbwelle",
+				"ui_114_setting_WaveSpeed" : "Wellengeschwindigkeit",
+				"ui_115_setting_WaveWidth" : "Wellenbreite",
+				"ui_116_setting_HighContrastText" : "Kontrastreicher Text",
+				"ui_117_setting_TrailLength" : "Spurlänge",
+				"ui_118_setting_Speed" : "Geschwindigkeit",
+				"ui_119_setting_Lightning" : "Blitze",
+				"ui_120_setting_LightningPlayTimeMin" : "Blitzdauer Min (ms)",
+				"ui_121_setting_LightningPlayTimeMax" : "Blitzdauer Max (ms)",
+				"ui_122_setting_LightningBrightness" : "Blitzhelligkeit",
+				"ui_123_setting_LightningFlashIntensity" : "Blitz-Lichtstärke",
+				"ui_124_setting_LightningFrequency" : "Blitzhäufigkeit",
+				"ui_125_setting_CharactersBolt" : "Blitz aus Zeichen",
+				"ui_126_spacer_Rain" : "<br>",
+				"ui_200_label_Physics" : "<small>Physik-Einstellungen ein-/ausblenden&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</small><hr>",
+				"ui_201_setting_CollisionPlane" : "Aufprallebene",
+				"ui_202_setting_ReflectionPlane" : "Spiegelungsebene",
+				"ui_203_setting_PlaneHeight" : "Höhe der Ebene (%)",
+				"ui_204_setting_PlaneTone" : "Farbton der Ebene",
+				"ui_205_setting_SplashHeight" : "Spritzhöhe",
+				"ui_206_setting_ReflectionStrength" : "Stärke der Spiegelung",
+				"ui_207_setting_Ripples" : "Wellen",
+				"ui_208_setting_RippleIntensity" : "Stärke der Wellen",
+				"ui_209_setting_RippleDarkening" : "Abdunkeln durch Wellen",
+				"ui_210_setting_RippleLightening" : "Aufhellen durch Wellen",
+				"ui_211_setting_RippleSpeed" : "Geschwindigkeit der Wellen",
+				"ui_212_setting_RippleDuration" : "Dauer der Wellen (Sekunden)",
+				"ui_213_setting_DistanceFog" : "Nebel in der Ferne",
+				"ui_214_setting_FogColorMain" : "Nebelfarbe 1",
+				"ui_215_setting_FogColorSecondary" : "Nebelfarbe 2",
+				"ui_216_setting_FogIntensity" : "Nebelstärke",
+				"ui_217_setting_FogLayerBlurring" : "Nebelunschärfe",
+				"ui_218_setting_FogLayers" : "Nebelschichten",
+				"ui_219_setting_FogMovement" : "Nebelbewegung",
+				"ui_220_spacer_Physics" : "<br>",
+				"ui_300_label_Music" : "<small>Musik-Einstellungen ein-/ausblenden&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</small><hr>",
+				"ui_301_setting_ReactToMusic" : "Reagiert auf Musik",
+				"ui_302_setting_MusicSensitivity" : "Musik Empfindlichkeit",
+				"ui_303_setting_MusicRainResponsiveness" : "Reaktionsgeschwindigkeit des Musikregens",
+				"ui_304_label_MusicRainResponsivenessNote" : "<small>Reaktionsgeschwindigkeit des Musikregens: wie schnell der Regen der Musik folgt, wenn sie lauter wird. Bei 1 kommen die neuen Tropfen im Takt des gleichmäßigen Regens, wie der Regen beim Start, sodass der Regen über einige Sekunden dichter wird; höhere Werte bringen sie entsprechend schneller (bei 10 zehnmal schneller). Der Nachteil: Bei hohen Werten kommen die Tropfen, die die Musik bringt, fast zugleich, wie ein Regenvorhang, der auf einmal fällt, nicht wie Regen, der schon fiel. 1 behält das Aussehen des Regens ohne Musik.</small>",
+				"ui_305_setting_MusicSensitivityLightning" : "Blitz Musik Empfindlichkeit",
+				"ui_306_setting_AdvancedLightningTuning" : "Erweiterte Blitzabstimmung",
+				"ui_307_setting_MusicStrengthLightning" : "Blitz Gewicht der Lautstärke",
+				"ui_308_setting_MusicSuddennessLightning" : "Blitz Gewicht der Plötzlichkeit",
+				"ui_309_setting_MusicTempoLightning" : "Blitz Gewicht des Tempos",
+				"ui_310_setting_MusicTimbreLightning" : "Blitz Gewicht der Klanghelligkeit",
+				"ui_311_setting_MusicTrendLightning" : "Blitz Gewicht der Songenergie",
+				"ui_312_setting_MusicIdleAnimation" : "Bei Stille Tropfen erzeugen",
+				"ui_313_setting_MusicIdleTimeout" : "Wartezeit in Sekunden",
+				"ui_314_spacer_Music" : "<br>",
+				"ui_400_label_Clock" : "<small>Uhr-Einstellungen ein-/ausblenden&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</small><hr>",
+				"ui_401_setting_ShowClock" : "Uhr einblenden",
+				"ui_402_setting_ClockRelativeSize" : "Relative Uhrengröße",
+				"ui_403_setting_ClockSize" : "Uhrengröße",
+				"ui_404_setting_ClockRelativeSizePercent" : "Uhrengröße (% der Bildschirmbreite)",
+				"ui_405_setting_ClockRelativePosition" : "Relative Uhrposition",
+				"ui_406_setting_ClockRelativePositionX" : "Relative Uhrposition X (%)",
+				"ui_407_setting_ClockRelativePositionY" : "Relative Uhrposition Y (%)",
+				"ui_408_setting_ClockPositionX" : "Uhr Position X",
+				"ui_409_setting_ClockPositionY" : "Uhr Position Y",
+				"ui_410_setting_Clock12h" : "12 Stunden Zeitformat",
+				"ui_411_spacer_Clock" : "<br>",
+				"ui_500_label_Message" : "<small>Nachrichten-Einstellungen ein-/ausblenden&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</small><hr>",
+				"ui_501_setting_ShowMessage" : "Nachricht einblenden",
+				"ui_502_setting_MessageText" : "Nachrichtentext",
+				"ui_503_setting_MessageRelativeSize" : "Relative Nachrichtengröße",
+				"ui_504_setting_MessageSize" : "Nachrichtentextgröße",
+				"ui_505_setting_MessageRelativeSizePercent" : "Nachrichtengröße (% der Bildschirmbreite)",
+				"ui_506_setting_MessageRelativePosition" : "Relative Nachrichtenposition",
+				"ui_507_setting_MessageRelativePositionX" : "Relative Nachrichtenposition X (%)",
+				"ui_508_setting_MessageRelativePositionY" : "Relative Nachrichtenposition Y (%)",
+				"ui_509_setting_MessagePositionX" : "Nachricht Position X",
+				"ui_510_setting_MessagePositionY" : "Nachricht Position Y",
+				"ui_511_spacer_Message" : "<br>",
+				"ui_600_label_Miscellaneous" : "<small>Sonstige Einstellungen ein-/ausblenden&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</small><hr>",
+				"ui_612_setting_OledPixelShift" : "OLED-Pixelverschiebung",
+				"ui_613_setting_FrameCap" : "Bildratenbegrenzung",
+				"ui_614_label_FrameCapNote" : "<small>24 ist der empfohlene Wert für 'Bildratenbegrenzung' für einen originalgetreuen 'Matrix'-Look (The Matrix (1999) wurde mit 24 Bildern pro Sekunde gedreht und im Kino gezeigt, der Standardrate für 35-mm-Film).</small>",
+				"ui_615_setting_DebugMode" : "Debugmodus",
+				"ui_616_setting_DebugMusicReadout" : "Musikanzeige",
+				"ui_617_setting_DebugMusicSource" : "Simulierte Musik",
+				"ui_618_setting_DebugStrikeNow" : "Jetzt einschlagen (umschalten)",
+				"ui_619_setting_DebugStrikeDistance" : "Einschlagentfernung",
+				"ui_620_setting_DebugPerformance" : "Leistungsanzeige",
+				"ui_621_setting_DebugNearness" : "Nähe-Ansicht",
+				"ui_622_setting_DebugNoFlash" : "Kein Blitzlicht",
+				"ui_623_setting_DebugNoSplashes" : "Keine Spritzer",
+				"ui_624_setting_DebugFreeze" : "Einfrieren",
+				"ui_625_setting_DebugOledReadout" : "OLED-Anzeige",
+				"ui_626_setting_DebugSteadyStart" : "Stetiger Start (wie der eingependelte Regen)"
+			},
+			"en-us" : 
+			{
+				"ui_100_label_Rain" : "<small>Show/Hide Rain Settings&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</small><hr>",
+				"ui_101_setting_Symbols" : "Symbols",
+				"ui_102_setting_FontSizeMin" : "Font size Min",
+				"ui_103_setting_FontSizeMax" : "Font size Max",
+				"ui_104_setting_RainDensity" : "Density",
+				"ui_106_setting_HeadBrightness" : "Head brightness",
+				"ui_107_setting_Bloom" : "Bloom",
+				"ui_108_setting_CustomColors" : "Custom colors",
+				"ui_109_setting_Color1" : "Color 1",
+				"ui_110_setting_Color2" : "Color 2",
+				"ui_111_setting_Color3" : "Color 3",
+				"ui_112_setting_Color4" : "Color 4",
+				"ui_113_setting_ColorWave" : "Color wave",
+				"ui_114_setting_WaveSpeed" : "Wave speed",
+				"ui_115_setting_WaveWidth" : "Wave width",
+				"ui_116_setting_HighContrastText" : "High contrast text",
+				"ui_117_setting_TrailLength" : "Trail length",
+				"ui_118_setting_Speed" : "Speed",
+				"ui_119_setting_Lightning" : "Lightning",
+				"ui_120_setting_LightningPlayTimeMin" : "Lightning playing time Min (ms)",
+				"ui_121_setting_LightningPlayTimeMax" : "Lightning playing time Max (ms)",
+				"ui_122_setting_LightningBrightness" : "Lightning brightness",
+				"ui_123_setting_LightningFlashIntensity" : "Lightning flash intensity",
+				"ui_124_setting_LightningFrequency" : "Lightning frequency",
+				"ui_125_setting_CharactersBolt" : "Characters bolt",
+				"ui_126_spacer_Rain" : "<br>",
+				"ui_200_label_Physics" : "<small>Show/Hide Physics Settings&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</small><hr>",
+				"ui_201_setting_CollisionPlane" : "Collision plane",
+				"ui_202_setting_ReflectionPlane" : "Reflection plane",
+				"ui_203_setting_PlaneHeight" : "Plane height (%)",
+				"ui_204_setting_PlaneTone" : "Plane tone",
+				"ui_205_setting_SplashHeight" : "Splash height",
+				"ui_206_setting_ReflectionStrength" : "Reflection strength",
+				"ui_207_setting_Ripples" : "Ripples",
+				"ui_208_setting_RippleIntensity" : "Ripples intensity",
+				"ui_209_setting_RippleDarkening" : "Ripples darkening strength",
+				"ui_210_setting_RippleLightening" : "Ripples lightening strength",
+				"ui_211_setting_RippleSpeed" : "Ripples speed",
+				"ui_212_setting_RippleDuration" : "Ripples duration (seconds)",
+				"ui_213_setting_DistanceFog" : "Distance fog",
+				"ui_214_setting_FogColorMain" : "Fog main color",
+				"ui_215_setting_FogColorSecondary" : "Fog secondary color",
+				"ui_216_setting_FogIntensity" : "Fog intensity",
+				"ui_217_setting_FogLayerBlurring" : "Fog blurring",
+				"ui_218_setting_FogLayers" : "Fog layers",
+				"ui_219_setting_FogMovement" : "Fog movement",
+				"ui_220_spacer_Physics" : "<br>",
+				"ui_300_label_Music" : "<small>Show/Hide Music Settings&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</small><hr>",
+				"ui_301_setting_ReactToMusic" : "React to music",
+				"ui_302_setting_MusicSensitivity" : "Music sensitivity",
+				"ui_303_setting_MusicRainResponsiveness" : "Music rain responsiveness",
+				"ui_304_label_MusicRainResponsivenessNote" : "<small>Music rain responsiveness: how soon the rain follows the music when it gets louder. At 1 the new drops come in at the rate of the settled rain, as the rain does at the start, so the rain gets heavier over a few seconds; higher values bring them in that many times faster (at 10, ten times). The downside: at high values the drops the music brings come in almost together, like a sheet of rain falling at once, not like rain that was already falling. 1 keeps the look of the rain without music.</small>",
+				"ui_305_setting_MusicSensitivityLightning" : "Lightning music sensitivity",
+				"ui_306_setting_AdvancedLightningTuning" : "Advanced lightning tuning",
+				"ui_307_setting_MusicStrengthLightning" : "Lightning peak loudness weight",
+				"ui_308_setting_MusicSuddennessLightning" : "Lightning peak suddenness weight",
+				"ui_309_setting_MusicTempoLightning" : "Lightning tempo weight",
+				"ui_310_setting_MusicTimbreLightning" : "Lightning music brightness weight",
+				"ui_311_setting_MusicTrendLightning" : "Lightning song energy weight",
+				"ui_312_setting_MusicIdleAnimation" : "Idle animation when silent",
+				"ui_313_setting_MusicIdleTimeout" : "Timeout in seconds",
+				"ui_314_spacer_Music" : "<br>",
+				"ui_400_label_Clock" : "<small>Show/Hide Clock Settings&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</small><hr>",
+				"ui_401_setting_ShowClock" : "Show clock",
+				"ui_402_setting_ClockRelativeSize" : "Relative clock size",
+				"ui_403_setting_ClockSize" : "Clock size",
+				"ui_404_setting_ClockRelativeSizePercent" : "Clock size (% of screen width)",
+				"ui_405_setting_ClockRelativePosition" : "Relative clock position",
+				"ui_406_setting_ClockRelativePositionX" : "Relative clock position X (%)",
+				"ui_407_setting_ClockRelativePositionY" : "Relative clock position Y (%)",
+				"ui_408_setting_ClockPositionX" : "Clock position X",
+				"ui_409_setting_ClockPositionY" : "Clock position Y",
+				"ui_410_setting_Clock12h" : "12h clock",
+				"ui_411_spacer_Clock" : "<br>",
+				"ui_500_label_Message" : "<small>Show/Hide Message Settings&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</small><hr>",
+				"ui_501_setting_ShowMessage" : "Show message",
+				"ui_502_setting_MessageText" : "Message text",
+				"ui_503_setting_MessageRelativeSize" : "Relative message size",
+				"ui_504_setting_MessageSize" : "Message size",
+				"ui_505_setting_MessageRelativeSizePercent" : "Message size (% of screen width)",
+				"ui_506_setting_MessageRelativePosition" : "Relative message position",
+				"ui_507_setting_MessageRelativePositionX" : "Relative message position X (%)",
+				"ui_508_setting_MessageRelativePositionY" : "Relative message position Y (%)",
+				"ui_509_setting_MessagePositionX" : "Message position X",
+				"ui_510_setting_MessagePositionY" : "Message position Y",
+				"ui_511_spacer_Message" : "<br>",
+				"ui_600_label_Miscellaneous" : "<small>Show/Hide Miscellaneous Settings&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</small><hr>",
+				"ui_612_setting_OledPixelShift" : "OLED Pixel Shift",
+				"ui_613_setting_FrameCap" : "Frame cap",
+				"ui_614_label_FrameCapNote" : "<small>24 is the recommended 'Frame cap' value for an accurate 'The Matrix' look (The Matrix (1999) was shot and shown in cinemas at 24 frames per second, the standard rate for 35mm film).</small>",
+				"ui_615_setting_DebugMode" : "Debug mode",
+				"ui_616_setting_DebugMusicReadout" : "Music readout",
+				"ui_617_setting_DebugMusicSource" : "Simulated music",
+				"ui_618_setting_DebugStrikeNow" : "Strike now (toggle it)",
+				"ui_619_setting_DebugStrikeDistance" : "Strike distance",
+				"ui_620_setting_DebugPerformance" : "Performance readout",
+				"ui_621_setting_DebugNearness" : "Nearness view",
+				"ui_622_setting_DebugNoFlash" : "No lightning flash",
+				"ui_623_setting_DebugNoSplashes" : "No splashes",
+				"ui_624_setting_DebugFreeze" : "Freeze",
+				"ui_625_setting_DebugOledReadout" : "OLED readout",
+				"ui_626_setting_DebugSteadyStart" : "Steady start (as the settled rain)"
+			}
+		},
+		"properties" : 
+		{
+			"p100_label_Rain" : 
+			{
+				"index" : 0,
+				"order" : 100,
+				"text" : "ui_100_label_Rain",
+				"type" : "bool",
+				"value" : true
+			},
+			"p101_setting_Symbols" : 
+			{
+				"condition" : "p100_label_Rain.value",
+				"index" : 1,
+				"order" : 101,
+				"text" : "ui_101_setting_Symbols",
+				"type" : "textinput",
+				"value" : "日 ﾊ ﾐ ﾋ ｰ ｳ ｼ ﾅ ﾓ ﾆ ｻ ﾜ ﾂ ｵ ﾘ ｱ ﾎ ﾃ ﾏ ｹ ﾒ ｴ ｶ ｷ ﾑ ﾕ ﾗ ｾ ﾈ ｽ ﾀ ﾇ 0 1 2 3 4 5 7 8 9 : ・ . \" = * + - < > ¦｜╌ ( ← . Z ç ﾘ ｸ M O R I T Z"
+			},
+			"p102_setting_FontSizeMin" : 
+			{
+				"condition" : "p100_label_Rain.value",
+				"editable" : false,
+				"index" : 2,
+				"max" : 100,
+				"min" : 1,
+				"order" : 102,
+				"text" : "ui_102_setting_FontSizeMin",
+				"type" : "slider",
+				"value" : 1
+			},
+			"p103_setting_FontSizeMax" : 
+			{
+				"condition" : "p100_label_Rain.value",
+				"editable" : false,
+				"index" : 3,
+				"max" : 100,
+				"min" : 5,
+				"order" : 103,
+				"text" : "ui_103_setting_FontSizeMax",
+				"type" : "slider",
+				"value" : 16
+			},
+			"p104_setting_RainDensity" : 
+			{
+				"condition" : "p100_label_Rain.value",
+				"editable" : false,
+				"index" : 4,
+				"max" : 10,
+				"min" : 1,
+				"order" : 104,
+				"text" : "ui_104_setting_RainDensity",
+				"type" : "slider",
+				"value" : 5
+			},
+			"p106_setting_HeadBrightness" : 
+			{
+				"condition" : "p100_label_Rain.value",
+				"editable" : false,
+				"index" : 5,
+				"max" : 100,
+				"min" : 0,
+				"order" : 105,
+				"text" : "ui_106_setting_HeadBrightness",
+				"type" : "slider",
+				"value" : 75
+			},
+			"p107_setting_Bloom" : 
+			{
+				"condition" : "p100_label_Rain.value",
+				"editable" : false,
+				"index" : 6,
+				"max" : 100,
+				"min" : 0,
+				"order" : 106,
+				"text" : "ui_107_setting_Bloom",
+				"type" : "slider",
+				"value" : 40
+			},
+			"p108_setting_CustomColors" : 
+			{
+				"condition" : "p100_label_Rain.value",
+				"index" : 7,
+				"order" : 107,
+				"text" : "ui_108_setting_CustomColors",
+				"type" : "bool",
+				"value" : true
+			},
+			"p109_setting_Color1" : 
+			{
+				"condition" : "p100_label_Rain.value && p108_setting_CustomColors.value",
+				"index" : 8,
+				"order" : 108,
+				"text" : "ui_109_setting_Color1",
+				"type" : "color",
+				"value" : "0.62745098039215686274509803921569 0.37254901960784313725490196078431 1"
+			},
+			"p110_setting_Color2" : 
+			{
+				"condition" : "p100_label_Rain.value && p108_setting_CustomColors.value",
+				"index" : 9,
+				"order" : 109,
+				"text" : "ui_110_setting_Color2",
+				"type" : "color",
+				"value" : "0.57254901960784313725490196078431 1 0.69019607843137254901960784313725"
+			},
+			"p111_setting_Color3" : 
+			{
+				"condition" : "p100_label_Rain.value && p108_setting_CustomColors.value",
+				"index" : 10,
+				"order" : 110,
+				"text" : "ui_111_setting_Color3",
+				"type" : "color",
+				"value" : "0.47450980392156862745098039215686 0.94117647058823529411764705882353 1"
+			},
+			"p112_setting_Color4" : 
+			{
+				"condition" : "p100_label_Rain.value && p108_setting_CustomColors.value",
+				"index" : 11,
+				"order" : 111,
+				"text" : "ui_112_setting_Color4",
+				"type" : "color",
+				"value" : "0.62745098039215686274509803921569 0.37254901960784313725490196078431 1"
+			},
+			"p113_setting_ColorWave" : 
+			{
+				"condition" : "p100_label_Rain.value",
+				"index" : 12,
+				"order" : 112,
+				"text" : "ui_113_setting_ColorWave",
+				"type" : "bool",
+				"value" : true
+			},
+			"p114_setting_WaveSpeed" : 
+			{
+				"condition" : "p100_label_Rain.value && p113_setting_ColorWave.value",
+				"editable" : false,
+				"index" : 13,
+				"max" : 100,
+				"min" : 1,
+				"order" : 113,
+				"text" : "ui_114_setting_WaveSpeed",
+				"type" : "slider",
+				"value" : 10
+			},
+			"p115_setting_WaveWidth" : 
+			{
+				"condition" : "p100_label_Rain.value && p113_setting_ColorWave.value",
+				"editable" : false,
+				"index" : 14,
+				"max" : 400,
+				"min" : 10,
+				"order" : 114,
+				"text" : "ui_115_setting_WaveWidth",
+				"type" : "slider",
+				"value" : 150
+			},
+			"p116_setting_HighContrastText" : 
+			{
+				"condition" : "p100_label_Rain.value && p113_setting_ColorWave.value && (p501_setting_ShowMessage.value || p401_setting_ShowClock.value)",
+				"index" : 15,
+				"order" : 115,
+				"text" : "ui_116_setting_HighContrastText",
+				"type" : "bool",
+				"value" : true
+			},
+			"p117_setting_TrailLength" : 
+			{
+				"condition" : "p100_label_Rain.value",
+				"editable" : false,
+				"index" : 16,
+				"max" : 100,
+				"min" : 1,
+				"order" : 116,
+				"text" : "ui_117_setting_TrailLength",
+				"type" : "slider",
+				"value" : 15
+			},
+			"p118_setting_Speed" : 
+			{
+				"condition" : "p100_label_Rain.value",
+				"editable" : false,
+				"index" : 17,
+				"max" : 99,
+				"min" : 0,
+				"order" : 117,
+				"text" : "ui_118_setting_Speed",
+				"type" : "slider",
+				"value" : 70
+			},
+			"p119_setting_Lightning" : 
+			{
+				"condition" : "p100_label_Rain.value",
+				"index" : 18,
+				"order" : 118,
+				"text" : "ui_119_setting_Lightning",
+				"type" : "bool",
+				"value" : true
+			},
+			"p120_setting_LightningPlayTimeMin" : 
+			{
+				"condition" : "p100_label_Rain.value && p119_setting_Lightning.value",
+				"editable" : false,
+				"index" : 19,
+				"max" : 5000,
+				"min" : 100,
+				"order" : 119,
+				"text" : "ui_120_setting_LightningPlayTimeMin",
+				"type" : "slider",
+				"value" : 250
+			},
+			"p121_setting_LightningPlayTimeMax" : 
+			{
+				"condition" : "p100_label_Rain.value && p119_setting_Lightning.value",
+				"editable" : false,
+				"index" : 20,
+				"max" : 5000,
+				"min" : 100,
+				"order" : 120,
+				"text" : "ui_121_setting_LightningPlayTimeMax",
+				"type" : "slider",
+				"value" : 1000
+			},
+			"p122_setting_LightningBrightness" : 
+			{
+				"condition" : "p100_label_Rain.value && p119_setting_Lightning.value",
+				"editable" : false,
+				"index" : 21,
+				"max" : 100,
+				"min" : 1,
+				"order" : 121,
+				"text" : "ui_122_setting_LightningBrightness",
+				"type" : "slider",
+				"value" : 95
+			},
+			"p123_setting_LightningFlashIntensity" : 
+			{
+				"condition" : "p100_label_Rain.value && p119_setting_Lightning.value",
+				"editable" : false,
+				"index" : 22,
+				"max" : 99,
+				"min" : 75,
+				"order" : 122,
+				"text" : "ui_123_setting_LightningFlashIntensity",
+				"type" : "slider",
+				"value" : 80
+			},
+			"p124_setting_LightningFrequency" : 
+			{
+				"condition" : "p100_label_Rain.value && p119_setting_Lightning.value",
+				"editable" : false,
+				"index" : 23,
+				"max" : 120,
+				"min" : 1,
+				"order" : 123,
+				"text" : "ui_124_setting_LightningFrequency",
+				"type" : "slider",
+				"value" : 20
+			},
+			"p125_setting_CharactersBolt" : 
+			{
+				"condition" : "p100_label_Rain.value && p119_setting_Lightning.value",
+				"index" : 24,
+				"order" : 124,
+				"text" : "ui_125_setting_CharactersBolt",
+				"type" : "bool",
+				"value" : true
+			},
+			"p126_spacer_Rain" : 
+			{
+				"condition" : "p100_label_Rain.value",
+				"index" : 25,
+				"order" : 125,
+				"text" : "ui_126_spacer_Rain",
+				"type" : "text"
+			},
+			"p200_label_Physics" : 
+			{
+				"index" : 26,
+				"order" : 126,
+				"text" : "ui_200_label_Physics",
+				"type" : "bool",
+				"value" : false
+			},
+			"p201_setting_CollisionPlane" : 
+			{
+				"condition" : "p200_label_Physics.value",
+				"index" : 27,
+				"order" : 127,
+				"text" : "ui_201_setting_CollisionPlane",
+				"type" : "bool",
+				"value" : true
+			},
+			"p202_setting_ReflectionPlane" : 
+			{
+				"condition" : "p200_label_Physics.value",
+				"index" : 28,
+				"order" : 128,
+				"text" : "ui_202_setting_ReflectionPlane",
+				"type" : "bool",
+				"value" : true
+			},
+			"p203_setting_PlaneHeight" : 
+			{
+				"condition" : "p200_label_Physics.value && (p201_setting_CollisionPlane.value || p202_setting_ReflectionPlane.value)",
+				"editable" : false,
+				"index" : 29,
+				"max" : 50,
+				"min" : 5,
+				"order" : 129,
+				"text" : "ui_203_setting_PlaneHeight",
+				"type" : "slider",
+				"value" : 50
+			},
+			"p204_setting_PlaneTone" : 
+			{
+				"condition" : "p200_label_Physics.value && (p201_setting_CollisionPlane.value || p202_setting_ReflectionPlane.value)",
+				"index" : 30,
+				"order" : 130,
+				"text" : "ui_204_setting_PlaneTone",
+				"type" : "color",
+				"value" : "0.03922 0.02745 0.06275"
+			},
+			"p205_setting_SplashHeight" : 
+			{
+				"condition" : "p200_label_Physics.value && p201_setting_CollisionPlane.value",
+				"editable" : false,
+				"index" : 31,
+				"max" : 500,
+				"min" : 10,
+				"order" : 131,
+				"text" : "ui_205_setting_SplashHeight",
+				"type" : "slider",
+				"value" : 75
+			},
+			"p206_setting_ReflectionStrength" : 
+			{
+				"condition" : "p200_label_Physics.value && p202_setting_ReflectionPlane.value",
+				"editable" : false,
+				"index" : 32,
+				"max" : 200,
+				"min" : 0,
+				"order" : 132,
+				"text" : "ui_206_setting_ReflectionStrength",
+				"type" : "slider",
+				"value" : 100
+			},
+			"p207_setting_Ripples" : 
+			{
+				"condition" : "p200_label_Physics.value && p201_setting_CollisionPlane.value",
+				"index" : 33,
+				"order" : 133,
+				"text" : "ui_207_setting_Ripples",
+				"type" : "bool",
+				"value" : true
+			},
+			"p208_setting_RippleIntensity" : 
+			{
+				"condition" : "p200_label_Physics.value && p201_setting_CollisionPlane.value && p207_setting_Ripples.value",
+				"editable" : false,
+				"index" : 34,
+				"max" : 200,
+				"min" : 0,
+				"order" : 134,
+				"text" : "ui_208_setting_RippleIntensity",
+				"type" : "slider",
+				"value" : 100
+			},
+			"p209_setting_RippleDarkening" : 
+			{
+				"condition" : "p200_label_Physics.value && p201_setting_CollisionPlane.value && p207_setting_Ripples.value",
+				"editable" : false,
+				"index" : 35,
+				"max" : 100,
+				"min" : 0,
+				"order" : 135,
+				"text" : "ui_209_setting_RippleDarkening",
+				"type" : "slider",
+				"value" : 50
+			},
+			"p210_setting_RippleLightening" : 
+			{
+				"condition" : "p200_label_Physics.value && p201_setting_CollisionPlane.value && p207_setting_Ripples.value",
+				"editable" : false,
+				"index" : 36,
+				"max" : 100,
+				"min" : 0,
+				"order" : 136,
+				"text" : "ui_210_setting_RippleLightening",
+				"type" : "slider",
+				"value" : 50
+			},
+			"p211_setting_RippleSpeed" : 
+			{
+				"condition" : "p200_label_Physics.value && p201_setting_CollisionPlane.value && p207_setting_Ripples.value",
+				"editable" : false,
+				"index" : 37,
+				"max" : 300,
+				"min" : 10,
+				"order" : 137,
+				"text" : "ui_211_setting_RippleSpeed",
+				"type" : "slider",
+				"value" : 75
+			},
+			"p212_setting_RippleDuration" : 
+			{
+				"condition" : "p200_label_Physics.value && p201_setting_CollisionPlane.value && p207_setting_Ripples.value",
+				"editable" : false,
+				"index" : 38,
+				"max" : 30,
+				"min" : 1,
+				"order" : 138,
+				"text" : "ui_212_setting_RippleDuration",
+				"type" : "slider",
+				"value" : 15
+			},
+			"p213_setting_DistanceFog" : 
+			{
+				"condition" : "p200_label_Physics.value && (p201_setting_CollisionPlane.value || p202_setting_ReflectionPlane.value)",
+				"index" : 39,
+				"order" : 139,
+				"text" : "ui_213_setting_DistanceFog",
+				"type" : "bool",
+				"value" : true
+			},
+			"p214_setting_FogColorMain" : 
+			{
+				"condition" : "p200_label_Physics.value && (p201_setting_CollisionPlane.value || p202_setting_ReflectionPlane.value) && p213_setting_DistanceFog.value",
+				"index" : 40,
+				"order" : 140,
+				"text" : "ui_214_setting_FogColorMain",
+				"type" : "color",
+				"value" : "0.31373 0.18824 0.50196"
+			},
+			"p215_setting_FogColorSecondary" : 
+			{
+				"condition" : "p200_label_Physics.value && (p201_setting_CollisionPlane.value || p202_setting_ReflectionPlane.value) && p213_setting_DistanceFog.value",
+				"index" : 41,
+				"order" : 141,
+				"text" : "ui_215_setting_FogColorSecondary",
+				"type" : "color",
+				"value" : "0.28627 0.50196 0.34510"
+			},
+			"p216_setting_FogIntensity" : 
+			{
+				"condition" : "p200_label_Physics.value && (p201_setting_CollisionPlane.value || p202_setting_ReflectionPlane.value) && p213_setting_DistanceFog.value",
+				"editable" : false,
+				"index" : 42,
+				"max" : 100,
+				"min" : 1,
+				"order" : 142,
+				"text" : "ui_216_setting_FogIntensity",
+				"type" : "slider",
+				"value" : 2
+			},
+			"p217_setting_FogLayerBlurring" : 
+			{
+				"condition" : "p200_label_Physics.value && (p201_setting_CollisionPlane.value || p202_setting_ReflectionPlane.value) && p213_setting_DistanceFog.value",
+				"editable" : false,
+				"index" : 43,
+				"max" : 200,
+				"min" : 0,
+				"order" : 143,
+				"text" : "ui_217_setting_FogLayerBlurring",
+				"type" : "slider",
+				"value" : 100
+			},
+			"p218_setting_FogLayers" : 
+			{
+				"condition" : "p200_label_Physics.value && (p201_setting_CollisionPlane.value || p202_setting_ReflectionPlane.value) && p213_setting_DistanceFog.value",
+				"editable" : false,
+				"index" : 44,
+				"max" : 25,
+				"min" : 5,
+				"order" : 144,
+				"text" : "ui_218_setting_FogLayers",
+				"type" : "slider",
+				"value" : 15
+			},
+			"p219_setting_FogMovement" : 
+			{
+				"condition" : "p200_label_Physics.value && (p201_setting_CollisionPlane.value || p202_setting_ReflectionPlane.value) && p213_setting_DistanceFog.value",
+				"editable" : false,
+				"index" : 45,
+				"max" : 200,
+				"min" : 0,
+				"order" : 145,
+				"text" : "ui_219_setting_FogMovement",
+				"type" : "slider",
+				"value" : 100
+			},
+			"p220_spacer_Physics" : 
+			{
+				"condition" : "p200_label_Physics.value",
+				"index" : 46,
+				"order" : 146,
+				"text" : "ui_220_spacer_Physics",
+				"type" : "text"
+			},
+			"p300_label_Music" : 
+			{
+				"index" : 47,
+				"order" : 147,
+				"text" : "ui_300_label_Music",
+				"type" : "bool",
+				"value" : false
+			},
+			"p301_setting_ReactToMusic" : 
+			{
+				"condition" : "p300_label_Music.value",
+				"index" : 48,
+				"order" : 148,
+				"text" : "ui_301_setting_ReactToMusic",
+				"type" : "bool",
+				"value" : false
+			},
+			"p302_setting_MusicSensitivity" : 
+			{
+				"condition" : "p300_label_Music.value && p301_setting_ReactToMusic.value",
+				"editable" : false,
+				"index" : 49,
+				"max" : 100,
+				"min" : 1,
+				"order" : 149,
+				"text" : "ui_302_setting_MusicSensitivity",
+				"type" : "slider",
+				"value" : 100
+			},
+			"p303_setting_MusicRainResponsiveness" : 
+			{
+				"condition" : "p300_label_Music.value && p301_setting_ReactToMusic.value",
+				"editable" : false,
+				"index" : 50,
+				"max" : 20,
+				"min" : 1,
+				"order" : 150,
+				"text" : "ui_303_setting_MusicRainResponsiveness",
+				"type" : "slider",
+				"value" : 2
+			},
+			"p304_label_MusicRainResponsivenessNote" : 
+			{
+				"condition" : "p300_label_Music.value && p301_setting_ReactToMusic.value",
+				"index" : 51,
+				"order" : 151,
+				"text" : "ui_304_label_MusicRainResponsivenessNote",
+				"type" : "text"
+			},
+			"p305_setting_MusicSensitivityLightning" : 
+			{
+				"condition" : "p300_label_Music.value && p301_setting_ReactToMusic.value && p119_setting_Lightning.value",
+				"editable" : false,
+				"index" : 52,
+				"max" : 100,
+				"min" : 0,
+				"order" : 152,
+				"text" : "ui_305_setting_MusicSensitivityLightning",
+				"type" : "slider",
+				"value" : 50
+			},
+			"p306_setting_AdvancedLightningTuning" : 
+			{
+				"condition" : "p300_label_Music.value && p301_setting_ReactToMusic.value && p119_setting_Lightning.value",
+				"index" : 53,
+				"order" : 153,
+				"text" : "ui_306_setting_AdvancedLightningTuning",
+				"type" : "bool",
+				"value" : false
+			},
+			"p307_setting_MusicStrengthLightning" : 
+			{
+				"condition" : "p300_label_Music.value && p301_setting_ReactToMusic.value && p119_setting_Lightning.value && p306_setting_AdvancedLightningTuning.value",
+				"editable" : false,
+				"index" : 54,
+				"max" : 100,
+				"min" : 0,
+				"order" : 154,
+				"text" : "ui_307_setting_MusicStrengthLightning",
+				"type" : "slider",
+				"value" : 30
+			},
+			"p308_setting_MusicSuddennessLightning" : 
+			{
+				"condition" : "p300_label_Music.value && p301_setting_ReactToMusic.value && p119_setting_Lightning.value && p306_setting_AdvancedLightningTuning.value",
+				"editable" : false,
+				"index" : 55,
+				"max" : 100,
+				"min" : 0,
+				"order" : 155,
+				"text" : "ui_308_setting_MusicSuddennessLightning",
+				"type" : "slider",
+				"value" : 70
+			},
+			"p309_setting_MusicTempoLightning" : 
+			{
+				"condition" : "p300_label_Music.value && p301_setting_ReactToMusic.value && p119_setting_Lightning.value && p306_setting_AdvancedLightningTuning.value",
+				"editable" : false,
+				"index" : 56,
+				"max" : 100,
+				"min" : 0,
+				"order" : 156,
+				"text" : "ui_309_setting_MusicTempoLightning",
+				"type" : "slider",
+				"value" : 50
+			},
+			"p310_setting_MusicTimbreLightning" : 
+			{
+				"condition" : "p300_label_Music.value && p301_setting_ReactToMusic.value && p119_setting_Lightning.value && p306_setting_AdvancedLightningTuning.value",
+				"editable" : false,
+				"index" : 57,
+				"max" : 100,
+				"min" : 0,
+				"order" : 157,
+				"text" : "ui_310_setting_MusicTimbreLightning",
+				"type" : "slider",
+				"value" : 50
+			},
+			"p311_setting_MusicTrendLightning" : 
+			{
+				"condition" : "p300_label_Music.value && p301_setting_ReactToMusic.value && p119_setting_Lightning.value && p306_setting_AdvancedLightningTuning.value",
+				"editable" : false,
+				"index" : 58,
+				"max" : 100,
+				"min" : 0,
+				"order" : 158,
+				"text" : "ui_311_setting_MusicTrendLightning",
+				"type" : "slider",
+				"value" : 50
+			},
+			"p312_setting_MusicIdleAnimation" : 
+			{
+				"condition" : "p300_label_Music.value && p301_setting_ReactToMusic.value",
+				"index" : 59,
+				"order" : 159,
+				"text" : "ui_312_setting_MusicIdleAnimation",
+				"type" : "bool",
+				"value" : false
+			},
+			"p313_setting_MusicIdleTimeout" : 
+			{
+				"condition" : "p300_label_Music.value && (p301_setting_ReactToMusic.value && p312_setting_MusicIdleAnimation.value)",
+				"index" : 60,
+				"max" : 30,
+				"min" : 1,
+				"order" : 160,
+				"text" : "ui_313_setting_MusicIdleTimeout",
+				"type" : "slider",
+				"value" : 3
+			},
+			"p314_spacer_Music" : 
+			{
+				"condition" : "p300_label_Music.value",
+				"index" : 61,
+				"order" : 161,
+				"text" : "ui_314_spacer_Music",
+				"type" : "text"
+			},
+			"p400_label_Clock" : 
+			{
+				"index" : 62,
+				"order" : 162,
+				"text" : "ui_400_label_Clock",
+				"type" : "bool",
+				"value" : false
+			},
+			"p401_setting_ShowClock" : 
+			{
+				"condition" : "p400_label_Clock.value",
+				"index" : 63,
+				"order" : 163,
+				"text" : "ui_401_setting_ShowClock",
+				"type" : "bool",
+				"value" : true
+			},
+			"p402_setting_ClockRelativeSize" : 
+			{
+				"condition" : "p400_label_Clock.value && p401_setting_ShowClock.value",
+				"index" : 64,
+				"order" : 164,
+				"text" : "ui_402_setting_ClockRelativeSize",
+				"type" : "bool",
+				"value" : true
+			},
+			"p403_setting_ClockSize" : 
+			{
+				"condition" : "p400_label_Clock.value && p401_setting_ShowClock.value && !p402_setting_ClockRelativeSize.value",
+				"editable" : false,
+				"index" : 65,
+				"max" : 50,
+				"min" : 1,
+				"order" : 165,
+				"text" : "ui_403_setting_ClockSize",
+				"type" : "slider",
+				"value" : 8
+			},
+			"p404_setting_ClockRelativeSizePercent" : 
+			{
+				"condition" : "p400_label_Clock.value && p401_setting_ShowClock.value && p402_setting_ClockRelativeSize.value",
+				"editable" : false,
+				"index" : 66,
+				"max" : 100,
+				"min" : 0,
+				"order" : 166,
+				"text" : "ui_404_setting_ClockRelativeSizePercent",
+				"type" : "slider",
+				"value" : 75
+			},
+			"p405_setting_ClockRelativePosition" : 
+			{
+				"condition" : "p400_label_Clock.value && p401_setting_ShowClock.value",
+				"index" : 67,
+				"order" : 167,
+				"text" : "ui_405_setting_ClockRelativePosition",
+				"type" : "bool",
+				"value" : true
+			},
+			"p406_setting_ClockRelativePositionX" : 
+			{
+				"condition" : "p400_label_Clock.value && p401_setting_ShowClock.value && p405_setting_ClockRelativePosition.value",
+				"editable" : true,
+				"index" : 68,
+				"max" : 100,
+				"min" : 0,
+				"order" : 168,
+				"text" : "ui_406_setting_ClockRelativePositionX",
+				"type" : "slider",
+				"value" : 50
+			},
+			"p407_setting_ClockRelativePositionY" : 
+			{
+				"condition" : "p400_label_Clock.value && p401_setting_ShowClock.value && p405_setting_ClockRelativePosition.value",
+				"editable" : true,
+				"index" : 69,
+				"max" : 100,
+				"min" : 0,
+				"order" : 169,
+				"text" : "ui_407_setting_ClockRelativePositionY",
+				"type" : "slider",
+				"value" : 25
+			},
+			"p408_setting_ClockPositionX" : 
+			{
+				"condition" : "p400_label_Clock.value && p401_setting_ShowClock.value && !p405_setting_ClockRelativePosition.value",
+				"editable" : true,
+				"index" : 70,
+				"max" : 500,
+				"min" : 0,
+				"order" : 170,
+				"text" : "ui_408_setting_ClockPositionX",
+				"type" : "slider",
+				"value" : 14
+			},
+			"p409_setting_ClockPositionY" : 
+			{
+				"condition" : "p400_label_Clock.value && p401_setting_ShowClock.value && !p405_setting_ClockRelativePosition.value",
+				"editable" : true,
+				"index" : 71,
+				"max" : 200,
+				"min" : 0,
+				"order" : 171,
+				"text" : "ui_409_setting_ClockPositionY",
+				"type" : "slider",
+				"value" : 14
+			},
+			"p410_setting_Clock12h" : 
+			{
+				"condition" : "p400_label_Clock.value && p401_setting_ShowClock.value",
+				"index" : 72,
+				"order" : 172,
+				"text" : "ui_410_setting_Clock12h",
+				"type" : "bool",
+				"value" : false
+			},
+			"p411_spacer_Clock" : 
+			{
+				"condition" : "p400_label_Clock.value",
+				"index" : 73,
+				"order" : 173,
+				"text" : "ui_411_spacer_Clock",
+				"type" : "text"
+			},
+			"p500_label_Message" : 
+			{
+				"index" : 74,
+				"order" : 174,
+				"text" : "ui_500_label_Message",
+				"type" : "bool",
+				"value" : false
+			},
+			"p501_setting_ShowMessage" : 
+			{
+				"condition" : "p500_label_Message.value",
+				"index" : 75,
+				"order" : 175,
+				"text" : "ui_501_setting_ShowMessage",
+				"type" : "bool",
+				"value" : false
+			},
+			"p502_setting_MessageText" : 
+			{
+				"condition" : "p500_label_Message.value && p501_setting_ShowMessage.value",
+				"index" : 76,
+				"order" : 176,
+				"text" : "ui_502_setting_MessageText",
+				"type" : "textinput",
+				"value" : "MATRIX"
+			},
+			"p503_setting_MessageRelativeSize" : 
+			{
+				"condition" : "p500_label_Message.value && p501_setting_ShowMessage.value",
+				"index" : 77,
+				"order" : 177,
+				"text" : "ui_503_setting_MessageRelativeSize",
+				"type" : "bool",
+				"value" : true
+			},
+			"p504_setting_MessageSize" : 
+			{
+				"condition" : "p500_label_Message.value && p501_setting_ShowMessage.value && !p503_setting_MessageRelativeSize.value",
+				"editable" : false,
+				"index" : 78,
+				"max" : 50,
+				"min" : 1,
+				"order" : 178,
+				"text" : "ui_504_setting_MessageSize",
+				"type" : "slider",
+				"value" : 8
+			},
+			"p505_setting_MessageRelativeSizePercent" : 
+			{
+				"condition" : "p500_label_Message.value && p501_setting_ShowMessage.value && p503_setting_MessageRelativeSize.value",
+				"editable" : false,
+				"index" : 79,
+				"max" : 100,
+				"min" : 0,
+				"order" : 179,
+				"text" : "ui_505_setting_MessageRelativeSizePercent",
+				"type" : "slider",
+				"value" : 90
+			},
+			"p506_setting_MessageRelativePosition" : 
+			{
+				"condition" : "p500_label_Message.value && p501_setting_ShowMessage.value",
+				"index" : 80,
+				"order" : 180,
+				"text" : "ui_506_setting_MessageRelativePosition",
+				"type" : "bool",
+				"value" : true
+			},
+			"p507_setting_MessageRelativePositionX" : 
+			{
+				"condition" : "p500_label_Message.value && p501_setting_ShowMessage.value && p506_setting_MessageRelativePosition.value",
+				"editable" : true,
+				"index" : 81,
+				"max" : 100,
+				"min" : 0,
+				"order" : 181,
+				"text" : "ui_507_setting_MessageRelativePositionX",
+				"type" : "slider",
+				"value" : 50
+			},
+			"p508_setting_MessageRelativePositionY" : 
+			{
+				"condition" : "p500_label_Message.value && p501_setting_ShowMessage.value && p506_setting_MessageRelativePosition.value",
+				"editable" : true,
+				"index" : 82,
+				"max" : 100,
+				"min" : 0,
+				"order" : 182,
+				"text" : "ui_508_setting_MessageRelativePositionY",
+				"type" : "slider",
+				"value" : 80
+			},
+			"p509_setting_MessagePositionX" : 
+			{
+				"condition" : "p500_label_Message.value && p501_setting_ShowMessage.value && !p506_setting_MessageRelativePosition.value",
+				"editable" : true,
+				"index" : 83,
+				"max" : 500,
+				"min" : 0,
+				"order" : 183,
+				"text" : "ui_509_setting_MessagePositionX",
+				"type" : "slider",
+				"value" : 30
+			},
+			"p510_setting_MessagePositionY" : 
+			{
+				"condition" : "p500_label_Message.value && p501_setting_ShowMessage.value && !p506_setting_MessageRelativePosition.value",
+				"editable" : true,
+				"index" : 84,
+				"max" : 200,
+				"min" : 0,
+				"order" : 184,
+				"text" : "ui_510_setting_MessagePositionY",
+				"type" : "slider",
+				"value" : 30
+			},
+			"p511_spacer_Message" : 
+			{
+				"condition" : "p500_label_Message.value",
+				"index" : 85,
+				"order" : 185,
+				"text" : "ui_511_spacer_Message",
+				"type" : "text"
+			},
+			"p600_label_Miscellaneous" : 
+			{
+				"index" : 86,
+				"order" : 186,
+				"text" : "ui_600_label_Miscellaneous",
+				"type" : "bool",
+				"value" : false
+			},
+			"p612_setting_OledPixelShift" : 
+			{
+				"condition" : "p600_label_Miscellaneous.value",
+				"editable" : true,
+				"index" : 87,
+				"max" : 50,
+				"min" : 0,
+				"order" : 187,
+				"text" : "ui_612_setting_OledPixelShift",
+				"type" : "slider",
+				"value" : 20
+			},
+			"p613_setting_FrameCap" : 
+			{
+				"condition" : "p600_label_Miscellaneous.value",
+				"editable" : true,
+				"index" : 88,
+				"max" : 120,
+				"min" : 10,
+				"order" : 188,
+				"text" : "ui_613_setting_FrameCap",
+				"type" : "slider",
+				"value" : 24
+			},
+			"p614_label_FrameCapNote" : 
+			{
+				"condition" : "p600_label_Miscellaneous.value",
+				"index" : 89,
+				"order" : 189,
+				"text" : "ui_614_label_FrameCapNote",
+				"type" : "text"
+			},
+			"p615_setting_DebugMode" : 
+			{
+				"condition" : "p600_label_Miscellaneous.value",
+				"index" : 90,
+				"order" : 190,
+				"text" : "ui_615_setting_DebugMode",
+				"type" : "bool",
+				"value" : false
+			},
+			"p616_setting_DebugMusicReadout" : 
+			{
+				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value",
+				"index" : 91,
+				"order" : 191,
+				"text" : "ui_616_setting_DebugMusicReadout",
+				"type" : "bool",
+				"value" : false
+			},
+			"p617_setting_DebugMusicSource" : 
+			{
+				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value",
+				"index" : 92,
+				"options" : 
+				[
+					{
+						"label" : "Real audio",
+						"value" : "real"
+					},
+					{
+						"label" : "Silent",
+						"value" : "silent"
+					},
+					{
+						"label" : "Soft",
+						"value" : "soft"
+					},
+					{
+						"label" : "Pop",
+						"value" : "pop"
+					},
+					{
+						"label" : "Metal",
+						"value" : "metal"
+					},
+					{
+						"label" : "Dubstep",
+						"value" : "dubstep"
+					},
+					{
+						"label" : "Steady (constantly loud)",
+						"value" : "steady"
+					},
+					{
+						"label" : "Pulses (quiet and very loud)",
+						"value" : "pulses"
+					},
+					{
+						"label" : "Slow beat (70 bpm)",
+						"value" : "slowbeat"
+					},
+					{
+						"label" : "Fast beat (170 bpm)",
+						"value" : "fastbeat"
+					},
+					{
+						"label" : "Verse (quiet, 120 bpm)",
+						"value" : "verse"
+					},
+					{
+						"label" : "Chorus (loud, 120 bpm)",
+						"value" : "chorus"
+					},
+					{
+						"label" : "Dark music",
+						"value" : "darkmusic"
+					},
+					{
+						"label" : "Bright music",
+						"value" : "brightmusic"
+					},
+					{
+						"label" : "100 Hz tone, loud",
+						"value" : "tone100loud"
+					},
+					{
+						"label" : "100 Hz tone, quiet",
+						"value" : "tone100quiet"
+					}
+				],
+				"order" : 192,
+				"text" : "ui_617_setting_DebugMusicSource",
+				"type" : "combo",
+				"value" : "real"
+			},
+			"p618_setting_DebugStrikeNow" : 
+			{
+				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value && p119_setting_Lightning.value",
+				"index" : 93,
+				"order" : 193,
+				"text" : "ui_618_setting_DebugStrikeNow",
+				"type" : "bool",
+				"value" : false
+			},
+			"p619_setting_DebugStrikeDistance" : 
+			{
+				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value && p119_setting_Lightning.value",
+				"editable" : false,
+				"index" : 94,
+				"max" : 100,
+				"min" : 0,
+				"order" : 194,
+				"text" : "ui_619_setting_DebugStrikeDistance",
+				"type" : "slider",
+				"value" : 50
+			},
+			"p620_setting_DebugPerformance" : 
+			{
+				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value",
+				"index" : 95,
+				"order" : 195,
+				"text" : "ui_620_setting_DebugPerformance",
+				"type" : "bool",
+				"value" : false
+			},
+			"p621_setting_DebugNearness" : 
+			{
+				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value",
+				"index" : 96,
+				"order" : 196,
+				"text" : "ui_621_setting_DebugNearness",
+				"type" : "bool",
+				"value" : false
+			},
+			"p622_setting_DebugNoFlash" : 
+			{
+				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value && p119_setting_Lightning.value",
+				"index" : 97,
+				"order" : 197,
+				"text" : "ui_622_setting_DebugNoFlash",
+				"type" : "bool",
+				"value" : false
+			},
+			"p623_setting_DebugNoSplashes" : 
+			{
+				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value && p201_setting_CollisionPlane.value",
+				"index" : 98,
+				"order" : 198,
+				"text" : "ui_623_setting_DebugNoSplashes",
+				"type" : "bool",
+				"value" : false
+			},
+			"p624_setting_DebugFreeze" : 
+			{
+				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value",
+				"index" : 99,
+				"order" : 199,
+				"text" : "ui_624_setting_DebugFreeze",
+				"type" : "bool",
+				"value" : false
+			},
+			"p625_setting_DebugOledReadout" : 
+			{
+				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value",
+				"index" : 100,
+				"order" : 200,
+				"text" : "ui_625_setting_DebugOledReadout",
+				"type" : "bool",
+				"value" : false
+			},
+			"p626_setting_DebugSteadyStart" : 
+			{
+				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value",
+				"index" : 101,
+				"order" : 201,
+				"text" : "ui_626_setting_DebugSteadyStart",
+				"type" : "bool",
+				"value" : false
+			},
+			"schemecolor" : 
+			{
+				"order" : 0,
+				"text" : "ui_browse_properties_scheme_color",
+				"type" : "color",
+				"value" : "0.5921568627450980392156862745098 0 0.74509803921568627450980392156863"
+			}
+		},
+		"supportsaudioprocessing" : true
+	},
+	"monetization" : false,
+	"preview" : "preview.gif",
+	"ratingsex" : "none",
+	"ratingviolence" : "none",
+	"tags" : [ "Abstract" ],
+	"title" : "Matrix 3D Rain WebGL",
+	"type" : "web",
+	"version" : 7,
+	"visibility" : "public",
+	"workshopid" : "3819203111",
+	"workshopurl" : "steam://url/CommunityFilePage/3819203111"
+}
