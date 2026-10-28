@@ -1,0 +1,53 @@
+name: Sync from private repository
+
+on:
+  schedule:
+    - cron: "0 3 * * *" # daily at 03:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-from-private
+  cancel-in-progress: false
+
+env:
+  SOURCE_REPO: namakeingo/wallpaper-engine-projects
+  SOURCE_DIR: matrix_web_rain
+  FILES: audiogen.js index.css index.html index.js preview.gif project.json
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout this repository
+        uses: actions/checkout@v4
+
+      - name: Checkout private source repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPO }}
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          path: _source
+          sparse-checkout: ${{ env.SOURCE_DIR }}
+          persist-credentials: false
+
+      - name: Copy files
+        run: |
+          for f in $FILES; do
+            cp "_source/$SOURCE_DIR/$f" "./$f"
+          done
+          rm -rf _source
+
+      - name: Commit and push if anything changed
+        run: |
+          git add -- $FILES
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Automatic repository update - $(date -u +%Y/%m/%d)"
+          git push
