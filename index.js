@@ -747,9 +747,11 @@ var useReflectionPlane = true;
 // ripples where drops and splashes touch the plane (needs the collision plane)
 var useRipples = true;
 
-// are there ripples? they show in the reflection, where things hit the plane
+// are there ripples? where things hit the plane; with the reflection plane off they show on the
+// water's own tone, with no reflection in it (they needed the reflection plane, and turning it off
+// took the ripples away)
 function ripplesActive() {
-  return useRipples && useCollisionPlane && useReflectionPlane;
+  return useRipples && useCollisionPlane;
 }
 
 // take away all ripples, so the water is calm when they come back

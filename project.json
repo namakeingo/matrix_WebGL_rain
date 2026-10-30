@@ -558,7 +558,7 @@
 				"editable" : false,
 				"index" : 32,
 				"max" : 200,
-				"min" : 0,
+				"min" : 1,
 				"order" : 132,
 				"text" : "ui_206_setting_ReflectionStrength",
 				"type" : "slider",
