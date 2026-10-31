@@ -5071,6 +5071,7 @@ function glSetup() {
       // by the perspective; they spread over the plane and get weaker as they
       // grow and age. Rings that cross add up, so they are stronger there
       "    float rings = 0.0;" +
+      "    float slope = 0.0;" +
       "    if (uWaveSim) {" +
       // the height of the water, and its slope bends the reflection
       // where this pixel is on the plane seen from above (see planeWorldWidth)
@@ -5085,6 +5086,10 @@ function glSetup() {
       // smaller further back, like the rings themselves
       "      off += vec2(hx, hy * 0.4) * 18.0 * scale * scale * uRippleIntensity;" +
       "      rings = -h * 10.0 * uRippleIntensity;" +
+      // with no reflection, the slopes facing the far sky catch its light and the others
+      // do not, so the rings stay seen while they spread (at most 30% lighter or darker,
+      // or where many rings cross the water turns to black and white chop)
+      "      if (!uReflect) { slope = hy * 150.0 * scale * uRippleIntensity; slope = 0.3 * slope / (1.0 + abs(slope)); }" +
       "    }" +
       "    for (int i = 0; i < 32; i++) {" +
       "      if (uWaveSim) { break; }" +
@@ -5148,6 +5153,10 @@ function glSetup() {
       "    float light = smoothstep(0.03, 0.15, level) * level * uRippleLightening;" +
       "    surface *= 1.0 - dark;" +
       "    surface = min(surface / max(1.0 - light, 0.001), vec3(1.0));" +
+      // the slopes' light, with no reflection (see above): as the rings', but without
+      // their threshold, so the rings are seen as long as their slopes are
+      "    surface *= 1.0 - max(-slope, 0.0) * uRippleDarkening;" +
+      "    surface = min(surface / max(1.0 - max(slope, 0.0) * uRippleLightening, 0.001), vec3(1.0));" +
       // the crests of the rings catch the flash: the flash itself, or its reflection
       // where it has handed over to it (at most 60% of it, so the troughs do not
       // look like holes next to them)
@@ -6433,7 +6442,9 @@ function glSimulateWaves() {
   var cell = Math.max(4, worldWidth / 1024, worldDepth / 1024);
   var width = Math.max(4, Math.ceil(worldWidth / cell));
   var height = Math.max(4, Math.ceil(worldDepth / cell));
-  if (width != GL.waveWidth || height != GL.waveHeight || ReflectionStale) {
+  // (ReflectionStale only with the reflection: without it nothing clears the reflection
+  // layer, so the flag stays set, and the water was made calm again in every frame)
+  if (width != GL.waveWidth || height != GL.waveHeight || (ReflectionStale && useReflectionPlane)) {
     glResizeWaves(width, height);
   }
 
