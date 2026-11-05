@@ -2978,7 +2978,7 @@ function drawRainSteps(steps) {
           ClockText,
           size,
           ClockPercentagePosX,
-          ClockPercentagePosY,
+          ClockPercentagePosY
         );
         ClockDrawPosX = ClockSnapPosition[0];
         ClockDrawPosY = ClockSnapPosition[1];
