@@ -14,9 +14,15 @@ concurrency:
 
 env:
   SOURCE_REPO: namakeingo/wallpaper-engine-projects
-  SOURCE_DIR: matrix_web_rain
-  TARGET_DIR: v1.0
-  FILES: audiogen.js index.css index.html index.js preview.gif project.json
+  # v1.0: selected files from one folder
+  V1_SOURCE_DIR: matrix_web_rain
+  V1_TARGET_DIR: v1.0
+  V1_FILES: audiogen.js index.css index.html index.js preview.gif project.json
+  # v2.0: full folder trees
+  V2_SRC_SOURCE_DIR: .src/matrix_web_3d_rain
+  V2_SRC_TARGET_DIR: v2.0/.src
+  V2_BUNDLED_SOURCE_DIR: matrix_web_3d_rain
+  V2_BUNDLED_TARGET_DIR: v2.0/bundled
 
 jobs:
   sync:
@@ -31,20 +37,25 @@ jobs:
           repository: ${{ env.SOURCE_REPO }}
           token: ${{ secrets.PRIVATE_REPO_TOKEN }}
           path: _source
-          sparse-checkout: ${{ env.SOURCE_DIR }}
+          sparse-checkout: |
+            ${{ env.V1_SOURCE_DIR }}
+            ${{ env.V2_SRC_SOURCE_DIR }}
+            ${{ env.V2_BUNDLED_SOURCE_DIR }}
           persist-credentials: false
 
       - name: Copy files
         run: |
-          mkdir -p "$TARGET_DIR"
-          for f in $FILES; do
-            cp "_source/$SOURCE_DIR/$f" "$TARGET_DIR/$f"
+          mkdir -p "$V1_TARGET_DIR" "$V2_SRC_TARGET_DIR" "$V2_BUNDLED_TARGET_DIR"
+          for f in $V1_FILES; do
+            cp "_source/$V1_SOURCE_DIR/$f" "$V1_TARGET_DIR/$f"
           done
+          cp -a "_source/$V2_SRC_SOURCE_DIR/." "$V2_SRC_TARGET_DIR/"
+          cp -a "_source/$V2_BUNDLED_SOURCE_DIR/." "$V2_BUNDLED_TARGET_DIR/"
           rm -rf _source
 
       - name: Commit and push if anything changed
         run: |
-          git add -- "$TARGET_DIR"
+          git add -A -- "$V1_TARGET_DIR" "$V2_SRC_TARGET_DIR" "$V2_BUNDLED_TARGET_DIR"
           if git diff --cached --quiet; then
             echo "No changes to commit."
             exit 0
