@@ -1,0 +1,1 @@
+layout(location = 2) out vec4 outNear;
