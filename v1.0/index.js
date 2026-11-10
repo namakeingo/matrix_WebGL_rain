@@ -1,3 +1,7 @@
+// Changelog:
+// 2026-10-20: Rain frequency removed: a drop starts again at once above the screen (RainScale 1.06)
+// 2026-10-30: with Reflection plane off the water is no longer made calm again every frame
+
 // Read user parameters and sound
 window.onload = function () {
   window.wallpaperRegisterAudioListener(wallpaperAudioListener);
@@ -747,9 +751,11 @@ var useReflectionPlane = true;
 // ripples where drops and splashes touch the plane (needs the collision plane)
 var useRipples = true;
 
-// are there ripples? they show in the reflection, where things hit the plane
+// are there ripples? where things hit the plane; with the reflection plane off they show on the
+// water's own tone, with no reflection in it (they needed the reflection plane, and turning it off
+// took the ripples away)
 function ripplesActive() {
-  return useRipples && useCollisionPlane && useReflectionPlane;
+  return useRipples && useCollisionPlane;
 }
 
 // take away all ripples, so the water is calm when they come back
@@ -1051,7 +1057,7 @@ var BoltClearGap = 1;
 var BoltRejoinDepth = 3;
 // where paths meet they really cross, at BoltJoinAngle degrees or more, and meeting
 // points are at least BoltJoinGap times the font size (F) apart, so no more than two
-// paths ever meet at once (the user, 2026-10-22)
+// paths ever meet at once
 var BoltJoinAngle = 20;
 var BoltJoinGap = 3;
 // how the leaders' and the branches' glowing lines look (see glDrawBolt): their glow's
@@ -1848,7 +1854,7 @@ function newStrike(atNearness) {
   // forks off, the parent's first, are left out); further on it meets the first line
   // it comes near:
   // - a line of the other half: it may not (only the routes meet the other half);
-  // - a line of its own half: a rejoin (the user, 2026-10-22). Both end there and a
+  // - a line of its own half: a rejoin. Both end there and a
   //   path goes on from that point, of the generation one bigger than the bigger of the
   //   two (the smaller number, less 1, at least 0), in that generation's size, starting
   //   when both have grown to it, its way biased toward the way the bigger one came
@@ -1857,7 +1863,7 @@ function newStrike(atNearness) {
   //   its own way, as a part of that generation (see splitRoute). Not with a line it
   //   comes from, one that already ended, or past a fork of the other line, near the
   //   other's fork or the route's meeting point.
-  // - The 0th generation (the user, 2026-10-22): a line of the 1st to 4th never meets a
+  // - The 0th generation: a line of the 1st to 4th never meets a
   //   leader's first part; one of the 0th going on after a rejoin it meets, and ends on
   //   it (mergedInto), and the 0th goes on on its own way at its size. So a path of the
   //   0th going on after a rejoin goes on through a branch of the 1st to 4th it meets,
@@ -2972,7 +2978,7 @@ function drawRainSteps(steps) {
           ClockText,
           size,
           ClockPercentagePosX,
-          ClockPercentagePosY,
+          ClockPercentagePosY
         );
         ClockDrawPosX = ClockSnapPosition[0];
         ClockDrawPosY = ClockSnapPosition[1];
@@ -3407,11 +3413,10 @@ function newDrop(d, first) {
 // Without music RainScale times DropCapacity (Rain density's drops, see rainCount)
 // fall; with React to music, as many as the music gives (rainTarget): new drops come
 // above the screen when it gets louder (spawnDrops), and drops end where they land
-// when it gets quieter. RainScale keeps the rain as it was when drops waited below the
-// screen to start again (with Rain frequency 20, the default before it was removed):
-// as many drops enter the screen in an hour, measured with
+// when it gets quieter. RainScale gives as many drops entering the screen in an hour as
+// drops that wait below the screen to start again with Rain frequency 20, measured with
 // densitytest.html?test=calibrate at Speed 20, 70 and 90. It is above 1 because each
-// drop is now above the screen for 0 to screen height / Font size Max steps before it
+// drop is above the screen for 0 to screen height / Font size Max steps before it
 // shows (72 on average at 1920x2160), longer than the wait of 50 steps on average
 var RainScale = 1.06;
 var DropCapacity = 0;
@@ -3423,10 +3428,10 @@ var RainEntries = 0;
 
 // how many drops fall now: without music (or in the idle animation) RainScale times
 // DropCapacity; with the music, DropCapacity times the share of drops each column's
-// chance kept falling when drops waited below the screen to start again with that
-// chance a step (a drop's cycle was its rows, FallRows on average, and a wait of
+// chance would keep falling if drops waited below the screen to start again with that
+// chance a step (a drop's cycle its rows, FallRows on average, and a wait of
 // 1 / chance steps), on average over the columns, and times (FallRows + the average
-// steps above the screen) / FallRows, as each drop is now above the screen for a
+// steps above the screen) / FallRows, as each drop is above the screen for a
 // while before it shows (see spawnRow)
 function rainTarget() {
   var music = false;
@@ -5069,6 +5074,7 @@ function glSetup() {
       // by the perspective; they spread over the plane and get weaker as they
       // grow and age. Rings that cross add up, so they are stronger there
       "    float rings = 0.0;" +
+      "    float slope = 0.0;" +
       "    if (uWaveSim) {" +
       // the height of the water, and its slope bends the reflection
       // where this pixel is on the plane seen from above (see planeWorldWidth)
@@ -5083,6 +5089,10 @@ function glSetup() {
       // smaller further back, like the rings themselves
       "      off += vec2(hx, hy * 0.4) * 18.0 * scale * scale * uRippleIntensity;" +
       "      rings = -h * 10.0 * uRippleIntensity;" +
+      // with no reflection, the slopes facing the far sky catch its light and the others
+      // do not, so the rings stay seen while they spread (at most 30% lighter or darker,
+      // or where many rings cross the water turns to black and white chop)
+      "      if (!uReflect) { slope = hy * 150.0 * scale * uRippleIntensity; slope = 0.3 * slope / (1.0 + abs(slope)); }" +
       "    }" +
       "    for (int i = 0; i < 32; i++) {" +
       "      if (uWaveSim) { break; }" +
@@ -5146,6 +5156,10 @@ function glSetup() {
       "    float light = smoothstep(0.03, 0.15, level) * level * uRippleLightening;" +
       "    surface *= 1.0 - dark;" +
       "    surface = min(surface / max(1.0 - light, 0.001), vec3(1.0));" +
+      // the slopes' light, with no reflection (see above): as the rings', but without
+      // their threshold, so the rings are seen as long as their slopes are
+      "    surface *= 1.0 - max(-slope, 0.0) * uRippleDarkening;" +
+      "    surface = min(surface / max(1.0 - max(slope, 0.0) * uRippleLightening, 0.001), vec3(1.0));" +
       // the crests of the rings catch the flash: the flash itself, or its reflection
       // where it has handed over to it (at most 60% of it, so the troughs do not
       // look like holes next to them)
@@ -5953,7 +5967,7 @@ function glDrawBolt() {
     // the main channel's core (the font size of the rain at the strike's distance) is
     // full out to a quarter of its size and gone by 3/4 of it, and its glow reaches 1.2
     // times its size. The other lines (the leaders and the branches: see boltLineParts)
-    // are as wide as their size, the size of their characters (the user, 2026-10-22):
+    // are as wide as their size, the size of their characters:
     // the core full out to half of it with an edge 1 px soft, the glow BoltGlowSpread
     // times it, BoltGlowLight as bright; where a line thins at a fork, and where it
     // goes on from another line's end at another size (see boltStartSize), its width
@@ -6337,7 +6351,7 @@ function glInitWaves(pixelVertex, highp) {
   );
   // the same for a part of a step (see glSimulateWaves): the slopes push by uPush,
   // and the speed is scaled by uSpeedScale (when the parts changed). A program of its
-  // own, so the whole steps stay exactly as they always were
+  // own, so the whole steps stay exactly the same
   GL.waveSplitProgram = glProgram(
     "attribute vec2 aPos;" + "void main() { gl_Position = vec4(aPos, 0.0, 1.0); }",
     highp +
@@ -6431,7 +6445,9 @@ function glSimulateWaves() {
   var cell = Math.max(4, worldWidth / 1024, worldDepth / 1024);
   var width = Math.max(4, Math.ceil(worldWidth / cell));
   var height = Math.max(4, Math.ceil(worldDepth / cell));
-  if (width != GL.waveWidth || height != GL.waveHeight || ReflectionStale) {
+  // (ReflectionStale only with the reflection: without it nothing clears the reflection
+  // layer, so the flag stays set, and the water would be made calm again in every frame)
+  if (width != GL.waveWidth || height != GL.waveHeight || (ReflectionStale && useReflectionPlane)) {
     glResizeWaves(width, height);
   }
 
