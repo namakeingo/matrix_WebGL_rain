@@ -1,0 +1,1 @@
+layout(location = ${i}) out vec4 outLayer${i};

@@ -1,0 +1,1 @@
+const int MODE_${NAME} = ${value};

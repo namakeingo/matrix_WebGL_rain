@@ -1,0 +1,1 @@
+vec4(skyShadeMarched(p, shadeLod(p)), 0.0, 1.0)

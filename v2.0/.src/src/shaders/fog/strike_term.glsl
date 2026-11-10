@@ -1,0 +1,1 @@
+    if (fStrikes.${s} > 0.0) strike += fStrikes.${s} * strikeStack(c, ${k}.0, mirrored);
