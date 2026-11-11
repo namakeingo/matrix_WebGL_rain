@@ -3682,7 +3682,7 @@ function removeDrop(d) {
 // a random 0 to screen height / Font size Max steps, whatever its size and at any
 // Speed, and drops that start together never come in as one line (new drops come
 // in at the top instead, at the rate of spawnDrops)
-function spawnRow(d) {
+function spawnRow() {
   return -Math.floor(Math.random() * (ScreenHeight / font_size));
 }
 
@@ -4548,7 +4548,7 @@ function fadeRect(x, y, w, h) {
   o = glFadeVertex(d, o, px0, py1, x0, y0, x1, y1);
   o = glFadeVertex(d, o, px0, py1, x0, y0, x1, y1);
   o = glFadeVertex(d, o, px1, py0, x0, y0, x1, y1);
-  o = glFadeVertex(d, o, px1, py1, x0, y0, x1, y1);
+  glFadeVertex(d, o, px1, py1, x0, y0, x1, y1);
   FadeCount++;
 }
 

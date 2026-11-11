@@ -79,6 +79,10 @@
 //   by column.
 //
 // Changelog:
+// 2026-11-10: with a driver (the splashes' task: RainDriver) the steps are made in the task's tick (models/rainsimtick.ts, on a worker when there is one), the calls made to the wheel kept in
+// order for it (RainCall), the layout's fields set together (installLayout), the colours set by setColor.
+// 2026-11-10: the landings wheel and the state it keeps moved to a pure model (models/rainwheel.ts, RainWheel), which the rain delegates to: the view is copied to it before each call, the
+//   state it keeps is read and set through the rain's own fields (accessors); the scene worker's layout protocol and the GL side stay here.
 // 2026-11-03: the layout and the restart as pure functions (M.RainLayout), made in the scene's
 //   worker when a setting lays the drops out again, swapped in at a step ahead.
 // 2026-11-07: the trail's instances drawn by the drop's level (the list's high bits, Lod.trailCells), one fog read per cell from Lod.FOG_ONCE_DISTANCE (uFogOnce).
@@ -107,6 +111,8 @@ import type { FloorKind, FloorView } from "../models/floor";
 import type { QualityJob, EffectQuality, QualityShared, QualityViewInputs } from "../models/quality/types";
 import type { QualityStatics, QualityParams } from "../models/quality/jobs";
 import type { SceneWorker, RainResult } from "../workers/sceneworker";
+import type { RainWheel, DropState } from "../models/rainwheel";
+import type { RainPart, RainCall, RainSimPacket } from "../models/rainsimtick";
 
 // the rain's colours this frame (Rain.colorState): Custom colors 1 to 4 (linear light), whether
 // they are used (else the rainbow), the wave (on, its width, its phase now as a fraction) and the
@@ -120,19 +126,8 @@ export interface RainColors {
   screen: number;
 }
 
-// a drop at a step (Rain.dropAt): its head (rows from the top of its fall), rows, fall, whether it
-// lands in this step and whether its fall shows, its place (x, z), its head's height, its colour
-export interface DropState {
-  head: number;
-  rows: number;
-  cycle: number;
-  landed: boolean;
-  shown: boolean;
-  x: number;
-  z: number;
-  headY: number;
-  color: Float32Array;
-}
+// a drop at a step (RainWheel.dropAt): its head (rows from the top of its fall), rows, fall, whether it lands in this step and whether its fall shows, its place (x, z), its head's height, its colour
+export type { DropState };
 
 const RL = M.RainLayout;
 // the pool (the most drops that can fall, whatever the settings and the window)
@@ -145,18 +140,15 @@ const CELL = RL.CELL;
 const TRAIL = 18;
 const TRAIL_PER_LENGTH = TRAIL / 15;
 // a font size's distance: DISTANCE_SIZE / size (m)
-const DISTANCE_SIZE = 40;
+const DISTANCE_SIZE = M.RainWheel.DISTANCE_SIZE;
 const FURTHEST = DISTANCE_SIZE;
 // matrix_web_rain's drops for a density (its RainScale)
-const RAIN_SCALE = 1.06;
+const RAIN_SCALE = M.RainWheel.RAIN_SCALE;
 // the steps a second at the default Speed (70): STEP_RATE x (100 - 70) / (100 - Speed)
 const STEP_RATE = 30;
 const SEED = RL.SEED;
 const IMPACT = 1;
-// no fall (a life's bound)
-const NONE = RL.NONE;
 // the width of a 16:9 view as a bearing (x / z): the colours' unit across the world
-// React to music: the seconds between scans of the drops, the most falls begun in a scan, the cycles tried for a column, and the seconds between the workers' layouts
 // whether two spawn planes are the same (null: the world's ceiling)
 // (within MouseParallax.TOLERANCE: the view the mouse parallax moves does not lay the drops out again for a drift smaller than that)
 const sameSpawn = (a: SpawnPlane | null, b: SpawnPlane | null): boolean => {
@@ -166,18 +158,25 @@ const sameSpawn = (a: SpawnPlane | null, b: SpawnPlane | null): boolean => {
   const tolerance = M.MouseParallax.TOLERANCE;
   return !!a && !!b && Math.abs(a.eyeHeight - b.eyeHeight) <= tolerance.eye && Math.abs(a.pitch - b.pitch) <= tolerance.pitch && a.halfFov === b.halfFov;
 };
-const MUSIC_SCAN = 0.25;
-const MUSIC_MOST = 4000;
-const MUSIC_CYCLES = 48;
-const MUSIC_STATIC = 5;
-const WAVE_SCREEN = 2 * (16 / 9) * Math.tan(M.Camera.halfFov());
-// the colours' defaults (project.json's Color 1 to 4, as linear light)
-const DEFAULT_COLORS = [
-  "0.62745098 0.37254902 1",
-  "0.57254902 1 0.69019608",
-  "0.4745098 0.94117647 1",
-  "0.62745098 0.37254902 1",
-];
+const WAVE_SCREEN = M.RainWheel.waveScreen();
+// the state the wheel (models/rainwheel.ts) keeps, read and set through the rain's own fields
+const WHEEL_FIELDS = [
+  "life", "layout", "slots", "nextInSlot", "inWheel", "active", "reach", "dirtyFirst", "dirtyLast", "lastStep", "wanted", "inView", "shares", "woken", "wokenCount", "fillPart", "fillFor",
+  "musicCredit", "meanFall", "meanFallFor", "musicLight", "musicShown", "musicDeficit", "musicFree", "musicShowing", "musicOut", "musicAt", "staticAt", "trail", "time", "steady", "height",
+  "width", "density", "fontMax", "fontMin", "layoutDirty", "layoutFloor", "layoutPitch", "layoutEye", "tiltResponsiveness", "wavePerStep", "waveStep", "wavePhase", "waveWidth", "waveSpeed",
+  "wave", "custom", "colors", "at", "landing", "wrongLandings",
+] as const;
+// the settings the render thread sets on the wheel through the rain's own fields: kept in order among the calls made to the wheel (RainCall "set") while a task keeps a copy of it
+const RECORDED_SETS: Record<string, boolean> = { width: true, height: true, density: true, fontMin: true, fontMax: true, steady: true, custom: true, tiltResponsiveness: true };
+
+// what the rain asks of the task that runs its steps (the splashes: effects/splashes.ts, src/index.ts gives it): whether it does (a task exists), whether the calls made to the wheel are
+// to be kept for it, and the rain's part of the frame given to it
+export interface RainDriver {
+  drives(): boolean;
+  recording(): boolean;
+  rainStep(part: RainPart): void;
+}
+
 // the script's hashes, worked out once
 let SCRIPT_HASHES: Uint32Array<ArrayBuffer>|null = null;
 
@@ -191,57 +190,85 @@ export class Rain extends M.Effect {
   program!: ShaderProgram;
   newest!: ShaderProgram;
   colorState: RainColors;
-  wrongLandings: number;
-  // the floor the drops fall to (models/floor.ts) as set, and the one (and the pitch, for the screen's) the layout
-  // in use was made for
+  // the landings wheel and the state of the drops (models/rainwheel.ts): the fields below declared without a value are the wheel's, read and set here
+  wheel: RainWheel;
+  // the task that runs the wheel's steps (null: the rain steps its own wheel), whether the landings make splashes (the collision plane: src/index.ts), the calls made to the wheel since
+  // the last frame while the task keeps a copy of it, and the scene worker's layout the frame's part carries (taken by the task: its answer says whether it was swapped in)
+  driver: RainDriver | null;
+  collides: (() => boolean) | null;
+  calls: RainCall[];
+  callSeq: number;
+  partReady: RainResult | null;
+  declare life: RainWheel["life"];
+  declare layout: RainWheel["layout"];
+  declare slots: RainWheel["slots"];
+  declare nextInSlot: RainWheel["nextInSlot"];
+  declare inWheel: RainWheel["inWheel"];
+  declare active: number;
+  declare reach: number;
+  declare dirtyFirst: number;
+  declare dirtyLast: number;
+  declare lastStep: number;
+  declare wanted: number;
+  declare inView: number;
+  // React to music (models/musicrain.ts): each column's share of the settled rain's falls (the columns across the window, from the left; null: the settled rain)
+  declare shares: Float32Array | null;
+  // the drops whose phase was changed to begin a fall now (React to music: spawnByMusic): the quality's levels, worked out by the workers from the layout they were
+  // sent, do not know their new phase, so they are always drawn; the count
+  declare woken: Uint8Array;
+  declare wokenCount: number;
+  // the part of its drops the normal rain has in the view at a time (the rest are above it, waiting), and what it was worked out for
+  declare fillPart: number;
+  declare fillFor: string;
+  // the falls the music may begin: the credit (falls) and the time of the last scan; the times of the last scan and of the last refresh of the workers' layout (s)
+  declare musicCredit: number;
+  declare meanFall: number;
+  declare meanFallFor: Float32Array | null;
+  // the drops' light emittance across the window (React to music: 128 bins, the worker's reply; null: none)
+  declare musicLight: Float32Array | null;
+  declare musicShown: Int32Array;
+  declare musicDeficit: Float32Array;
+  declare musicFree: Int32Array;
+  declare musicShowing: Int32Array;
+  declare musicOut: Int32Array;
+  declare musicAt: number;
+  declare staticAt: number;
+  // the trail's cells drawn (the layout's), the last time moved on to, Steady start, the window, the settings
+  declare trail: number;
+  declare time: number;
+  declare steady: boolean;
+  declare height: number;
+  declare width: number;
+  declare density: number;
+  declare fontMax: number;
+  declare fontMin: number;
+  declare layoutDirty: boolean;
+  // the floor, the pitch and the eye's height the layout in use was made for, with the mouse parallax's shift of it
+  declare layoutFloor: FloorKind;
+  declare layoutPitch: number;
+  declare layoutEye: number;
+  declare tiltResponsiveness: number;
+  declare wavePerStep: number;
+  declare waveStep: number;
+  declare wavePhase: number;
+  declare waveWidth: number;
+  declare waveSpeed: number;
+  declare wave: boolean;
+  declare custom: boolean;
+  declare colors: Float32Array[];
+  declare at: Partial<DropState>;
+  declare landing: Partial<DropState>;
+  // (the tests': landings taken from the wheel that were none, with M.TEST)
+  declare wrongLandings: number;
+  // the floor the drops fall to (models/floor.ts) as set
   floorKind: FloorKind;
-  layoutFloor: FloorKind;
-  layoutPitch: number;
-  // the eye's height the layout (its spawn plane, its screen floor) was made for, with the mouse parallax's shift of it
-  layoutEye: number;
-  // React to music: the falls start from the top of the view (the spawn plane), and Music rain responsiveness (the rate of the falls the music asks for)
+  // React to music: the falls start from the top of the view (the spawn plane)
   tiltOn: boolean;
-  tiltResponsiveness: number;
   layoutSpawn: SpawnPlane | null;
   ready: RainResult | null;
   pending: { generation: number; at: number } | null;
   layGeneration: number;
   worker: SceneWorker | null;
-  at: Partial<DropState>;
-  landing: Partial<DropState>;
-  inWheel: Uint8Array;
-  nextInSlot: Int32Array;
-  slots: Int32Array;
-  inView: number;
-  wanted: number;
-  // React to music (models/musicrain.ts): each column's share of the settled rain's falls (the columns across the window, from the left; null: the settled rain)
-  shares: Float32Array | null;
-  // the drops whose phase was changed to begin a fall now (React to music: spawnByMusic): the quality's levels, worked out by the workers from the layout they were
-  // sent, do not know their new phase, so they are always drawn; the count, and the times of the last scan and of the last refresh of the workers' layout (s)
-  woken: Uint8Array;
-  // the part of its drops the normal rain has in the view at a time (the rest are above it, waiting), and what it was worked out for
-  fillPart: number;
-  fillFor: string;
-  // the falls the music may begin: the credit (falls) and the time of the last scan
-  musicCredit: number;
-  meanFall: number;
-  meanFallFor: Float32Array | null;
-  // the drops' light emittance across the window (React to music: 128 bins, the worker's reply; null: none)
-  musicLight: Float32Array | null;
-  musicShown: Int32Array;
-  musicDeficit: Float32Array;
-  musicFree: Int32Array;
-  musicShowing: Int32Array;
-  musicOut: Int32Array;
-  wokenCount: number;
-  musicAt: number;
-  staticAt: number;
-  reach: number;
-  active: number;
-  dirtyLast: number;
-  dirtyFirst: number;
-  life: Uint32Array;
-  lastStep: number;
   // the drops the quality says are seen this frame (setQuality), for the direct draw: their indices, how many, and the buffer and vertex
   // array that feed them to the vertex shader (one value for each trail's instances); listedDrops is how many the last direct draw
   // took from the list (-1: all of them, no list)
@@ -263,31 +290,12 @@ export class Rain extends M.Effect {
   texture: WebGLTexture | null;
   headOnly: boolean;
   onlyDrop: number;
-  layout: Float32Array | null;
   hashes: Uint32Array | null;
   covered: boolean;
   viewScale: number;
-  time: number;
-  steady: boolean;
-  height: number;
-  width: number;
-  density: number;
-  fontMax: number;
-  fontMin: number;
   nextTrail: number;
-  trail: number;
   head: number;
-  layoutDirty: boolean;
   relay: boolean;
-  wavePerStep: number;
-  waveStep: number;
-  wavePhase: number;
-  // the rain's index in the effects' order (the quality job's effect number: set by the coordinator)
-  waveWidth: number;
-  waveSpeed: number;
-  wave: boolean;
-  custom: boolean;
-  colors: Float32Array[];
   onLand: (drop: DropState, time: number) => void;
   clock: StepClock;
   atlas: GlyphAtlas;
@@ -309,59 +317,34 @@ export class Rain extends M.Effect {
     this.atlas = context.atlas;
     this.clock = context.clock;
     this.onLand = onLand;
-    // Custom colors 1 to 4 (else the rainbow), the wave (its speed and width in widths of a
-    // 16:9 view: a second, a cycle) and its phase at a step (phase at waveStep, and per step)
-    this.colors = DEFAULT_COLORS.map((c) => M.color(c));
-    this.custom = true;
-    this.wave = true;
-    this.waveSpeed = 0.1;
-    this.waveWidth = 1.5;
-    this.wavePhase = 0;
-    this.waveStep = 0;
-    this.wavePerStep = 0;
+    // (the wheel reports a landing to the field as it is when it lands: it may be replaced)
+    this.wheel = new M.RainWheel(this.clock, (drop, time) => this.onLand(drop, time));
+    this.driver = null;
+    this.collides = null;
+    this.calls = [];
+    this.callSeq = 0;
+    this.partReady = null;
     // a new layout owed (a setting that lays the drops out again), and the layout's upload owed
     this.relay = false;
     this.floorKind = "water";
-    this.layoutFloor = "water";
-    this.layoutPitch = 0;
-    this.layoutEye = 0;
     this.tiltOn = false;
-    this.tiltResponsiveness = 2;
     this.layoutSpawn = null;
-    this.layoutDirty = false;
     this.head = M.GlyphAtlas.HEAD;
-    // the trail's cells drawn (the layout's), and the ones set (laid out in the next layout)
-    this.trail = TRAIL;
+    // the trail's cells set (laid out in the next layout)
     this.nextTrail = TRAIL;
-    this.fontMin = 1;
-    this.fontMax = 16;
-    this.density = 5;
-    this.width = 800;
-    this.height = 600;
+    // the trail's cells at the start (the wheel's: a layout is made for them)
+    this.trail = TRAIL;
     // Steady start (src/index.ts: with Debug mode): at a reset all of them at once, as settled
     this.steady = false;
-    // the last time moved on to (a Speed set then goes on from its step)
-    this.time = 0;
     // (the tests' scale of the characters' light: with M.TEST only)
     this.viewScale = 1;
     // whether the bolt covers what lies behind it this frame (Characters lightning: set by src/index.ts)
     this.covered = false;
     this.hashes = null;
-    this.layout = null;
     this.onlyDrop = -1;
     this.headOnly = false;
     this.texture = null;
     this.lifeTexture = null;
-    this.lastStep = 0;
-    // each drop's life (its first fall shown, the fall it ends before, a fall it shows again
-    // from; NONE: none), and the drops whose layout or life changed since the last upload
-    this.life = new Uint32Array(COUNT * 4);
-    this.dirtyFirst = COUNT;
-    this.dirtyLast = -1;
-    // the drops counted as falling (the first `active` of the pool), the ones drawn (the first
-    // `reach`: those ending still fade there), the drops wanted, and the ones wanted in view
-    this.active = 0;
-    this.reach = 0;
     this.dropList = new Uint32Array(COUNT);
     this.dropCount = 0;
     this.mirrorList = new Uint32Array(COUNT);
@@ -372,39 +355,12 @@ export class Rain extends M.Effect {
     this.qualityParamValues = null;
     this.listVersion = -1;
     this.listedDrops = -1;
-    this.wanted = 0;
-    this.inView = 0;
-    this.shares = null;
-    this.woken = new Uint8Array(COUNT);
-    this.fillPart = 1;
-    this.fillFor = "";
-    this.musicCredit = 0;
-    this.meanFall = 1;
-    this.meanFallFor = null;
-    this.musicLight = null;
-    this.musicShown = new Int32Array(0);
-    this.musicDeficit = new Float32Array(0);
-    this.musicFree = new Int32Array(COUNT);
-    this.musicShowing = new Int32Array(COUNT);
-    this.musicOut = new Int32Array(COUNT);
-    this.wokenCount = 0;
-    this.musicAt = -Infinity;
-    this.staticAt = 0;
-    // the wheel: each slot's first drop (-1: none), each drop's next in its slot, whether it is
-    // in the wheel
-    this.slots = new Int32Array(1);
-    this.nextInSlot = new Int32Array(COUNT);
-    this.inWheel = new Uint8Array(COUNT);
-    this.landing = {};
-    this.at = {};
     // the scene's worker (null: the layouts made here), the last layout asked of it (its
     // generation), the one waiting ({ generation, at: its step }) and its result once there
     this.worker = null;
     this.layGeneration = 0;
     this.pending = null;
     this.ready = null;
-    // (the tests': landings taken from the wheel that were none, with M.TEST)
-    this.wrongLandings = 0;
     // (the colours' state this frame, filled in place by update)
     this.colorState = { colors: this.colors, custom: this.custom, wave: this.wave, width: this.waveWidth, now: 0, screen: WAVE_SCREEN };
   }
@@ -436,10 +392,10 @@ export class Rain extends M.Effect {
       },
       p105_setting_HeadBrightness: (rain: Rain, v: number) => (rain.head = v / 100),
       p109_setting_CustomColors: (rain: Rain, v: boolean) => (rain.custom = v),
-      p110_setting_Color1: (rain: Rain, v: string) => (rain.colors[0] = M.color(v)),
-      p111_setting_Color2: (rain: Rain, v: string) => (rain.colors[1] = M.color(v)),
-      p112_setting_Color3: (rain: Rain, v: string) => (rain.colors[2] = M.color(v)),
-      p113_setting_Color4: (rain: Rain, v: string) => (rain.colors[3] = M.color(v)),
+      p110_setting_Color1: (rain: Rain, v: string) => rain.setColor(0, M.color(v)),
+      p111_setting_Color2: (rain: Rain, v: string) => rain.setColor(1, M.color(v)),
+      p112_setting_Color3: (rain: Rain, v: string) => rain.setColor(2, M.color(v)),
+      p113_setting_Color4: (rain: Rain, v: string) => rain.setColor(3, M.color(v)),
       p114_setting_ColorWave: (rain: Rain, v: boolean) => rain.setWave(v, rain.waveSpeed, rain.waveWidth),
       p115_setting_WaveSpeed: (rain: Rain, v: number) => rain.setWave(rain.wave, v / 100, rain.waveWidth),
       p116_setting_WaveWidth: (rain: Rain, v: number) => rain.setWave(rain.wave, rain.waveSpeed, v / 100),
@@ -475,15 +431,6 @@ export class Rain extends M.Effect {
   }
 
   // ---- the drops' places ----
-
-  // the nearest and the furthest distance (Font size Max and Min, Min at most Max)
-  nearest() {
-    return DISTANCE_SIZE / this.fontMax;
-  }
-
-  furthest() {
-    return DISTANCE_SIZE / Math.min(this.fontMin, this.fontMax);
-  }
 
   // the layout from the hashes (the first is not used: the place across is new each fall), made
   // here at once; the same hashes again change nothing
@@ -646,12 +593,6 @@ export class Rain extends M.Effect {
     return units > 0 && this.qualityIndex >= 0 ? [{ effect: this.qualityIndex, units, minChunk: M.QualityRain.CHUNK }] : [];
   }
 
-  // the height of the floor at a distance for the layout in use
-  floorAt(distance: number) {
-    const camera = this.camera;
-    return this.layoutFloor === "screen" ? M.Floor.heightAt("screen", distance, this.layoutEye, camera.halfFov(), this.layoutPitch) : 0;
-  }
-
   // React to music on: the falls start from the top of the view (not turned: 0 distance from it at the front and at the back), and Music rain responsiveness sets the rate of the
   // falls the music asks for (musicRate: 1 is the steady rate of the normal rain, every step halves the time to the steady state)
   setMusicTilt(on: boolean, responsiveness: number) {
@@ -750,126 +691,107 @@ export class Rain extends M.Effect {
   // each drop's distance, speed, phase and rows (its ceiling's and its trail's), and the wheel's
   // size (RainLayout.layout)
   lay() {
-    this.trail = this.nextTrail;
+    const trail = this.nextTrail;
     const spawn = this.spawnNow();
-    const r = RL.layout({ hashes: this.hashes!, near: this.nearest(), far: this.furthest(), trail: this.trail, spawn: spawn || undefined, floor: this.floorView() });
+    const r = RL.layout({ hashes: this.hashes!, near: this.nearest(), far: this.furthest(), trail, spawn: spawn || undefined, floor: this.floorView() });
     this.layoutSpawn = spawn;
-    this.layout = r.layout;
-    this.layoutFloor = this.floorKind;
-    this.layoutPitch = this.camera.tilt();
-    this.layoutEye = this.camera.eyeY();
-    this.layoutDirty = true;
-    this.slots = new Int32Array(r.slots);
+    this.installLayout(r.layout, trail, this.floorKind, this.camera.tilt(), this.camera.eyeY(), r.slots);
+  }
+
+  // ---- the wheel (models/rainwheel.ts): what the rain asks of it ----
+
+  // the camera's view copied to the wheel (the calls that read it), and the wheel
+  sync(): RainWheel {
+    const camera = this.camera;
+    const view = this.wheel.view;
+    view.eyeX = camera.eyeX;
+    view.eyeY = camera.eyeY();
+    view.tilt = camera.tilt();
+    view.halfFov = camera.halfFov();
+    view.yaw = camera.yaw;
+    return this.wheel;
+  }
+
+  // the nearest and the furthest distance (Font size Max and Min, Min at most Max)
+  nearest() {
+    return this.wheel.nearest();
+  }
+
+  furthest() {
+    return this.wheel.furthest();
+  }
+
+  // a call made to the wheel kept for the task that runs its steps (while it keeps a copy of the wheel: a worker alive, a frame that forks), with the view the wheel has now: the task
+  // runs the same call on its wheel at the same place among the steps. A setting set through the rain's field is kept the same way (recordSet)
+  rec(name: string, args: unknown[], view = true) {
+    const d = this.driver;
+    if (!d || !d.recording()) {
+      return;
+    }
+    const v = this.wheel.view;
+    // (this wheel runs the call itself, right after: its sequence number is the last it has had)
+    const q = ++this.callSeq;
+    this.wheel.appliedSeq = q;
+    this.calls.push({ n: name, v: view ? [v.eyeX, v.eyeY, v.tilt, v.halfFov, v.yaw] : null, a: args, q });
+  }
+
+  recordSet(key: string, value: unknown) {
+    this.rec("set", [key, value], false);
+  }
+
+  // Custom color 1 to 4 (linear light)
+  setColor(i: number, color: Float32Array) {
+    this.rec("color", [i, color.slice()], false);
+    this.colors[i] = color;
+  }
+
+  // the layout and what it was made for set in the wheel (the trail's cells, the floor, the pitch and the eye's height; a new wheel's number of slots when given)
+  installLayout(layout: Float32Array, trail: number, floor: FloorKind, pitch: number, eye: number, slots: number | null) {
+    this.rec("installLayout", [layout.slice(), trail, floor, pitch, eye, slots], false);
+    this.wheel.installLayout(layout, trail, floor, pitch, eye, slots);
   }
 
   // a restart's lives and wheel taken (all the lives to upload)
   adopt(r: RestartResult) {
-    this.life = r.life;
-    this.slots = r.slots;
-    this.nextInSlot = r.nextInSlot;
-    this.inWheel = r.inWheel;
-    this.active = r.active;
-    this.reach = r.reach;
-    this.dirtyFirst = 0;
-    this.dirtyLast = COUNT - 1;
-    // (a new layout: the phases changed for the music are gone with the old one; the music's shares decide the first falls too)
-    this.woken.fill(0);
-    this.wokenCount = 0;
-    this.gateFirst(0, this.active, this.steady);
+    const wheel = this.sync();
+    this.rec("adopt", [{ life: r.life.slice(), slots: r.slots.slice(), nextInSlot: r.nextInSlot.slice(), inWheel: r.inWheel.slice(), active: r.active, reach: r.reach }]);
+    wheel.adopt(r);
   }
 
-  // the first fall of drops from..to-1 that has not come into the view yet (a clean start: none has) is shown or not by the music's shares, as every later one is (nothing
-  // falls at the start in silence); a fall in the view is left to finish, unless the rain was settled at once (`now`: a jump in time, Steady start: the falls in progress are
-  // shown or not by the shares too)
   gateFirst(from: number, to: number, now = false) {
-    if (!this.shares) {
-      return;
-    }
-    for (let i = from; i < to; i++) {
-      const first = this.life[i * 4];
-      if (first === NONE) {
-        continue;
-      }
-      const d = this.dropAt(i, this.lastStep, this.at);
-      if (now) {
-        // (and the next fall: a drop landing in this very step has no landing left to decide it)
-        this.gate(i, d.cycle);
-        this.gate(i, d.cycle + 1);
-      } else if (first > d.cycle || (first === d.cycle && d.headY > this.topAt(-d.z))) {
-        this.gate(i, first);
-      }
-    }
+    const wheel = this.sync();
+    this.rec("gateFirst", [from, to, now]);
+    wheel.gateFirst(from, to, now);
   }
-
-  // ---- the colours ----
 
   // the steps' rate changed (Speed, src/index.ts's): the wave goes on from where it is at the new rate
   rateChanged() {
-    this.setWave(this.wave, this.waveSpeed, this.waveWidth);
+    this.rec("rateChanged", []);
+    this.wheel.rateChanged();
   }
 
-  // the wave: on or off, its speed and width; its phase going on from where it is (a step of the
-  // rain's), at the steps' rate now
+  // the wave: on or off, its speed and width; its phase going on from where it is (a step of the rain's), at the steps' rate now
   setWave(on: boolean, speed: number, width: number) {
-    const step = this.clock.stepAt(this.time);
-    this.wavePhase = this.phaseAt(step);
-    this.waveStep = step;
-    this.wave = on;
-    this.waveSpeed = speed;
-    this.waveWidth = width;
-    this.wavePerStep = on ? speed / width / this.clock.rate : 0;
+    this.rec("setWave", [on, speed, width]);
+    this.wheel.setWave(on, speed, width);
   }
 
   phaseAt(step: number) {
-    return this.wavePhase + (step - this.waveStep) * this.wavePerStep;
+    return this.wheel.phaseAt(step);
   }
 
-  // the steps since drop i's fall began, at a step, from the rows it has fallen in it: exactly
-  // step - ceil(16 (rows to the fall's start) / speed), in small numbers only (with step = 16 q
-  // + r, the q's cancel): r - ceil((16 floor(r speed / 16) - 16 rowsSince) / speed), as the shader
   stepsSince(i: number, step: number, rowsSince: number) {
-    const speed = this.layout![i * 4 + 1];
-    const r = step % 16;
-    return r - Math.ceil((16 * Math.floor((r * speed) / 16) - 16 * rowsSince) / speed);
+    return this.wheel.stepsSince(i, step, rowsSince);
   }
 
-  // the wave's phase when a fall began, at a step: the phase now (its fraction, as the shader
-  // gets it) less the steps since
   fallPhase(i: number, step: number, rowsSince: number) {
-    const now = this.phaseAt(step);
-    return now - Math.floor(now) - this.stepsSince(i, step, rowsSince) * this.wavePerStep;
+    return this.wheel.fallPhase(i, step, rowsSince);
   }
 
-  // drop i's colour in its fall at a step (d: dropAt's description of it then), into a colour
-  // given
+  // drop i's colour in its fall at a step (d: dropAt's description of it then), into a colour given
   colorOf<T extends Float32Array | number[]>(i: number, d: Pick<DropState, "x" | "z" | "head">, step: number, into: T) {
-    const distance = -d.z;
-    const position = d.x / distance / WAVE_SCREEN + 0.5;
-    const wave = (((position / this.waveWidth - this.fallPhase(i, step, d.head)) % 1) + 1) % 1;
-    if (this.custom) {
-      const c = this.colors;
-      const at = this.wave ? wave : Math.min(1, Math.max(0, position));
-      const n = this.wave ? 5 : 4;
-      const segments = 2 * (n - 1);
-      const segment = Math.min(Math.floor(at * segments), segments - 1);
-      const amount = at * segments - segment;
-      const a = c[Math.floor(segment / 2) % 4];
-      const b = c[(Math.floor(segment / 2) + 1) % 4];
-      for (let k = 0; k < 3; k++) {
-        into[k] = Math.min(1, Math.max(0, segment % 2 === 0 ? a[k] + b[k] * amount : b[k] + a[k] * (1 - amount)));
-      }
-    } else {
-      const hue = (((this.wave ? wave : position) * 360 + 347) % 360 + 360) % 360;
-      const offsets = [0, 4, 2];
-      for (let k = 0; k < 3; k++) {
-        const v = (hue / 60 + offsets[k]) % 6;
-        into[k] = M.linear(Math.min(1, Math.max(0, Math.abs(v - 3) - 1)));
-      }
-    }
-    return into;
+    return this.wheel.colorOf(i, d, step, into);
   }
-
-  // ---- how many ----
 
   resize(width: number, height: number) {
     this.width = width;
@@ -877,454 +799,292 @@ export class Rain extends M.Effect {
     this.retarget();
   }
 
-  // the drops wanted in view (matrix_web_rain's rainCount x RAIN_SCALE) and in the pool (over
-  // the share of the world's width in view)
+  // the drops wanted in view (matrix_web_rain's rainCount x RAIN_SCALE) and in the pool (over the share of the world's width in view)
   targets() {
-    const min = Math.min(this.fontMin, this.fontMax);
-    const max = this.fontMax;
-    const perPixel = max > min ? (1 / min - 1 / max) / Math.log(max / min) : 1 / max;
-    const inView = RAIN_SCALE * Math.max(1, Math.round(this.density * this.width * perPixel));
-    const share = Math.min(1, ((this.width / this.height) * Math.tan(M.Camera.halfFov())) / M.Camera.SPAN);
-    return [inView, Math.min(COUNT, Math.round(inView / share))];
+    return this.wheel.targets();
   }
 
-  // the columns' shares of the falls (null: the settled rain's): each fall is shown or not by its column's share, decided as it begins (gate), so a fall in progress is
-  // never cut short and the drops come round to the music as their falls end
+  // the columns' shares of the falls (null: the settled rain's)
   setShares(shares: Float32Array | null) {
-    const first = !this.shares && !!shares;
-    this.shares = shares;
-    if (first) {
-      // (the music takes the rain over: the falls not in the view yet are gated; with Steady start, whose falls are all in progress, all of them)
-      this.gateFirst(0, this.active, this.steady);
-    }
+    const wheel = this.sync();
+    this.rec("setShares", [shares ? shares.slice() : null]);
+    wheel.setShares(shares);
   }
 
   // the drops' light emittance across the window (the multiple of their light by bin, left to right; null: none)
   setMusicLight(light: Float32Array | null) {
-    this.musicLight = light;
+    this.rec("setMusicLight", [light ? light.slice() : null]);
+    this.wheel.setMusicLight(light);
   }
 
-  // the column across the window of a place (x, distance): the world's space seen from the front, in the window's width
   columnOf(x: number, distance: number, columns: number) {
-    // (the place's bearing from the eye, less the view's turn: with the parallax's yaw and eye offset the columns follow the view)
-    const camera = this.camera;
-    const bearing = (x - camera.eyeX) / distance - (camera.yaw === 0 ? 0 : Math.tan(camera.yaw));
-    const position = bearing / (2 * (this.width / this.height) * Math.tan(M.Camera.halfFov())) + 0.5;
-    return Math.min(columns - 1, Math.max(0, Math.floor(position * columns)));
+    return this.sync().columnOf(x, distance, columns);
   }
 
-  // ---- React to music: the falls begun and ended by column ----
-
-  // the falling drops by column (the columns across the window, from the left): how many of the drops wanted show their fall now, in each (into a given array)
   showingColumns(columns: number, into?: Int32Array) {
-    const out = into && into.length >= columns ? into : new Int32Array(columns);
-    out.fill(0, 0, columns);
-    if (!this.layout) {
-      return out;
-    }
-    for (let i = 0; i < this.active; i++) {
-      const cycle = this.cycleAt(i, this.lastStep);
-      if (this.life[i * 4] !== NONE && this.shows(i, cycle)) {
-        out[this.columnOf(this.x(i, cycle, this.layout[i * 4]), this.layout[i * 4], columns)]++;
-      }
-    }
-    return out;
+    return this.sync().showingColumns(columns, into);
   }
 
-  // the part of the drops wanted the music keeps falling, for as many in the view as the normal rain has at a time: a drop falls from the world's ceiling (the top of the highest view), and is in the view only from the
-  // top of the view down, so on average the part of its cycle that is the view's (the rows of a fall from the top of the view over the rows of a fall from the ceiling, the trail's cells included, at its distance, over every 8th drop wanted);
-  // the music's falls start from the top of the view, so every one of them is in the view: to show as many as the normal rain does the music's shares are taken times this part
   musicFillPart() {
-    const data = this.layout;
-    const camera = this.camera;
-    if (!data) {
-      return 1;
-    }
-    const key = camera.eyeY() + "," + camera.tilt() + "," + this.trail + "," + this.active + "," + data.length + "," + this.nearest() + "," + this.furthest();
-    if (this.fillFor !== key) {
-      const tan = Math.tan(camera.tilt() + camera.halfFov());
-      let sum = 0;
-      let n = 0;
-      for (let i = 0; i < this.active; i += 8) {
-        const d = data[i * 4]!;
-        // (a fall of the music is the rows from the top of the view down, a fall of the normal rain the rows from the ceiling, each with the trail's cells: starting falls at the same
-        // rate, the music has as many falling as the normal rain has, times the first's rows over the second's)
-        sum += Math.min(1, ((camera.eyeY() + d * tan) / CELL + this.trail) / (M.Camera.ceilingAt(d) / CELL + this.trail));
-        n++;
-      }
-      this.fillPart = n > 0 ? sum / n : 1;
-      this.fillFor = key;
-    }
-    return this.fillPart;
+    return this.sync().musicFillPart();
   }
 
-  // the average time a drop takes to fall (s), over every 16th of the drops wanted: its rows over its speed in steps (a speed of s sixteenths of a row a step), at the step rate
   meanFallSeconds() {
-    const data = this.layout;
-    if (!data) {
-      return 1;
-    }
-    if (this.meanFallFor !== data) {
-      let sum = 0;
-      let n = 0;
-      for (let i = 0; i < COUNT; i += 16) {
-        sum += (data[i * 4 + 3]! * 16) / data[i * 4 + 1]!;
-        n++;
-      }
-      const steps = sum / Math.max(1, n);
-      this.meanFall = Math.max(0.1, this.clock.timeOf(this.lastStep + Math.ceil(steps)) - this.clock.timeOf(this.lastStep));
-      this.meanFallFor = data;
-    }
-    return this.meanFall;
+    return this.wheel.meanFallSeconds();
   }
 
-  // the falls the music asks for a second in all (the drops coming round by themselves begin the first part of them, the scan the rest): the settled rain's rate (every drop begins a fall once in the time of a fall) for the density the music sets at this moment (the
-  // drops wanted times the mean share of the columns), as matrix_web_rain's drops come in at the new rain's settled rate and not all at once, times Music rain responsiveness's
-  // factor (1: that rate exactly; each step halves the time given to reach the steady state: 2 ^ (responsiveness - 1))
   musicRate() {
-    const shares = this.shares;
-    if (!shares || shares.length === 0) {
-      return 0;
-    }
-    let sum = 0;
-    for (let c = 0; c < shares.length; c++) {
-      sum += shares[c]!;
-    }
-    return (this.active * this.musicFillPart() * (sum / shares.length) * M.MusicRain.rateFactor(this.tiltResponsiveness)) / this.meanFallSeconds();
+    return this.sync().musicRate();
   }
 
-  // a scan of the drops (about 4 a second while the music drives) against the columns' shares: a column with fewer falling drops than its share of the drops wanted gets
-  // new falls at once, begun at the top of their fall now by drops that are not falling (their phase changed to start a fall now, in a cycle whose place across is in the
-  // column: the drop's falls are at places by a hash of the drop and the fall); when no drop is free for them, falls are ended (despawned) in the columns with more
-  // falling drops than their share, the farthest first and, among those, the oldest (the furthest down its fall)
+  // a scan of the drops against the columns' shares (not while a layout is waited for)
   spawnByMusic(time: number) {
-    const shares = this.shares;
-    if (!shares || !this.layout || this.pending || this.active === 0 || time - this.musicAt < MUSIC_SCAN) {
-      return;
-    }
-    // (the falls begun by it are no more than the settled rain's rate allows: the credit of the time since the last scan, carried over)
-    const since = this.musicAt === -Infinity ? 0 : Math.min(1, Math.max(0, time - this.musicAt));
-    // (the drops coming round by themselves, each fall accepted by its column's share as the one before lands, already begin falls at the steady rate (1 times the rate of the density
-    // the music sets, the normal rain's steady rate for it): the falls begun here are the rest of the rate Music rain responsiveness asks for, (factor - 1) times that)
-    const factor = M.MusicRain.rateFactor(this.tiltResponsiveness);
-    this.musicCredit = Math.min(this.musicCredit + this.musicRate() * (1 - 1 / factor) * since, MUSIC_MOST);
-    this.musicAt = time;
-    if (this.musicCredit < 1) {
-      return;
-    }
-    const step = this.lastStep;
-    const columns = shares.length;
-    const active = this.active;
-    const data = this.layout;
-    const shown = this.musicShown.length >= columns ? this.musicShown : (this.musicShown = new Int32Array(columns));
-    const deficit = this.musicDeficit.length >= columns ? this.musicDeficit : (this.musicDeficit = new Float32Array(columns));
-    shown.fill(0, 0, columns);
-    const free = this.musicFree;
-    const showing = this.musicShowing;
-    let freeCount = 0;
-    let showingCount = 0;
-    for (let i = 0; i < active; i++) {
-      if (this.life[i * 4] === NONE) {
-        continue;
-      }
-      const cycle = this.cycleAt(i, step);
-      if (this.shows(i, cycle)) {
-        shown[this.columnOf(this.x(i, cycle, data[i * 4]), data[i * 4], columns)]++;
-        showing[showingCount++] = i;
-      } else {
-        free[freeCount++] = i;
-      }
-    }
-    let owed = 0;
-    let total = 0;
-    let wanted = 0;
-    const per = active / columns;
-    const fill = this.musicFillPart();
-    for (let c = 0; c < columns; c++) {
-      deficit[c] = Math.floor(shares[c]! * fill * per - shown[c]!);
-      if (deficit[c]! > 0) {
-        owed += deficit[c]!;
-      }
-      total += shown[c]!;
-      wanted += shares[c]! * fill * per;
-    }
-    // (the falls begun never take the whole past what the columns' shares call for in all: each column filled up to its own share alone would leave the whole above it by the
-    // columns' chance fluctuations)
-    owed = Math.min(owed, Math.floor(wanted - total));
-    if (owed <= 0) {
-      return;
-    }
-    owed = Math.min(owed, Math.floor(this.musicCredit));
-    // (no drop free for the falls owed: the oldest and farthest of those falling in the columns with more than their share end)
-    if (freeCount < owed) {
-      const out = this.musicOut;
-      let n = 0;
-      for (let k = 0; k < showingCount; k++) {
-        const i = showing[k]!;
-        const cycle = this.cycleAt(i, step);
-        const c = this.columnOf(this.x(i, cycle, data[i * 4]), data[i * 4], columns);
-        if (shown[c]! > shares[c]! * fill * per + 1) {
-          out[n++] = i;
-        }
-      }
-      const key = (i: number) => data[i * 4] * 1e6 + (this.total(i, step) % data[i * 4 + 3]);
-      const picked = out.subarray(0, n).sort((a, b) => key(b) - key(a));
-      for (let k = 0; k < picked.length && freeCount < owed; k++) {
-        const i = picked[k]!;
-        const cycle = this.cycleAt(i, step);
-        const c = this.columnOf(this.x(i, cycle, data[i * 4]), data[i * 4], columns);
-        if (shown[c]! > shares[c]! * fill * per + 1) {
-          shown[c]!--;
-          this.despawn(i, cycle);
-          free[freeCount++] = i;
-        }
-      }
-    }
-    // (the drops free begin falls, each in a column that is owed one: the first cycle of the next MUSIC_CYCLES that is placed in one)
-    const mask = this.slots.length - 1;
-    let woke = 0;
-    const start = freeCount > 0 ? Math.floor(time * 1000) % freeCount : 0;
-    for (let k = 0; k < freeCount && woke < owed; k++) {
-      const i = free[(start + k) % freeCount]!;
-      const distance = data[i * 4];
-      const rows = data[i * 4 + 3];
-      const t = this.total(i, step);
-      const base = (t - data[i * 4 + 2]) >>> 0;
-      const r0 = (rows - (base % rows)) % rows;
-      for (let j = 0; j < MUSIC_CYCLES; j++) {
-        const phase = r0 + j * rows;
-        if (base + phase >= 4294967296) {
-          break;
-        }
-        const cycle = (base + phase) / rows;
-        const c = this.columnOf(this.x(i, cycle, distance), distance, columns);
-        if (deficit[c]! >= 1) {
-          deficit[c]!--;
-          this.wake(i, step, phase, cycle, mask);
-          woke++;
-          this.musicCredit--;
-          break;
-        }
-      }
-    }
-    // (the workers' layout is sent again now and then, with the new phases: the drops woken are then known to them)
-    if (this.wokenCount > 0 && time - this.staticAt > MUSIC_STATIC) {
-      this.staticAt = time;
-      this.layout = Float32Array.from(this.layout);
-      this.layoutDirty = true;
-      this.woken.fill(0);
-      this.wokenCount = 0;
-    }
+    const wheel = this.sync();
+    this.rec("spawnByMusic", [time, !!this.pending]);
+    wheel.layoutPending = !!this.pending;
+    wheel.spawnByMusic(time);
   }
 
-  // drop i's fall now ends (its place in this fall in its column is more than the music calls for): it shows no more of it, its next falls as before
   despawn(i: number, cycle: number) {
-    const life = this.life;
-    this.setLife(i, life[i * 4], life[i * 4 + 1] === NONE ? cycle : Math.min(life[i * 4 + 1], cycle), cycle + 1);
+    this.rec("despawn", [i, cycle]);
+    this.wheel.despawn(i, cycle);
   }
 
-  // drop i begins a fall at the top now: its phase changed so that its head is at the first row in a step now (the fall `cycle` of its new phase), its landing moved, its
-  // fall shown from there
   wake(i: number, step: number, phase: number, cycle: number, mask: number) {
-    if (this.inWheel[i]) {
-      // (out of the slot its landing was in)
-      const old = this.nextLanding(i, step) & mask;
-      let at = this.slots[old]!;
-      if (at === i) {
-        this.slots[old] = this.nextInSlot[i]!;
-      } else {
-        while (at >= 0 && this.nextInSlot[at] !== i) {
-          at = this.nextInSlot[at]!;
-        }
-        if (at >= 0) {
-          this.nextInSlot[at] = this.nextInSlot[i]!;
-        }
-      }
-      this.inWheel[i] = 0;
-    }
-    this.layout![i * 4 + 2] = phase;
-    this.layoutDirty = true;
-    if (!this.woken[i]) {
-      this.woken[i] = 1;
-      this.wokenCount++;
-    }
-    this.setLife(i, cycle, NONE, NONE);
-    this.schedule(i, this.nextLanding(i, step));
+    this.rec("wake", [i, step, phase, cycle, mask]);
+    this.wheel.wake(i, step, phase, cycle, mask);
   }
 
-  // drop i's fall `next` begins when the fall before landed: shown or not by the share of the column it falls in (a hash of the drop and the fall under the share),
-  // by its life's falls shown ([first, end) and from again)
   gate(i: number, next: number) {
-    const shares = this.shares;
-    if (!shares || i >= this.active) {
-      return;
-    }
-    const distance = this.layout![i * 4];
-    const share = shares[this.columnOf(this.x(i, next, distance), distance, shares.length)]! * this.musicFillPart();
-    const accepted = M.hash(((Math.imul(i, 2246822519) ^ Math.imul(next, 3266489917)) + SEED) >>> 0) / 4294967296 < share;
-    const shown = this.shows(i, next);
-    const life = this.life;
-    if (accepted) {
-      if (!shown) {
-        this.setLife(i, next, NONE, NONE);
-      }
-    } else if (shown) {
-      this.setLife(i, life[i * 4], life[i * 4 + 1] === NONE ? next : life[i * 4 + 1], next + 1);
-    } else if (life[i * 4 + 2] !== NONE && life[i * 4 + 2] < next + 1) {
-      this.setLife(i, life[i * 4], life[i * 4 + 1], next + 1);
-    }
+    const wheel = this.sync();
+    this.rec("gate", [i, next]);
+    wheel.gate(i, next);
   }
 
   // the screen's columns of Font size Max (the music's chance is by column)
   musicColumns() {
-    return Math.max(1, Math.ceil(this.width / this.fontMax));
+    return this.wheel.musicColumns();
   }
 
-  // the rows a drop falls on average (from the world's ceiling at its distance to the water, over the distances the drops are at, in cells)
+  // the rows a drop falls on average (from the world's ceiling to the water, over the distances the drops are at, in cells)
   averageFall() {
-    const near = this.nearest();
-    const far = this.furthest();
-    let sum = 0;
-    const n = 16;
-    for (let k = 0; k < n; k++) {
-      sum += M.Camera.ceilingAt(near + ((far - near) * (k + 0.5)) / n) / CELL;
-    }
-    return Math.max(1, sum / n);
+    return this.wheel.averageFall();
   }
 
   // the drops wanted again: more come in (start), fewer finish their fall
   retarget() {
-    [this.inView, this.wanted] = this.targets();
-    if (!this.layout) {
-      return;
-    }
-    const step = this.lastStep;
-    for (let i = this.active; i < this.wanted; i++) {
-      this.start(i, step);
-    }
-    for (let i = this.wanted; i < this.active; i++) {
-      this.finish(i, step);
-    }
-    const before = this.active;
-    this.active = this.wanted;
-    this.reach = Math.max(this.reach, this.active);
-    this.gateFirst(before, this.active);
+    const wheel = this.sync();
+    this.rec("retarget", []);
+    wheel.retarget();
   }
 
-  // ---- each drop's life ----
-
   setLife(i: number, first: number, end: number, again: number) {
-    this.life[i * 4] = first;
-    this.life[i * 4 + 1] = end;
-    this.life[i * 4 + 2] = again;
-    this.dirty(i);
+    this.rec("setLife", [i, first, end, again]);
+    this.wheel.setLife(i, first, end, again);
   }
 
   dirty(i: number) {
-    this.dirtyFirst = Math.min(this.dirtyFirst, i);
-    this.dirtyLast = Math.max(this.dirtyLast, i);
+    this.rec("dirty", [i]);
+    this.wheel.dirty(i);
   }
 
   // does drop i show its fall f?
   shows(i: number, f: number) {
-    const life = this.life;
-    return (f >= life[i * 4] && f < life[i * 4 + 1]) || f >= life[i * 4 + 2];
+    return this.wheel.shows(i, f);
   }
 
   // will it show any fall after f?
   showsAfter(i: number, f: number) {
-    return f + 1 < this.life[i * 4 + 1] || this.life[i * 4 + 2] !== NONE;
+    return this.wheel.showsAfter(i, f);
   }
 
   // a clean screen (none falling: they come in), or with Steady start the settled rain
-  // (RainLayout.restartOf, into the arrays it has)
   restart() {
-    if (!this.layout) {
-      return;
-    }
-    [this.inView, this.wanted] = this.targets();
-    const camera = this.camera;
-    const params = {
-      layout: this.layout,
-      slots: this.slots.length,
-      wanted: this.wanted,
-      steady: this.steady,
-      lastStep: this.lastStep,
-      eyeHeight: camera.eyeY(),
-      pitch: camera.tilt(),
-      halfFov: camera.halfFov(),
-      floor: this.layoutFloor,
-    };
-    this.adopt(RL.restartOf(params, this));
+    const wheel = this.sync();
+    this.rec("restart", []);
+    wheel.restart();
   }
 
   // the settled rain at once (after a jump in time: as if it had filled meanwhile)
   settle() {
-    const steady = this.steady;
-    this.steady = true;
-    this.restart();
-    this.steady = steady;
+    const wheel = this.sync();
+    this.rec("settle", []);
+    wheel.settle();
+  }
+
+  // the height of the top of the view at a distance (the view now, with the mouse parallax's shifts)
+  topAt(distance: number) {
+    return this.sync().topAt(distance);
+  }
+
+  firstFrom(i: number, step: number) {
+    return this.sync().firstFrom(i, step);
+  }
+
+  start(i: number, step: number) {
+    const wheel = this.sync();
+    this.rec("start", [i, step]);
+    wheel.start(i, step);
+  }
+
+  finish(i: number, step: number) {
+    const wheel = this.sync();
+    this.rec("finish", [i, step]);
+    wheel.finish(i, step);
+  }
+
+  // the drops that ended and faded let go
+  fade(step: number) {
+    const wheel = this.sync();
+    this.rec("fade", [step]);
+    wheel.fade(step);
+  }
+
+  // the height of the floor at a distance for the layout in use
+  floorAt(distance: number) {
+    return this.sync().floorAt(distance);
+  }
+
+  total(i: number, step: number) {
+    return this.wheel.total(i, step);
+  }
+
+  cycleAt(i: number, step: number) {
+    return this.wheel.cycleAt(i, step);
+  }
+
+  // a drop's place across in a fall: new for every fall
+  x(i: number, cycle: number, distance: number) {
+    return this.wheel.x(i, cycle, distance);
+  }
+
+  // its falls finished by a step (a fall finishes when its head reaches its lowest row)
+  falls(i: number, step: number) {
+    return this.wheel.falls(i, step);
+  }
+
+  landed(i: number, step: number) {
+    return this.wheel.landed(i, step);
+  }
+
+  // the first step after `after` in which drop i lands
+  nextLanding(i: number, after: number) {
+    return this.wheel.nextLanding(i, after);
+  }
+
+  schedule(i: number, step: number) {
+    this.rec("schedule", [i, step]);
+    this.wheel.schedule(i, step);
+  }
+
+  // drop i at a step: its head, rows, fall, place (x, z), its head's height, whether it lands in this step and whether its fall shows; into an object given, or a new one
+  dropAt(i: number, step: number, into: Partial<DropState> = {}): DropState {
+    return this.sync().dropAt(i, step, into);
+  }
+
+  reset() {
+    this.applyLayout(true);
+    const wheel = this.sync();
+    this.rec("resetTime", []);
+    wheel.resetTime();
+  }
+
+  // ---- the task that runs the wheel's steps (the splashes': effects/splashes.ts, models/rainsimtick.ts) ----
+
+  // the rain's part of the frame the task is given: the view, the time, whether a layout is pending, the scene worker's layout when its step is within the frame's steps (a copy: the
+  // task keeps it to run the frame again; the original is the render thread's own to install, packetIn), the landings' flags; the calls come with the task's payload (takeCalls)
+  makePart(time: number): RainPart {
+    const wheel = this.sync();
+    const v = wheel.view;
+    const step = this.clock.stepAt(time);
+    const ready = this.ready && this.ready.at <= step ? this.ready : null;
+    this.partReady = ready;
+    return {
+      calls: [],
+      before: this.calls.length,
+      view: { eyeX: v.eyeX, eyeY: v.eyeY, tilt: v.tilt, halfFov: v.halfFov, yaw: v.yaw },
+      time,
+      layoutPending: !!this.pending,
+      swap: ready ? M.RainSimTick.cloneSwap(ready) : null,
+      impact: IMPACT,
+      collide: this.collides ? this.collides() : false,
+      size: CELL,
+    };
+  }
+
+  // the calls kept for the task (taken)
+  takeCalls(): RainCall[] {
+    const calls = this.calls;
+    this.calls = [];
+    return calls;
+  }
+
+  // the task's packet of the frame taken in: the wheel's state a worker kept (applied), the layout swapped in at its step (the render thread's own side of it: the layout's spawn plane,
+  // nothing pending), a layout asked for a step now past asked again
+  packetIn(packet: RainSimPacket) {
+    const out = packet.rain;
+    if (!out) {
+      return;
+    }
+    const ready = this.partReady;
+    M.RainSimTick.applyRain(this.wheel, out, out.swapped ? ready : null);
+    if (out.swapped && ready) {
+      this.pending = null;
+      this.ready = null;
+      this.partReady = null;
+      this.layoutSpawn = ready.spawn;
+    }
+    if (this.pending && this.pending.at < this.lastStep) {
+      this.drop();
+      this.relay = true;
+    }
+  }
+
+  // the steps since the last time, each with its landings and the drops that ended let go; after a jump past what a frame can move (or back), the settled rain from there
+  advance(time: number) {
+    // (a frame's list is the quality's of that frame: gone as the simulation moves on to the next)
+    this.dropListed = false;
+    this.applyLayout();
+    this.time = time;
+    // (a task runs the steps in its tick: the frame's part is given to it)
+    const driver = this.driver;
+    if (driver && driver.drives()) {
+      driver.rainStep(this.makePart(time));
+      return;
+    }
+    const step = this.clock.stepAt(time);
+    if (!this.layout) {
+      return;
+    }
+    const wheel = this.sync();
+    if (step - wheel.lastStep > this.clock.most || step < wheel.lastStep) {
+      wheel.lastStep = step;
+      wheel.settle();
+    }
+    // (the worker's layout for this very step, before its steps)
+    if (this.ready && this.ready.at === wheel.lastStep) {
+      this.swap();
+    }
+    for (let s = wheel.lastStep + 1; s <= step; s++) {
+      wheel.runStep(s);
+      if (this.ready && this.ready.at === s) {
+        wheel.lastStep = s;
+        this.swap();
+      }
+    }
+    wheel.lastStep = Math.max(wheel.lastStep, step);
+    this.spawnByMusic(time);
+    // (a layout asked for a step now past: asked again)
+    if (this.pending && this.pending.at < wheel.lastStep) {
+      this.drop();
+      this.relay = true;
+    }
   }
 
   // whether the view now (the eye's height and the pitch with the mouse parallax's shifts) is past the tolerance from the one the drops were laid out for
   viewDrifted(): boolean {
     const tolerance = M.MouseParallax.TOLERANCE;
     return Math.abs(this.camera.tilt() - this.layoutPitch) > tolerance.pitch || Math.abs(this.camera.eyeY() - this.layoutEye) > tolerance.eye;
-  }
-
-  // the height of the top of the view at a distance (the view now, with the mouse parallax's shifts)
-  topAt(distance: number) {
-    const camera = this.camera;
-    return camera.eyeY() + distance * Math.tan(camera.tilt() + camera.halfFov());
-  }
-
-  // the first of drop i's falls whose head comes down past the top of the view from a step on:
-  // the fall now if its head is above the view, else the next
-  firstFrom(i: number, step: number) {
-    const d = this.dropAt(i, step, this.at);
-    return d.headY > this.topAt(-d.z) ? d.cycle : d.cycle + 1;
-  }
-
-  // drop i comes in at a step: from the first of its falls coming down into the view (one
-  // still fading from its end goes on, or shows again from there); scheduled in the wheel
-  start(i: number, step: number) {
-    const first = this.firstFrom(i, step);
-    if (this.life[i * 4] !== NONE && i < this.reach) {
-      if (this.cycleAt(i, step) < this.life[i * 4 + 1]) {
-        this.setLife(i, this.life[i * 4], NONE, NONE);
-      } else {
-        this.setLife(i, this.life[i * 4], this.life[i * 4 + 1], first);
-      }
-    } else {
-      this.setLife(i, first, NONE, NONE);
-    }
-    if (!this.inWheel[i]) {
-      this.schedule(i, this.nextLanding(i, step));
-    }
-  }
-
-  // drop i ends: its fall now finishes (or, its head not in view yet, ends at once), its trail
-  // fading where it lands
-  finish(i: number, step: number) {
-    const d = this.dropAt(i, step, this.at);
-    const end = d.headY > this.topAt(-d.z) ? d.cycle : d.cycle + 1;
-    this.setLife(i, this.life[i * 4], Math.max(this.life[i * 4], end), NONE);
-  }
-
-  // the drops that ended and faded let go
-  fade(step: number) {
-    while (this.reach > this.active) {
-      const j = this.reach - 1;
-      if (this.life[j * 4] !== NONE) {
-        const d = this.dropAt(j, step, this.at);
-        const end = this.life[j * 4 + 1];
-        if (this.life[j * 4 + 2] !== NONE || !(d.cycle > end || (d.cycle === end && d.head >= this.trail))) {
-          break;
-        }
-        this.setLife(j, NONE, 0, NONE);
-      }
-      this.reach--;
-    }
   }
 
   // the layout (when laid out) and the lives changed since the last time (their rows), uploaded
@@ -1466,134 +1226,6 @@ export class Rain extends M.Effect {
     this.guard.end();
   }
 
-  // ---- a drop's fall ----
-
-  // how far drop i has fallen at a step, counted in rows since the start (in 32 bits, as the
-  // shader: (step / 16) x speed + (step % 16) x speed / 16, exactly step x speed / 16)
-  total(i: number, step: number) {
-    return RL.total(this.layout!, i, step);
-  }
-
-  cycleAt(i: number, step: number) {
-    return Math.floor(this.total(i, step) / this.layout![i * 4 + 3]);
-  }
-
-  // a drop's place across in a fall: new for every fall
-  x(i: number, cycle: number, distance: number) {
-    const across = M.hash(((Math.imul(i, 2654435761) ^ Math.imul(cycle, 40503)) + SEED) >>> 0) / 4294967296;
-    return (across * 2 - 1) * distance * M.Camera.SPAN;
-  }
-
-  // its falls finished by a step (a fall finishes when its head reaches its lowest row)
-  falls(i: number, step: number) {
-    return RL.falls(this.layout!, i, step);
-  }
-
-  landed(i: number, step: number) {
-    return RL.landed(this.layout!, i, step);
-  }
-
-  // the first step after `after` in which drop i lands
-  nextLanding(i: number, after: number) {
-    return RL.nextLanding(this.layout!, i, after);
-  }
-
-  schedule(i: number, step: number) {
-    const slot = step & (this.slots.length - 1);
-    this.nextInSlot[i] = this.slots[slot];
-    this.slots[slot] = i;
-    this.inWheel[i] = 1;
-  }
-
-  // drop i at a step: its head (rows from the top of its fall), rows, fall, place (x, z), its
-  // head's height, whether it lands in this step (its head reaches its lowest row) and whether
-  // its fall shows; into an object given, or a new one
-  dropAt(i: number, step: number, into: Partial<DropState> = {}): DropState {
-    const rows = this.layout![i * 4 + 3];
-    const distance = this.layout![i * 4];
-    const total = this.total(i, step);
-    const cycle = Math.floor(total / rows);
-    const head = total - cycle * rows;
-    into.head = head;
-    into.rows = rows;
-    into.cycle = cycle;
-    into.landed = this.landed(i, step);
-    into.shown = this.shows(i, cycle);
-    into.x = this.x(i, cycle, distance);
-    into.z = -distance;
-    into.headY = (rows - 1 - head) * CELL + this.floorAt(distance);
-    into.color = into.color || new Float32Array(3);
-    return into as DropState;
-  }
-
-  reset() {
-    this.applyLayout(true);
-    this.time = 0;
-    // (the music's scans and credit start again with the time)
-    this.musicAt = -Infinity;
-    this.musicCredit = 0;
-    this.lastStep = 0;
-    this.wavePhase = 0;
-    this.waveStep = 0;
-    this.restart();
-  }
-
-  // the steps since the last time, each with its landings and the drops that ended let go; after
-  // a jump past what a frame can move (or back), the settled rain from there
-  advance(time: number) {
-    // (a frame's list is the quality's of that frame: gone as the simulation moves on to the next)
-    this.dropListed = false;
-    this.applyLayout();
-    this.time = time;
-    const step = this.clock.stepAt(time);
-    if (!this.layout) {
-      return;
-    }
-    if (step - this.lastStep > this.clock.most || step < this.lastStep) {
-      this.lastStep = step;
-      this.settle();
-    }
-    // (the worker's layout for this very step, before its steps)
-    if (this.ready && this.ready.at === this.lastStep) {
-      this.swap();
-    }
-    let mask = this.slots.length - 1;
-    for (let s = this.lastStep + 1; s <= step; s++) {
-      let i = this.slots[s & mask];
-      this.slots[s & mask] = -1;
-      while (i >= 0) {
-        const next = this.nextInSlot[i];
-        this.inWheel[i] = 0;
-        const d = this.dropAt(i, s, this.landing);
-        if (M.TEST && !d.landed) {
-          this.wrongLandings++;
-        }
-        if (d.shown) {
-          this.colorOf(i, d, s, d.color);
-          this.onLand(d, this.clock.timeOf(s));
-        }
-        this.gate(i, d.cycle + 1);
-        if (this.showsAfter(i, d.cycle)) {
-          this.schedule(i, this.nextLanding(i, s));
-        }
-        i = next;
-      }
-      this.fade(s);
-      if (this.ready && this.ready.at === s) {
-        this.lastStep = s;
-        this.swap();
-        mask = this.slots.length - 1;
-      }
-    }
-    this.lastStep = Math.max(this.lastStep, step);
-    this.spawnByMusic(time);
-    // (a layout asked for a step now past: asked again)
-    if (this.pending && this.pending.at < this.lastStep) {
-      this.drop();
-      this.relay = true;
-    }
-  }
-
   // the direct draw of the listed drops only: the list sent once to the start of its buffer, each chunk of the guard's size drawn
   // from its own place in it (the attribute's offset: one value for each uTrail instances), sent on its own
   drawListed(u: ReturnType<ShaderProgram["use"]>, name: string, chunk: number, list: Uint32Array, count: number, base: number) {
@@ -1656,6 +1288,22 @@ export class Rain extends M.Effect {
     }
     this.guard.end();
   }
+}
+
+// the wheel's state read and set through the rain's own fields
+for (const key of WHEEL_FIELDS) {
+  Object.defineProperty(Rain.prototype, key, {
+    get(this: Rain) {
+      return (this.wheel as unknown as Record<string, unknown>)[key];
+    },
+    set(this: Rain, value: unknown) {
+      if (RECORDED_SETS[key]) {
+        this.recordSet(key, value);
+      }
+      (this.wheel as unknown as Record<string, unknown>)[key] = value;
+    },
+    configurable: true,
+  });
 }
 
 if (M.TEST) {

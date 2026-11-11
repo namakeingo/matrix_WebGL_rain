@@ -11,6 +11,7 @@
 //   swap=SOURCE=FILE  FILE in place of the source module SOURCE (a path under src/, e.g.
 //                     models/boltshape.ts): a proof copy, broken on purpose
 //   out=FILE          the bundle written to FILE (from the repository's root) instead
+//   coverage=1        a bundle for measuring test coverage (npm run coverage): not minified, its modules not merged, with a source map beside it (never the shipped bundle)
 import path from "node:path";
 import webpack from "webpack";
 import TerserPlugin from "terser-webpack-plugin";
@@ -29,6 +30,7 @@ const FACTORY = "((name, body) => { (self.Matrix3DFactories = self.Matrix3DFacto
 interface BuildEnv {
   swap?: string;
   out?: string;
+  coverage?: unknown;
   [flag: string]: unknown;
 }
 
@@ -40,7 +42,7 @@ class RegisterBundle implements WebpackPluginInstance {
           if (!name.endsWith(".js")) continue;
           // (in a worker the scripts' window is the worker's scope)
           const head = `(self.Matrix3DFactory=self.Matrix3DFactory||${FACTORY.replace(/\s+/g, " ")})("bundle",()=>{self.window||(self.window=self);`;
-          compilation.updateAsset(name, (source) => new webpack.sources.ConcatSource(head, source, "});"));
+          compilation.updateAsset(name, (source) => new webpack.sources.ConcatSource(head, source, "\n});"));
         }
       });
     });
@@ -67,7 +69,7 @@ export default (env: BuildEnv = {}): Configuration => {
     entry: "./src/index.ts",
     target: ["web", "es2022"],
     output: { path: path.dirname(out), filename: path.basename(out), publicPath: "", iife: true },
-    devtool: false,
+    devtool: env.coverage ? "source-map" : false,
     resolve: { extensions: [".ts", ".js"] },
     module: {
       rules: [
@@ -76,7 +78,8 @@ export default (env: BuildEnv = {}): Configuration => {
       ],
     },
     optimization: {
-      minimize: true,
+      minimize: !env.coverage,
+      concatenateModules: !env.coverage,
       // (class names kept: the tests' frame costs are read by an effect's class name)
       minimizer: [new TerserPlugin({ extractComments: false, terserOptions: { keep_classnames: true, format: { comments: false } } })],
     },

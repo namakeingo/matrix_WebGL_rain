@@ -45,7 +45,7 @@ export interface TaskOptions {
   observe?: (event: TaskEvent) => void;
 }
 
-export interface TaskHooks<I, W extends TaskWorker> {
+export interface TaskHooks<W extends TaskWorker> {
   make?(slot: number, force: string): Promise<W | null>;
   adopt?(slot: number, worker: W, state: unknown): void;
   dropped?(slot: number, worker: W, why: string): void;
@@ -97,7 +97,7 @@ export class ThreadedTask<I = unknown, W extends TaskWorker = TaskWorker> {
   protected timers: TaskTimers;
   protected slotCount: number;
   private slots: Slot<W>[];
-  private hooks: TaskHooks<I, W>;
+  private hooks: TaskHooks<W>;
   private stopped: boolean;
   private refusedNow: boolean;
   private backoffStart: number;
@@ -106,7 +106,7 @@ export class ThreadedTask<I = unknown, W extends TaskWorker = TaskWorker> {
   private healthyMs: number;
   private observe: ((event: TaskEvent) => void) | null;
 
-  constructor(inline: I, options: TaskOptions = {}, hooks: TaskHooks<I, W> = {}) {
+  constructor(inline: I, options: TaskOptions = {}, hooks: TaskHooks<W> = {}) {
     this.inline_ = inline;
     this.hooks = hooks;
     this.events = [];

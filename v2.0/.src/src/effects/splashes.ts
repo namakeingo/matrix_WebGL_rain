@@ -45,6 +45,8 @@
 // is read by the water). With lod false the floor is 0 and the draw is as without it.
 //
 // Changelog:
+// 2026-11-10: the simulation (the arrays, the draws, the ring's CPU side, the falls, the steps moved on to) is models/splashsim.ts (M.SplashSim); this effect keeps the GL side
+//   and exposes the model's state as getters.
 // 2026-11-07: the listed draw instances only the ages whose light bound reaches the floor (directAges), and a quad under half a pixel
 //   is a point in the direct view (uPointPx, uAges).
 // 2026-11-07: LOD of the stamps in the direct view (uniforms uLodFloor, uHeadPeak).
@@ -56,18 +58,23 @@ import { M } from "../engine/core";
 import { fill } from "../engine/glsl";
 import VERTEX_SOURCE from "../shaders/splashes/vertex.glsl";
 import { QualitySplashes } from "../models/quality/splashes";
+import { SplashSim } from "../models/splashsim";
+import { SplashTick } from "../models/splashtick";
+import type { SplashPayload } from "../models/splashtick";
+import { RainSimTick } from "../models/rainsimtick";
+import type { RainPart, RainSimPacket } from "../models/rainsimtick";
+import type { Rain } from "./rain";
+import type { SteppedTask } from "../platform/steppedtask";
 import { QualityUnit } from "../models/quality/unit";
 import { HEAD_GAIN } from "../materials/drops";
 import type { QualityJob, EffectQuality, QualityShared } from "../models/quality/types";
 import type { QualityStatics, QualityParams } from "../models/quality/jobs";
 import type { SplashQualityParams, SplashSphere } from "../models/quality/splashes";
+import type { SplashLanding } from "../models/splashsim";
 import type { EffectContext, SharedGlsl } from "../engine/effect";
 import type { Programs, ProgramSources, ShaderProgram } from "../engine/gl";
 import type { StepClock } from "../engine/clock";
 import type { GlyphAtlas } from "../engine/glyphs";
-
-// a splash's values kept a splash each (FIELDS), in arrays of MOST
-type Field = "x0" | "z0" | "t0" | "vx" | "vy" | "vz" | "size" | "land" | "serial";
 
 // a splash's record as the vertex shader reads it (Splashes.placeAt)
 export interface SplashRecord {
@@ -109,33 +116,19 @@ export interface SplashState {
   z: number;
 }
 
-// the place and colour a drop landed with (Rain.dropAt's description of it)
-interface Landing {
-  x: number;
-  z: number;
-  color: Float32Array | undefined;
-}
-
 const GRAVITY = 9.81;
-// the Splash height's default target (m): the average height of a splash thrown straight up
-const TARGET_HEIGHT = 0.15;
 // the trail's steps at the default Trail length (15), and per Trail length
-const TRAIL = 6;
+const TRAIL = SplashSim.TRAIL;
 const TRAIL_PER_LENGTH = TRAIL / 15;
-const MOST = 4096;
+const MOST = SplashSim.MOST;
 // the ring of splashes on the GPU (the span drawn at most), its texture's width in texels, each
 // splash's texels (16 values) and the splashes a row
-const RING = 2 * MOST;
+const RING = SplashSim.RING;
 const ACROSS = 256;
-const SPLASH_TEXELS = 4;
+const SPLASH_TEXELS = SplashSim.SPLASH_TEXELS;
 const PER_ROW = ACROSS / SPLASH_TEXELS;
-const IMPACT = 0.35;
 // the splashes' records of the quality job kept in blocks of this many splashes (the params are copied to the workers whole)
 const BLOCK = 256;
-const WHITE = Float32Array.of(1, 1, 1);
-// a splash's values: where and when it starts, its speed, its size, when it falls back, its
-// serial number (its slot in the ring: serial % RING)
-const FIELDS: Field[] = ["x0", "z0", "t0", "vx", "vy", "vz", "size", "land", "serial"];
 
 export class Splashes extends M.Effect {
   static GRAVITY: number;
@@ -144,44 +137,36 @@ export class Splashes extends M.Effect {
   static stampsOf: (clock: StepClock, t0: number, land: number, out?: Float64Array) => Float64Array;
   static vertex: (glsl: SharedGlsl) => string;
   describe!: (time: number) => SplashState[];
-  land!: Float64Array;
-  size!: Float64Array;
-  vz!: Float64Array;
-  vy!: Float64Array;
-  vx!: Float64Array;
-  t0!: Float64Array;
-  z0!: Float64Array;
-  x0!: Float64Array;
-  serial!: Float64Array;
+  // the simulation (models/splashsim.ts): the arrays, the ring's CPU side, the counters and the settings are its, read through the getters below
+  sim: SplashSim;
+  // the frame's work as a stepped model over the simulation (models/splashtick.ts), the task that gives it to a worker (src/index.ts makes it: workers/splashworker.ts), the operations
+  // asked since the last frame (landings, spawns, resets: packed, models/splashtick.ts) and whether the wallpaper is in the advance of a frame that forks (the fork does the fall)
+  tick: RainSimTick;
+  task: SteppedTask<RainSimPacket> | null;
+  // the rain whose steps the tick makes (src/index.ts gives it), and the rain's part of the frame waiting for the tick (with where in the operations its steps go)
+  rain: Rain | null;
+  part: RainPart | null;
+  rainAt: number;
+  ops: Float64Array;
+  opsUsed: number;
+  forking: boolean;
+  // what the impacts the falls make are given to (the waves' add)
+  impactCallback: (x: number, z: number, weight: number) => void;
   program!: ShaderProgram;
   texture: WebGLTexture;
   warmed: boolean[];
   liveCount: number;
   firstSlot: number;
   span: number;
-  from: number;
-  lastStep: number;
-  stamps: Float64Array<ArrayBuffer>;
+  // the serials sent to the GPU so far
   sent: number;
-  nextSerial: number;
-  ringFloats: Float32Array<ArrayBuffer>;
-  ring: Uint32Array<ArrayBuffer>;
-  random: () => number;
-  seeds: Uint32Array<ArrayBuffer>;
-  landed: Uint8Array<ArrayBuffer>;
-  count: number;
   covered: boolean;
   viewScale: number;
-  trail: number;
   head: number;
-  targetHeight: number;
-  onLand: (x: number, z: number, weight: number) => void;
   clock: StepClock;
   seed: number;
   atlas: GlyphAtlas;
   nearness: ArrayLike<number> | null;
-  noSplashes: boolean;
-  debug: boolean;
   // the quality's lists (setQuality): the ring slots of the splashes seen directly (the first MOST values) and mirrored (from MOST),
   // their counts, whether they are the frame's (listed) and the camera version they were made for; their GPU buffer and vertex array
   slotList: Uint32Array<ArrayBuffer>;
@@ -202,22 +187,26 @@ export class Splashes extends M.Effect {
   constructor(context: EffectContext, onLand: (x: number, z: number, weight: number) => void) {
     super(context);
     const gl = this.gl;
-    this.debug = false;
-    this.noSplashes = false;
     // (Debug mode's Nearness view: the rain's nearest and furthest distances, null when off)
     this.nearness = null;
     this.atlas = context.atlas;
     this.seed = context.seed;
     this.clock = context.clock;
-    this.onLand = onLand;
+    this.sim = new SplashSim(this.seed, this.clock, onLand);
+    this.impactCallback = onLand;
+    this.tick = new RainSimTick(this.sim, null, true);
+    this.task = null;
+    this.rain = null;
+    this.part = null;
+    this.rainAt = -1;
+    this.ops = new Float64Array(64 * this.tick.stride);
+    this.opsUsed = 0;
+    this.forking = false;
     this.head = M.GlyphAtlas.HEAD;
-    this.trail = TRAIL;
-    this.targetHeight = TARGET_HEIGHT;
     // (the tests' scale of the characters' light: with M.TEST only)
     this.viewScale = 1;
     // whether the bolt covers what lies behind it this frame (Characters lightning: set by src/index.ts)
     this.covered = false;
-    this.count = 0;
     this.slotList = new Uint32Array(2 * MOST);
     this.listCount = new Int32Array(2);
     this.listAges = new Int32Array(2);
@@ -228,23 +217,7 @@ export class Splashes extends M.Effect {
     this.qualityParamValues = null;
     this.qualityData = null;
     this.qualitySent = false;
-    for (const field of FIELDS) {
-      this[field] = new Float64Array(MOST);
-    }
-    this.landed = new Uint8Array(MOST);
-    this.seeds = new Uint32Array(MOST);
-    this.random = M.seededRandom(this.seed);
-    // the ring as sent to the GPU (its values as floats and as unsigned integers), the next
-    // serial number, and the serials sent so far
-    this.ring = new Uint32Array(RING * SPLASH_TEXELS * 4);
-    this.ringFloats = new Float32Array(this.ring.buffer);
-    this.nextSerial = 0;
     this.sent = 0;
-    // a splash's stamps (Splashes.stampsOf's first step, count, offset)
-    this.stamps = new Float64Array(3);
-    // the steps moved on to: the last, and the last jump's (no stamps up to it)
-    this.lastStep = 0;
-    this.from = 0;
     // the ring's span drawn this frame (splashes), its first slot, and its instances (span x
     // trail)
     this.span = 0;
@@ -258,10 +231,39 @@ export class Splashes extends M.Effect {
     gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32UI, ACROSS, RING / PER_ROW);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, ACROSS, RING / PER_ROW, gl.RGBA_INTEGER, gl.UNSIGNED_INT, this.ring);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, ACROSS, RING / PER_ROW, gl.RGBA_INTEGER, gl.UNSIGNED_INT, this.sim.ring);
     gl.bindTexture(gl.TEXTURE_2D, null);
     this.reset();
   }
+
+  // the simulation's state, as the effect's own fields have always been read
+  get x0() { return this.sim.x0; }
+  get z0() { return this.sim.z0; }
+  get t0() { return this.sim.t0; }
+  get vx() { return this.sim.vx; }
+  get vy() { return this.sim.vy; }
+  get vz() { return this.sim.vz; }
+  get size() { return this.sim.size; }
+  get land() { return this.sim.land; }
+  get serial() { return this.sim.serial; }
+  get landed() { return this.sim.landed; }
+  get seeds() { return this.sim.seeds; }
+  get count() { return this.sim.count; }
+  get nextSerial() { return this.sim.nextSerial; }
+  get ring() { return this.sim.ring; }
+  get ringFloats() { return this.sim.ringFloats; }
+  get lastStep() { return this.sim.lastStep; }
+  get from() { return this.sim.from; }
+  get trail() { return this.sim.trail; }
+  set trail(v: number) { this.sim.trail = v; }
+  get targetHeight() { return this.sim.targetHeight; }
+  set targetHeight(v: number) { this.sim.targetHeight = v; }
+  get noSplashes() { return this.sim.noSplashes; }
+  set noSplashes(v: boolean) { this.sim.noSplashes = v; }
+  get debug() { return this.sim.debug; }
+  set debug(v: boolean) { this.sim.debug = v; }
+  get onLand() { return this.impactCallback; }
+  set onLand(v: (x: number, z: number, weight: number) => void) { this.impactCallback = v; this.sim.onLand = v; }
 
   static programs(glsl: SharedGlsl): ProgramSources {
     return { splash: [Splashes.vertex(glsl), M.GlyphAtlas.fragment(glsl, M.TEST, true, true)] };
@@ -308,138 +310,154 @@ export class Splashes extends M.Effect {
     this.listArray = this.vertexArray([{ buffer: this.listBuffer, attribute: "aDrop", size: 1, integer: true }]);
   }
 
+  // whether what is asked of the simulation goes into the operations of the next frame (a frame that forks, or a worker alive: it has to be given them in their order) or is done at once
+  queueing(): boolean {
+    return this.forking || this.part !== null || (this.task !== null && (this.task.alive > 0 || this.task.replayPending));
+  }
+
+  // ---- what the rain asks of its task (effects/rain.ts: RainDriver) ----
+
+  drives(): boolean {
+    return this.task !== null && this.rain !== null;
+  }
+
+  // the calls made to the rain's wheel are kept for the task while operations are
+  recording(): boolean {
+    return this.queueing();
+  }
+
+  // the rain's part of the frame: its steps go at this place among the operations (a part not taken yet is replaced: the steps of the frames between are one run)
+  rainStep(part: RainPart) {
+    const at = this.room();
+    RainSimTick.rain(this.ops, at);
+    this.rainAt = at;
+    this.part = part;
+  }
+
+  // an operation's room in the packed operations (grown as needed), its index
+  private room(): number {
+    const stride = this.tick.stride;
+    if (this.opsUsed + stride > this.ops.length) {
+      const bigger = new Float64Array(this.ops.length * 2);
+      bigger.set(this.ops);
+      this.ops = bigger;
+    }
+    const at = this.opsUsed;
+    this.opsUsed += stride;
+    return at;
+  }
+
   reset() {
-    this.count = 0;
-    this.random = M.seededRandom(this.seed);
-    // (the slots sent before stay in the ring, out of the span)
-    this.sent = this.nextSerial;
-    this.lastStep = 0;
-    this.from = 0;
+    if (this.queueing()) {
+      SplashTick.reset(this.ops, this.room());
+      this.sent = this.sim.nextSerial;
+    } else {
+      this.sim.reset();
+      // (the slots sent before stay in the ring, out of the span)
+      this.sent = this.sim.nextSerial;
+    }
     this.span = 0;
     this.liveCount = 0;
     this.listed = false;
   }
 
   // a drop landed (at its place, at a time, in its colour): 2 to 5 splashes of its size
-  fromLanding(drop: Landing, time: number, size: number) {
-    if (this.debug && this.noSplashes) {
-      return;
-    }
-    this.spawn(drop.x, drop.z, 2 + Math.floor(this.random() * 4), size, time, drop.color);
-  }
-
-  // splash `from` copied to place `to`
-  move(from: number, to: number) {
-    for (const field of FIELDS) {
-      this[field][to] = this[field][from];
-    }
-    this.landed[to] = this.landed[from];
-    this.seeds[to] = this.seeds[from];
-  }
-
-  // the oldest `n` splashes let go (the others moved to the front, in their order)
-  dropOldest(n: number) {
-    for (const field of FIELDS) {
-      this[field].copyWithin(0, n, this.count);
-    }
-    this.landed.copyWithin(0, n, this.count);
-    this.seeds.copyWithin(0, n, this.count);
-    this.count -= n;
-  }
-
-  // count splashes from a place of the water (x, z), at a time, in a colour (white if none) (the
-  // oldest let go when there is no room, in the arrays or in the ring's span)
-  spawn(x: number, z: number, count: number, size: number, time: number, color: Float32Array = WHITE) {
-    count = Math.min(count, MOST);
-    if (this.count + count > MOST) {
-      this.dropOldest(this.count + count - MOST);
-    }
-    let over = 0;
-    while (over < this.count && this.serial[over] < this.nextSerial + count - RING) {
-      over++;
-    }
-    if (over > 0) {
-      this.dropOldest(over);
-    }
-    for (let k = 0; k < count; k++) {
-      const speed = M.SplashLaunch.speedFor(this.targetHeight, M.SplashLaunch.energyFactorOf(this.random()));
-      const tilt = (Math.PI / 3) * Math.sqrt(this.random());
-      const round = 2 * Math.PI * this.random();
-      const v = M.SplashLaunch.velocity(speed, round, Math.PI / 2 - tilt);
-      const vy = v.y;
-      const i = this.count++;
-      this.x0[i] = x;
-      this.z0[i] = z;
-      this.t0[i] = time;
-      this.vx[i] = v.x;
-      this.vy[i] = vy;
-      this.vz[i] = v.z;
-      this.size[i] = size * (0.3 + 0.4 * this.random());
-      this.land[i] = time + (2 * vy) / GRAVITY;
-      this.landed[i] = 0;
-      this.seeds[i] = Math.floor(this.random() * 4294967296);
-      this.serial[i] = this.nextSerial++;
-      this.record(i, color);
+  fromLanding(drop: SplashLanding, time: number, size: number) {
+    if (this.queueing()) {
+      SplashTick.landing(this.ops, this.room(), drop.x, drop.z, drop.color, time, size);
+    } else {
+      this.sim.fromLanding(drop, time, size);
     }
   }
 
-  // splash i's values into its slot of the ring (sent to the GPU in the next update)
-  record(i: number, color: ArrayLike<number>) {
-    const st = Splashes.stampsOf(this.clock, this.t0[i], this.land[i], this.stamps);
-    const o = (this.serial[i] % RING) * SPLASH_TEXELS * 4;
-    const f = this.ringFloats;
-    const u = this.ring;
-    f[o] = this.x0[i];
-    f[o + 1] = this.z0[i];
-    f[o + 2] = this.size[i];
-    f[o + 3] = st[2];
-    f[o + 4] = this.vx[i];
-    f[o + 5] = this.vy[i];
-    f[o + 6] = this.vz[i];
-    f[o + 7] = this.clock.rate;
-    f[o + 8] = color[0];
-    f[o + 9] = color[1];
-    f[o + 10] = color[2];
-    f[o + 11] = 0;
-    u[o + 12] = st[0];
-    u[o + 13] = st[1];
-    u[o + 14] = this.seeds[i];
-    u[o + 15] = 0;
+  // count splashes from a place of the water (x, z), at a time, in a colour (white if none)
+  spawn(x: number, z: number, count: number, size: number, time: number, color?: Float32Array) {
+    if (this.queueing()) {
+      SplashTick.spawn(this.ops, this.room(), x, z, count, size, time, color);
+    } else {
+      this.sim.spawn(x, z, count, size, time, color);
+    }
   }
 
-  // the splashes falling back on the water by a time, and the ones whose stamps are all gone
-  // let go (the others kept in their order)
-  fall(time: number) {
-    let kept = 0;
-    for (let i = 0; i < this.count; i++) {
-      if (!this.landed[i] && time >= this.land[i]) {
-        this.landed[i] = 1;
-        const t = this.land[i] - this.t0[i];
-        this.onLand(this.x0[i] + this.vx[i] * t, this.z0[i] + this.vz[i] * t, IMPACT);
-      }
-      if (!this.landed[i] || this.clock.at(time) < this.clock.at(this.land[i]) + this.trail) {
-        if (kept !== i) {
-          this.move(i, kept);
-        }
-        kept++;
-      }
+  // the frame's payload for the model: the operations asked since the last frame (taken), the settings and the step clock, the time to move on to
+  private payload(time: number): SplashPayload {
+    const sim = this.sim;
+    const clock = this.clock;
+    const used = this.opsUsed;
+    const payload: SplashPayload = {
+      ops: this.ops.slice(0, used),
+      used,
+      time,
+      trail: sim.trail,
+      targetHeight: sim.targetHeight,
+      noSplashes: sim.noSplashes,
+      debug: sim.debug,
+      from: clock.from,
+      base: clock.base,
+      rate: clock.rate,
+    };
+    if (this.part && this.rain) {
+      this.part.calls = this.rain.takeCalls();
+      payload.rain = this.part;
+      payload.rainAt = this.rainAt;
+      this.part = null;
     }
-    this.count = kept;
+    this.opsUsed = 0;
+    return payload;
+  }
+
+  // a packet taken in: the render thread's simulation kept by a worker's (SplashTick.apply), the upload cursor at a reset, the impacts given to the waves in the order they were made
+  private applyPacket(packet: RainSimPacket) {
+    SplashTick.apply(this.sim, packet);
+    if (packet.reset) {
+      this.sent = packet.resetAt;
+    }
+    if (this.rain) {
+      this.rain.packetIn(packet);
+    }
+    const impacts = packet.impacts;
+    for (let i = 0; i < impacts.length; i += 3) {
+      this.impactCallback(impacts[i]!, impacts[i + 1]!, impacts[i + 2]!);
+    }
   }
 
   // the rain's steps since the last time (the stamps are the GPU's: only the step kept), then
   // the splashes fallen back; after a jump past what a frame can move (or back), no stamps from
-  // before it
+  // before it. In the advance of a frame that forks the fall is left to the fork (below).
   advance(time: number) {
     // (a frame's lists are the quality's of that frame: gone as the simulation moves on to the next)
     this.listed = false;
-    const step = this.clock.stepAt(time);
-    if (step - this.lastStep > this.clock.most || step < this.lastStep) {
-      this.lastStep = step;
-      this.from = step;
+    if (this.forking) {
+      return;
     }
-    this.lastStep = Math.max(this.lastStep, step);
-    this.fall(time);
+    const task = this.task;
+    if (task) {
+      // (a worker alive that is not asked this frame would be out of step: set aside, handed the state again when a frame awaits it)
+      task.suspend();
+      // (through the task: a model restored from a checkpoint and replayed after a worker was lost is brought to the frame first)
+      task.event(this.payload(time), 1);
+      for (const p of task.advance(task.consumed + 1)) {
+        this.applyPacket(p.data);
+      }
+      return;
+    }
+    this.tick.event(this.payload(time));
+    this.applyPacket(this.tick.run());
+  }
+
+  // the frame's work asked of the task with the frame's exact payload, awaited BEFORE the quality job's parameters are made (they read the splashes: the wallpaper's forkFirst): the
+  // packets of the tick taken in (null: no task, the effect did it)
+  forkFirst(time: number): Promise<void> | null {
+    const task = this.task;
+    if (!task) {
+      return null;
+    }
+    task.event(this.payload(time), 1);
+    return task.advanceAsync(task.consumed + 1).then((packets) => {
+      for (const p of packets) {
+        this.applyPacket(p.data);
+      }
+    });
   }
 
   // the ring's slots from..to (not wrapping) sent, by whole rows
@@ -657,29 +675,7 @@ export class Splashes extends M.Effect {
   }
 }
 
-// a splash's stamps, from its start t0 to its fall back at land, by a step clock's steps: [the
-// first step whose time is at its start or after, as an unsigned integer; the steps stamped from
-// it (those before its fall back); the first step's time after its start] (into `out`)
-Splashes.stampsOf = (clock, t0, land, out = new Float64Array(3)) => {
-  let first = Math.ceil(clock.at(t0));
-  while (clock.timeOf(first - 1) >= t0) {
-    first--;
-  }
-  while (clock.timeOf(first) < t0) {
-    first++;
-  }
-  let end = Math.max(first, Math.ceil(clock.at(land)));
-  while (end > first && clock.timeOf(end - 1) >= land) {
-    end--;
-  }
-  while (clock.timeOf(end) < land) {
-    end++;
-  }
-  out[0] = first >>> 0;
-  out[1] = end - first;
-  out[2] = clock.timeOf(first) - t0;
-  return out;
-};
+Splashes.stampsOf = SplashSim.stampsOf;
 
 if (M.TEST) {
   // the splashes with where they are at a time (for the tests)

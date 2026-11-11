@@ -5,6 +5,7 @@
 // - "inline": advance, the jobs run synchronously on this thread (host.inline: the same pure code the workers run), draw, apply.
 // - "workers": advance, the pool's run is posted, the work that needs no quality (host.work), then the replies are awaited and
 //   the DRAW IS THE CONTINUATION (a promise's callback), then apply. A mode "workers" with no pool acts as "inline".
+//   With host.fork (the effects' per-frame jobs: Effect.fork) its promise is awaited with the pool's replies, so the draw is the continuation of both, in the same frame.
 // - In flight: a frame asked while the previous one is pending is skipped (counted in skipped, nothing called): the wallpaper
 //   then draws nothing in that animation frame, so the frames' health sees the longer gap to the next drawn frame as missed
 //   frames (FrameHealth.frame counts the gap, not the animation frames).
@@ -41,6 +42,10 @@ export interface QualityHost {
   draw(): void;
   apply(results: QualityResults): void;
   fail(error: unknown): void;
+  // the effects' per-frame jobs asked of their workers with the frame's exact inputs (Effect.fork): a promise of all answered; the draw waits for it with the pool's replies
+  fork?(): Promise<unknown>;
+  // what the quality job's parameters need (the camera's matrices): awaited right after the advance, before jobs and params
+  forkFirst?(): Promise<unknown>;
 }
 
 const MODES: readonly string[] = ["off", "inline", "workers"];
@@ -79,6 +84,11 @@ export class QualityFrame {
     this.inFlight = false;
   }
 
+  // whether a frame in this mode forks (the workers mode with a pool: it calls the host's forkFirst and fork): the host leaves the work the fork does to it only then
+  forking(): boolean {
+    return this.mode === "workers" && !!this.host.pool;
+  }
+
   frame(): "drawn" | "pending" | "skipped" {
     const host = this.host;
     const mode = this.mode === "workers" && !host.pool ? "inline" : this.mode;
@@ -103,12 +113,19 @@ export class QualityFrame {
       return "skipped";
     }
     host.advance();
-    const jobs = host.jobs();
-    const params = host.params();
     const generation = this.generation;
-    const pending = host.pool!.run(this.frames++, jobs, params);
     this.inFlight = true;
-    host.work();
+    const start = (): Promise<QualityResults | null> => {
+      const jobs = host.jobs();
+      const params = host.params();
+      const forks = host.fork ? host.fork() : null;
+      const run = host.pool!.run(this.frames++, jobs, params);
+      host.work();
+      return forks ? Promise.all([run, forks]).then(([results]) => results) : run;
+    };
+    const first = host.forkFirst ? host.forkFirst() : null;
+    // (a forkFirst of an older frame, cancelled meanwhile, starts nothing)
+    const pending = first ? first.then(() => (generation === this.generation ? start() : null)) : start();
     this.last = pending.then(
       (results) => {
         if (generation !== this.generation) {

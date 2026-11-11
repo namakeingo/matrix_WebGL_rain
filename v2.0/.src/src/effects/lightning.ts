@@ -97,6 +97,9 @@ import type { AnyShape, Making } from "../models/boltshape";
 import type { FlashData, FlashSource } from "../models/flash";
 import type { ItemsOptions } from "../models/boltitems";
 import type { BoltPool, BoltSpec, WorkerShape } from "../workers/boltworker";
+import type { JobTask } from "../platform/jobtask";
+import type { Mulberry } from "../engine/core";
+import type { StrikePlanInput, StrikePlanOutput } from "../models/strikeplan";
 import { QualityLightning } from "../models/quality/lightning";
 import type { QualityJob, QualityShared } from "../models/quality/types";
 import type { QualityStatics, QualityParams } from "../models/quality/jobs";
@@ -259,6 +262,13 @@ export class Lightning extends M.Effect {
   planned!: number;
   queue!: Strike[];
   random!: () => number;
+  // the generator behind `random` (its state in the open: handed to the plan's worker with each request), the plan's task (src/index.ts gives it: workers/strikeplanworker.ts), the
+  // request not answered yet (its id; 0: none) with the generation, the generator's state and the front bias it was asked for
+  rng!: Mulberry;
+  planTask: JobTask<StrikePlanInput, StrikePlanOutput> | null = null;
+  planAsked = 0;
+  planFor: { generation: number; rng: number; frontBias: number } | null = null;
+  planInput: StrikePlanInput | null = null;
   wait!: () => number;
   slots!: (Strike | null)[];
   // the quality job: whether its dummy static array was sent, and the frame's parameters (the slots' light now), kept
@@ -331,7 +341,8 @@ export class Lightning extends M.Effect {
     this.color = Lightning.colorOf(COLOR_MIDDLE);
     this.slots = new Array(MOST).fill(null);
     this.wait = () => -Math.log(1 - this.random()) * this.frequency;
-    this.random = M.seededRandom(this.seed);
+    this.rng = new M.Mulberry(this.seed);
+    this.random = () => this.rng.next();
     // the strikes planned, in order (time, place, playing time, seed, flickers, its shape's
     // making), the time of the last planned (-1: none yet), and the strikes whose shape was
     // finished in the frame they were due
@@ -592,6 +603,7 @@ export class Lightning extends M.Effect {
     const view = this.camera;
     const along = -view.eyeHeight * Math.sin(view.pitch) + d * Math.cos(view.pitch);
     const half = 0.8 * (view.width / view.height) * Math.tan(view.halfFov()) * along;
+    this.settlePlan();
     const s = this.planOf((this.random() * 2 - 1) * half, -d, 0);
     const ends = Lightning.ends(s.x, s.z, view, M.seededRandom(s.seed), this.range ? this.range() : null, s.bias, this.floorKind);
     s.distance = d;
@@ -655,6 +667,7 @@ export class Lightning extends M.Effect {
 
   // a strike at x, z, at a time: its playing time, seed and flickers drawn
   planOf(x: number, z: number, time: number): Strike {
+    this.settlePlan();
     return {
       start: time,
       duration: this.playTime(),
@@ -678,6 +691,10 @@ export class Lightning extends M.Effect {
     if (this.planned < 0) {
       this.planned = time + LEAD_IN;
     }
+    if (this.planTask) {
+      this.planByTask(time);
+      return;
+    }
     const longest = Math.max(this.shortest, this.longest);
     while (this.queue.length < AHEAD) {
       this.planned += this.wait();
@@ -691,6 +708,93 @@ export class Lightning extends M.Effect {
       }
       this.begin(s);
       this.queue.push(s);
+    }
+  }
+
+  // the plan by its task (models/strikeplan.ts): the strikes still wanted asked for (the answer is there at once when the task is inline, later with a worker), the strikes of an
+  // answer taken in; an answer for a plan since dropped (a new generation), or made from a generator that others drew from since, is dropped and asked for again
+  planByTask(time: number) {
+    const task = this.planTask!;
+    this.takePlan();
+    if (this.planAsked === 0 && this.queue.length < AHEAD) {
+      const range = this.range ? this.range() : null;
+      this.planFor = { generation: this.generation, rng: this.rng.a, frontBias: this.frontBias };
+      this.planInput = {
+        rng: this.rng.a,
+        planned: this.planned,
+        time,
+        count: AHEAD - this.queue.length,
+        frequency: this.frequency,
+        shortest: this.shortest,
+        longest: this.longest,
+        frontBias: this.frontBias,
+        range,
+        nearest: NEAREST,
+        furthest: FURTHEST,
+        span: M.Camera.SPAN,
+      };
+      this.planAsked = task.request(this.planInput);
+      this.takePlan();
+    }
+  }
+
+  // a plan asked of the worker and not answered, made here now: the draws of the generator must come in the order they always did (the plan's before any strike made outside it:
+  // a strike on demand, the spare), and the function is pure, so its output is the one the worker will give (that answer, when it comes, is dropped)
+  settlePlan() {
+    if (this.planTask && this.planAsked !== 0 && this.planInput && this.planFor) {
+      const asked = this.planFor;
+      const input = this.planInput;
+      this.planAsked = 0;
+      this.planFor = null;
+      this.planInput = null;
+      if (asked.generation === this.generation && asked.rng === this.rng.a) {
+        this.applyPlan(M.StrikePlan.plan(input), asked.frontBias);
+      }
+    }
+  }
+
+  // the strikes of a plan taken in: the generator, the time of the last planned and the count past as they are after it, each strike's shape started, the strikes queued
+  applyPlan(out: StrikePlanOutput, frontBias: number) {
+    this.rng.a = out.rng;
+    this.planned = out.planned;
+    this.past += out.past;
+    for (const p of out.strikes) {
+      const s: Strike = {
+        start: p.start,
+        duration: p.duration,
+        seed: p.seed,
+        shape: null,
+        making: null,
+        version: -1,
+        periods: p.periods,
+        branchPeriods: p.branchPeriods,
+        x: p.x,
+        z: p.z,
+        met: false,
+        bias: frontBias,
+        uid: ++this.uids,
+      };
+      this.begin(s);
+      this.queue.push(s);
+    }
+  }
+
+  takePlan() {
+    const task = this.planTask!;
+    const answer = task.take();
+    if (answer && answer.id === this.planAsked && this.planFor) {
+      const asked = this.planFor;
+      this.planAsked = 0;
+      this.planFor = null;
+      this.planInput = null;
+      if (asked.generation === this.generation && asked.rng === this.rng.a) {
+        this.applyPlan(answer.output, asked.frontBias);
+      }
+    } else if (this.planAsked !== 0 && !answer && task.pending().indexOf(this.planAsked) < 0) {
+      // (the worker lost with the request in flight: asked again)
+      this.planAsked = 0;
+      this.planFor = null;
+      this.planInput = null;
     }
   }
 
@@ -979,7 +1083,6 @@ export class Lightning extends M.Effect {
         }
         s.start = time;
         this.place(s);
-        playing++;
       }
     }
     // (Debug mode's Strike now: one strike at Strike distance ahead, inside the view across,
@@ -1000,6 +1103,7 @@ export class Lightning extends M.Effect {
         const d = this.strikeDistance;
         const along = -view.eyeHeight * Math.sin(view.pitch) + d * Math.cos(view.pitch);
         const half = 0.8 * (view.width / view.height) * Math.tan(view.halfFov()) * along;
+        this.settlePlan();
         this.strike((this.random() * 2 - 1) * half, -d, time);
       }
     }
@@ -1078,7 +1182,8 @@ export class Lightning extends M.Effect {
     this.slots.fill(null);
     this.planned = -1;
     this.rushed = 0;
-    this.random = M.seededRandom(this.seed);
+    this.rng = new M.Mulberry(this.seed);
+    this.random = () => this.rng.next();
     this.sent = true;
     this.flashDue.fill(0);
     this.skipped = 0;

@@ -161,6 +161,9 @@ import type { GlyphAtlas } from "../engine/glyphs";
 import type { ItemsOut, ItemsOptions, ItemsBuilt, ItemsLine, ItemsCounts } from "../models/boltitems";
 import type { MadeShape } from "../models/boltshape";
 import { QualityBolt } from "../models/quality/bolt";
+import { BoltList } from "../models/boltlist";
+import type { BoltListInput, BoltListOutput, BoltListSlot } from "../models/boltlist";
+import type { JobTask } from "../platform/jobtask";
 import type { Strike } from "./lightning";
 import type { EffectQuality, QualityJob, QualityShared } from "../models/quality/types";
 import type { QualityStatics, QualityParams } from "../models/quality/jobs";
@@ -301,6 +304,12 @@ export class Bolt extends M.Effect {
   // each slot's greatest piece radiance, and the greatest peak a piece sharing a pixel can have this frame (the cut's others)
   radiance: Float32Array<ArrayBuffer>;
   others: number;
+  // the piece lists' job (models/boltlist.ts; src/index.ts gives its task), each slot's items version (bumped when its items are made again) and the version last sent to the job's
+  // worker (-1: send them again), and the answer of this frame's fork with what it was asked, taken in by update only when every input is still the same
+  listTask: JobTask<BoltListInput, BoltListOutput> | null;
+  slotVersion: number[];
+  sentSlot: number[];
+  answered: { input: BoltListInput; output: BoltListOutput } | null;
   directUploaded: boolean;
   mirrorUploaded: boolean;
   listItems: number;
@@ -409,6 +418,10 @@ export class Bolt extends M.Effect {
     this.glyphMirrorUploaded = false;
     this.radiance = new Float32Array(SLOTS);
     this.others = 0;
+    this.listTask = null;
+    this.slotVersion = new Array(SLOTS).fill(0);
+    this.sentSlot = new Array(SLOTS).fill(-1);
+    this.answered = null;
     this.directUploaded = false;
     this.mirrorUploaded = false;
     this.qualityParamValues = null;
@@ -589,7 +602,7 @@ export class Bolt extends M.Effect {
   // the lists cut to the pieces that draw something at the frame's growth and lights (each slot's, in QualityBolt.filter: the band
   // vertex shader's own test), into drawList: the direct draw's, then from MOST_SEGMENTS the mirrored draw's. Called with the slots'
   // lights and growths set (update), before the mask is drawn
-  filterLists() {
+  filterLists(masks: (Uint8Array | null)[] | null = null) {
     this.filtered = false;
     if (!this.listValid()) {
       return;
@@ -605,8 +618,15 @@ export class Bolt extends M.Effect {
       let kept = 0;
       let mirrorKept = 0;
       if (segments) {
-        kept = QualityBolt.filter(segments, SEGMENT_FLOATS, SLOT_SEGMENTS, this.pieceList, at, this.listCounts[k], this.drawList, direct, grown, main, branch, band);
-        mirrorKept = QualityBolt.filter(segments, SEGMENT_FLOATS, SLOT_SEGMENTS, this.mirrorList, mirrorAt, this.mirrorCounts[k], this.drawList, MOST_SEGMENTS + mirror, grown, main, branch, band);
+        // (the job's mask of the drawable pieces, when this frame's fork was answered: the same cut as QualityBolt.filter's, see BoltList.keep)
+        const mask = masks ? masks[k] : null;
+        if (mask) {
+          kept = BoltList.keep(mask, SLOT_SEGMENTS, this.pieceList, at, this.listCounts[k], this.drawList, direct);
+          mirrorKept = BoltList.keep(mask, SLOT_SEGMENTS, this.mirrorList, mirrorAt, this.mirrorCounts[k], this.drawList, MOST_SEGMENTS + mirror);
+        } else {
+          kept = QualityBolt.filter(segments, SEGMENT_FLOATS, SLOT_SEGMENTS, this.pieceList, at, this.listCounts[k], this.drawList, direct, grown, main, branch, band);
+          mirrorKept = QualityBolt.filter(segments, SEGMENT_FLOATS, SLOT_SEGMENTS, this.mirrorList, mirrorAt, this.mirrorCounts[k], this.drawList, MOST_SEGMENTS + mirror, grown, main, branch, band);
+        }
       }
       at += this.listCounts[k];
       mirrorAt += this.mirrorCounts[k];
@@ -631,6 +651,9 @@ export class Bolt extends M.Effect {
     this.builtVersion.fill(-1);
     this.itemsVersion++;
     this.filtered = false;
+    for (let k = 0; k < SLOTS; k++) {
+      this.slotVersion[k]++;
+    }
   }
 
   // the strikes' slots (their shapes), and each slot's growth and lights now
@@ -711,6 +734,7 @@ export class Bolt extends M.Effect {
       this.builtFrom[k] = s;
       this.builtVersion[k] = this.camera.baseVersion;
       this.itemsVersion++;
+      this.slotVersion[k]++;
       const items = this.slotItems[k];
       items.segmentCount = items.glyphCount = 0;
       this.radiance[k] = 0;
@@ -799,6 +823,61 @@ export class Bolt extends M.Effect {
     this.glyphCount = glyphs;
   }
 
+  // the piece lists' job asked of its worker with this frame's inputs, after the frame's advance (the wallpaper's fork: the slots' growth and lights are set from this frame's time):
+  // the slots' pieces, growth and lights as update will set them, and the segments of the slots whose items the worker does not hold yet (a copy of the used part: a typed array's
+  // whole buffer is cloned). Null when nothing is lit (update then has nothing to cut). update takes the answer only when its inputs are still these (takeAnswer)
+  fork(_time: number): Promise<void> | null {
+    this.answered = null;
+    const task = this.listTask;
+    if (!task) {
+      return null;
+    }
+    const share = this.drawsCharacters() ? 1 - CHARACTER_SHARE : 1;
+    const slots: BoltListSlot[] = [];
+    let lit = false;
+    for (let k = 0; k < SLOTS; k++) {
+      const items = this.slotItems[k];
+      const count = items.segmentCount;
+      const has = count > 0;
+      const main = has ? this.levels[k * 3 + 1] : 0;
+      const branch = has ? this.levels[k * 3 + 2] : 0;
+      lit = lit || main > 0 || branch > 0;
+      let segments: Float32Array | null = null;
+      if (has && this.sentSlot[k] !== this.slotVersion[k] && items.segments) {
+        segments = items.segments.slice(0, count * SEGMENT_FLOATS);
+        this.sentSlot[k] = this.slotVersion[k];
+      }
+      slots.push({ version: this.slotVersion[k], count, segments, grown: M.TEST && this.cutOnCpu ? 1.5 : this.levels[k * 3], main, branch, radiance: this.radiance[k] });
+    }
+    if (!lit) {
+      return null;
+    }
+    const input: BoltListInput = { slots, band: share, share };
+    return task.ask(input).then((output) => {
+      for (const k of output.missing) {
+        this.sentSlot[k] = -1;
+      }
+      this.answered = { input, output };
+    });
+  }
+
+  // the fork's answer when every input of the job is still this frame's (each slot's items version and count, growth, lights and radiance, the band's share) and the worker had
+  // every slot's segments; else null (the lists are cut here). Taken once: cleared either way
+  takeAnswer(share: number): BoltListOutput | null {
+    const a = this.answered;
+    this.answered = null;
+    if (!a || a.output.missing.length > 0 || a.input.band !== share || a.input.share !== share) {
+      return null;
+    }
+    for (let k = 0; k < SLOTS; k++) {
+      const s = a.input.slots[k];
+      if (s.version !== this.slotVersion[k] || s.count !== this.slotItems[k].segmentCount || s.grown !== this.grown[k] || s.main !== this.mainLight[k] || s.branch !== this.branchLight[k] || s.radiance !== this.radiance[k]) {
+        return null;
+      }
+    }
+    return a.output;
+  }
+
   // this frame's lights, growths and the characters' age for the programs, the items made again
   // where a slot changed (and the programs warmed the first time), and the mask drawn
   update(time: number) {
@@ -823,14 +902,12 @@ export class Bolt extends M.Effect {
       this.age[k] = s ? Math.max(0, time - s.start) : 0;
     }
     this.covers = this.lit && this.tinted;
-    // (the brightest peak a piece sharing a pixel can have: the greatest radiance x the band's share x the slot's light)
-    let brightest = 0;
+    // (the brightest peak a piece sharing a pixel can have: the greatest radiance x the band's share x the slot's light; and the lists cut to the drawable pieces: the answer of
+    // this frame's fork (Bolt.fork) when every input is still the one it was asked with, else worked out here with the same functions)
     const share = this.tinted ? 1 - CHARACTER_SHARE : 1;
-    for (let k = 0; k < SLOTS; k++) {
-      brightest = Math.max(brightest, this.radiance[k] * share * Math.max(this.mainLight[k], this.branchLight[k]));
-    }
-    this.others = QualityBolt.peakBound(brightest);
-    this.filterLists();
+    const answer = this.takeAnswer(share);
+    this.others = answer ? answer.others : QualityBolt.peakBound(BoltList.brightest(this.radiance, this.mainLight, this.branchLight, share));
+    this.filterLists(answer ? answer.masks : null);
     if (this.lit) {
       this.drawMask();
     }

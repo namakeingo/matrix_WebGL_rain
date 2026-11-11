@@ -42,6 +42,7 @@ import "./engine/parallax";
 import "./engine/camera";
 import "./models/floor";
 import "./models/rainlayout";
+import "./models/rainwheel";
 import "./models/skylight";
 import "./models/strikebias";
 import "./models/hdroutput";
@@ -64,6 +65,10 @@ import "./models/quality/water";
 import "./models/quality/waterbands";
 import "./models/quality/rainreuse";
 import "./models/splashlaunch";
+import "./models/splashsim";
+import "./models/splashtick";
+import "./models/rainsimtick";
+import "./workers/splashworker";
 import "./engine/glyphs";
 import "./models/boltshape";
 import "./models/boltitems";
@@ -79,6 +84,18 @@ import "./workers/sceneworker";
 import "./workers/boltworker";
 import "./workers/hdrworker";
 import "./engine/hdrtask";
+import "./platform/jobtask";
+import "./models/strikeplan";
+import "./workers/strikeplanworker";
+import "./models/fogplan";
+import "./workers/fogplanworker";
+import "./models/boltlist";
+import "./workers/boltlistworker";
+import "./models/frame";
+import "./workers/frameworker";
+import "./workers/textlayoutworker";
+import "./workers/simmusicworker";
+import "./platform/steppedtask";
 import "./workers/qualityworker";
 import "./workers/musicworker";
 import "./workers/parallaxworker";
@@ -136,7 +153,15 @@ import type { HdrPath } from "./engine/hdrpath";
 import type { BoltTask } from "./workers/boltworker";
 import type { SceneWorker, SceneTask } from "./workers/sceneworker";
 import type { PerfMeter, FrameHealth, AudioRate, RatePacer } from "./debug/debug";
-import type { AudioGen } from "./debug/audiogen";
+import type { SimMusicTask } from "./workers/simmusicworker";
+import type { LayoutJob, LayoutOut } from "./workers/textlayoutworker";
+import type { JobTask } from "./platform/jobtask";
+import type { SteppedTask } from "./platform/steppedtask";
+import type { RainSimPacket } from "./models/rainsimtick";
+import type { StrikePlanInput, StrikePlanOutput } from "./models/strikeplan";
+import type { FogPlanInput, FogPlanOutput } from "./models/fogplan";
+import type { BoltListInput, BoltListOutput } from "./models/boltlist";
+import type { FrameInput, FrameOutput } from "./models/frame";
 import type { MusicTask, MusicWorkerSettings } from "./workers/musicworker";
 import type { ParallaxTask } from "./workers/parallaxworker";
 import type { ThreadedTask } from "./platform/threadedtask";
@@ -309,7 +334,7 @@ export class Wallpaper implements WallpaperControl {
   musicActive: boolean;
   musicDriven: boolean;
   musicTime: number;
-  music: AudioGen | null;
+  music: SimMusicTask | null;
   musicStart: number;
   musicPacer: RatePacer | null;
   musicArray: Float32Array;
@@ -351,6 +376,19 @@ export class Wallpaper implements WallpaperControl {
   exposure!: Exposure;
   // the HDR output (made with the effects; its GPU objects let go when they are made again)
   hdrPath: HdrPath | null = null;
+  // the splashes' task (workers/splashworker.ts), made with each Splashes effect; whether the waves' advance was left to the end of the frame (the fork's answer comes before it)
+  splashTask: SteppedTask<RainSimPacket> | null = null;
+  wavesDeferred = false;
+  // the clock's and the message's layout task (workers/textlayoutworker.ts)
+  textLayoutTask: JobTask<LayoutJob, LayoutOut> | null = null;
+  // the strikes' plan task (workers/strikeplanworker.ts)
+  strikePlanTask: JobTask<StrikePlanInput, StrikePlanOutput> | null = null;
+  // the fog's frame plan task (workers/fogplanworker.ts), asked by Fog.fork
+  fogPlanTask: JobTask<FogPlanInput, FogPlanOutput> | null = null;
+  // the bolt's piece lists task (workers/boltlistworker.ts), asked by Bolt.fork
+  boltListTask: JobTask<BoltListInput, BoltListOutput> | null = null;
+  frameTask: JobTask<FrameInput, FrameOutput> | null = null;
+  frameAnswer: { input: FrameInput; output: FrameOutput } | null = null;
   // what the reflection's reuse reads: the settings changed so far, and the fog's builds so far (a stamp that changes with its volume)
   settingsStamp = 0;
   fogStamp = 0;
@@ -630,7 +668,7 @@ export class Wallpaper implements WallpaperControl {
       // (a simulated music from its start: made again when the kind changes)
       p617_setting_DebugMusicSource: (v: string) => {
         s.musicSource = v;
-        this.music = null;
+        this.stopSimulated();
         this.musicPacer = null;
       },
       p620_setting_DebugPerformance: (v: boolean) => {
@@ -724,11 +762,22 @@ export class Wallpaper implements WallpaperControl {
       return null;
     }
     if (!this.music) {
-      this.music = new this.M.AudioGen(s.musicSource);
+      // (the generator's arrays as a SimMusicTask: made inline from the first tick, by its worker once that is made, inline again when it fails)
+      this.music = new this.M.SimMusicTask(s.musicSource, { base: this.platform.base });
+      this.music.start();
+      this.tasks.simmusic = this.music as unknown as ThreadedTask;
       this.musicStart = performance.now();
       this.musicPacer = new this.M.RatePacer(MUSIC_RATE);
     }
     return this.music;
+  }
+
+  // the simulated music's task let go (the source changed)
+  stopSimulated() {
+    if (this.music) {
+      this.music.stop();
+    }
+    this.music = null;
   }
 
   // Wallpaper Engine's audio array (128 values): its levels taken (the readout's), unless a
@@ -856,7 +905,6 @@ export class Wallpaper implements WallpaperControl {
     said.energyFactor = reply.energyFactor;
     said.brightnessFactor = reply.brightnessFactor;
     this.musicScale = reply.driven ? reply.scale : 1;
-    const seconds = Math.min(0.5, Math.max(0, (now - this.musicTime) / 1000));
     this.musicTime = now;
     rain.setMusicLight(reply.driven ? reply.light : null);
     if (!reply.driven || !reply.share) {
@@ -885,8 +933,13 @@ export class Wallpaper implements WallpaperControl {
     if (!music || !this.musicPacer || !this.musicPacer.due(now)) {
       return;
     }
-    music.fill((now - this.musicStart) / 1000, this.musicArray);
-    this.takeAudio(this.musicArray, now);
+    music.tick((now - this.musicStart) / 1000, now);
+    // (with the worker the array asked for arrives with a later take)
+    const made = music.take();
+    if (made) {
+      this.musicArray.set(made.array);
+      this.takeAudio(this.musicArray, made.now);
+    }
   }
 
   // the rain's steps a second at the Speed set
@@ -973,7 +1026,7 @@ export class Wallpaper implements WallpaperControl {
     // (the scene's one-off work in a Web Worker when one can be made, else here: the script's
     // hashes and their check, the rain's layouts, the characters)
     // (the tests may refuse a worker: window.Matrix3DTest { sceneWorker, boltWorker: "none" })
-    const refused = (name: "sceneWorker" | "boltWorker" | "musicWorker" | "parallaxWorker") => testOptions()[name] || "";
+    const refused = (name: "sceneWorker" | "boltWorker" | "musicWorker" | "parallaxWorker" | "textLayoutWorker" | "strikePlanWorker" | "fogPlanWorker" | "boltListWorker" | "frameWorker" | "splashWorker") => testOptions()[name] || "";
     const scene = new M.SceneTask({
       base: this.platform.base,
       force: refused("sceneWorker"),
@@ -1043,6 +1096,81 @@ export class Wallpaper implements WallpaperControl {
     this.tasks.music = music as unknown as ThreadedTask;
     this.mark("musicReady");
     music.start();
+    // (the clock's and the message's layout: a JobTask over the pure layout job, asked in Text.fork and awaited by the frame; inline until its worker is made)
+    const textLayout = new M.JobTask({
+      fn: M.TextLayoutWorker.job,
+      name: "textlayout",
+      base: this.platform.base,
+      force: refused("textLayoutWorker"),
+      observe: (event) => {
+        if (event.name === "adopt") {
+          this.mark("textLayoutWorker");
+        }
+      },
+    });
+    this.textLayoutTask = textLayout;
+    // (the strikes' plan: a JobTask over models/strikeplan.ts, asked for the next strikes when Lightning's queue is short; inline until its worker is made)
+    const strikePlan = new M.JobTask({
+      fn: M.StrikePlan.plan,
+      name: "strikeplan",
+      base: this.platform.base,
+      force: refused("strikePlanWorker"),
+      observe: (event) => {
+        if (event.name === "adopt") {
+          this.mark("strikePlanWorker");
+        }
+      },
+    });
+    this.strikePlanTask = strikePlan;
+    this.tasks.strikeplan = strikePlan as unknown as ThreadedTask;
+    strikePlan.start();
+    // (the fog's frame plan: a JobTask over models/fogplan.ts, asked in Fog.fork with the frame's inputs and awaited by the draw; inline until its worker is made)
+    const fogPlan = new M.JobTask({
+      fn: M.FogPlan.plan,
+      name: "fogplan",
+      base: this.platform.base,
+      force: refused("fogPlanWorker"),
+      observe: (event) => {
+        if (event.name === "adopt") {
+          this.mark("fogPlanWorker");
+        }
+      },
+    });
+    this.fogPlanTask = fogPlan;
+    this.tasks.fogplan = fogPlan as unknown as ThreadedTask;
+    fogPlan.start();
+    // (the bolt's piece lists: a JobTask over models/boltlist.ts, asked in Bolt.fork with the frame's inputs and awaited by the draw; inline until its worker is made)
+    const boltList = new M.JobTask({
+      fn: M.BoltList.run,
+      name: "boltlist",
+      base: this.platform.base,
+      force: refused("boltListWorker"),
+      observe: (event) => {
+        if (event.name === "adopt") {
+          this.mark("boltListWorker");
+        }
+      },
+    });
+    this.boltListTask = boltList;
+    this.tasks.boltlist = boltList as unknown as ThreadedTask;
+    boltList.start();
+    // (the frame's camera numbers: a JobTask over models/frame.ts, asked after the frame's advance by the fork and awaited by its draw; inline until its worker is made)
+    const frameJob = new M.JobTask({
+      fn: M.Frame.compute,
+      name: "frame",
+      base: this.platform.base,
+      force: refused("frameWorker"),
+      observe: (event) => {
+        if (event.name === "adopt") {
+          this.mark("frameWorker");
+        }
+      },
+    });
+    this.frameTask = frameJob;
+    this.tasks.frame = frameJob as unknown as ThreadedTask;
+    frameJob.start();
+    this.tasks.textlayout = textLayout as unknown as ThreadedTask;
+    textLayout.start();
     if (M.TEST) {
       this.test!.timings.effects = Math.round(performance.now());
     }
@@ -1253,6 +1381,8 @@ export class Wallpaper implements WallpaperControl {
       () => [this.rain.nearest(), this.rain.furthest()]
     );
     // (a planned strike's flash known: the fog bakes its shadow grid ahead in the workers when the level of detail is on)
+    this.lightning.planTask = this.strikePlanTask;
+    this.fog.planTask = this.fogPlanTask;
     this.lightning.onPlanned = (s) => this.fog.announceStrike(s.uid!, s.start, s.flash!);
     // (the bolt's items made in the worker with each shape: none asked before the bolt exists)
     this.lightning.itemsOptionsOf = (s) => (this.bolt ? this.bolt.itemsOptionsOf(s) : undefined);
@@ -1260,7 +1390,29 @@ export class Wallpaper implements WallpaperControl {
       this.lightning.useWorker(this.boltTask);
     }
     this.splashes = new M.Splashes(context, (x, z, weight) => this.waves.add(x, z, weight));
+    // (the splashes' frame as a stepped task: made inline from the first frame, its worker taking over as soon as it can; the fork of the quality mode workers gives it the frame's
+    // payload and waits for its packet)
+    this.splashTask = new M.SteppedTask({
+      model: this.splashes.tick,
+      name: "splash",
+      base: this.platform.base,
+      force: testOptions().splashWorker || "",
+      lookahead: 0,
+      checkpointEvery: M.SplashWorker.CHECKPOINT_EVERY,
+      eventDelay: 1,
+      observe: (event) => {
+        if (event.name === "adopt") {
+          this.mark("splashWorker");
+        }
+      },
+    });
+    this.splashes.task = this.splashTask;
+    this.tasks.splash = this.splashTask as unknown as ThreadedTask;
+    // (the same task as the rain's wheel's: the kill check's spec rainsim)
+    this.tasks.rainsim = this.splashTask as unknown as ThreadedTask;
+    this.splashTask.start();
     this.bolt = new M.Bolt(context);
+    this.bolt.listTask = this.boltListTask;
     this.rain = new M.Rain(context, (drop, time) => {
       // (a landing makes its ring and its splashes only with the Collision plane: the waves take no impact without it)
       this.waves.add(drop.x, drop.z, M.Rain.IMPACT);
@@ -1268,10 +1420,17 @@ export class Wallpaper implements WallpaperControl {
         this.splashes.fromLanding(drop, time, M.Rain.CELL);
       }
     });
+    // (the splashes' task steps the rain's wheel too, in its tick, with the landings' impacts and splashes made there: the rain gives it its part of each frame; the callback above
+    // is the rain's own when it steps itself)
+    this.rain.collides = () => !!this.waterState.splashes;
+    this.rain.driver = this.splashes;
+    this.splashes.rain = this.rain;
+    this.splashes.tick.wheel = this.rain.wheel;
     this.reflection = new M.Reflection(context);
     this.water = new M.Water(context);
     this.applyWaterState();
     this.text = new M.Text(context);
+    this.text.layoutTask = this.textLayoutTask;
     this.text.onStamp = (from, to, box, shift, ids) => this.rain.drawNewest(from, to, box, shift, ids);
     const ratio = (this.platform as { ratio?: number }).ratio;
     if (ratio) {
@@ -1409,6 +1568,10 @@ export class Wallpaper implements WallpaperControl {
 
   // deletes every GPU object of the effects and of what they share
   destroyEffects() {
+    if (this.splashTask) {
+      this.splashTask.stop();
+      this.splashTask = null;
+    }
     for (const effect of this.effects || []) {
       effect.destroy();
     }
@@ -1444,14 +1607,29 @@ export class Wallpaper implements WallpaperControl {
 
   // ---- the simulation ----
 
-  advanceTo(time: number) {
+  // the frame's advance of every effect. forked: the frame forks (the quality mode workers): the waves are advanced after the fork's answer (finishAdvance), when the splashes'
+  // impacts are in
+  advanceTo(time: number, forked = false) {
     this.mark("firstAdvance");
+    this.wavesDeferred = false;
     this.followMusic();
     this.followParallax();
     for (let i = 0; i < this.effects!.length; i++) {
+      if (forked && this.effects![i] === this.waves) {
+        this.wavesDeferred = true;
+        continue;
+      }
       this.effects![i].advance(time);
     }
     this.time = time;
+  }
+
+  // the waves' advance left to after the fork's answer, made (the frame's draw calls it first)
+  finishAdvance() {
+    if (this.wavesDeferred) {
+      this.wavesDeferred = false;
+      this.waves.advance(this.time);
+    }
   }
 
   reset() {
@@ -1461,6 +1639,39 @@ export class Wallpaper implements WallpaperControl {
   }
 
   // ---- a frame: the effects put together ----
+
+  // the frame's camera numbers asked of the frame worker after the advance (the frame's fork: the offsets of this frame are set): the matrices and the block for the size the frame
+  // will have (the platform's, as applySize reads it) and the clock's step; only when the camera will be dirty (a view changed or the size), since an unchanged camera makes nothing.
+  // The answer goes to the camera (it uses it when its inputs are the frame's own then) and is kept for the step; nothing here changes what the frame computes, only who does.
+  forkFrame(): Promise<void> | null {
+    const task = this.frameTask;
+    const camera = this.camera;
+    if (!task || !camera) {
+      return null;
+    }
+    const size = this.platform.size();
+    const width = Math.max(1, size[0]);
+    const height = Math.max(1, size[1]);
+    if (!camera.dirty && width === camera.width && height === camera.height) {
+      return null;
+    }
+    const input = camera.frameInput(width, height, this.clock, this.time);
+    return task.ask(input).then((output) => {
+      camera.offer({ input, output });
+      this.frameAnswer = { input, output };
+    });
+  }
+
+  // the clock's step for this frame: the fork's answer when its clock and time are the frame's, else the clock's own
+  frameStep(): number {
+    const answer = this.frameAnswer;
+    this.frameAnswer = null;
+    const clock = this.clock;
+    if (answer && answer.input.time === this.time && answer.input.base === clock.base && answer.input.from === clock.from && answer.input.rate === clock.rate) {
+      return answer.output.step;
+    }
+    return clock.stepAt(this.time);
+  }
 
   // parts (for the tests): only these of sky, water, rain, splashes, or one of the water's test
   // views (Water.MODES), not tone mapped; all by default
@@ -1480,7 +1691,7 @@ export class Wallpaper implements WallpaperControl {
       nearFar[1] = this.rain.furthest();
     }
     this.rain.nearness = this.splashes.nearness = this.water.nearness = nearFar;
-    this.step = this.clock.stepAt(this.time);
+    this.step = this.frameStep();
     // (the HDR output, decided before the canvas is sized: the bitmap path draws the picture into a canvas twice as
     // wide; only the normal scene, never the tests' views or the Nearness view)
     const hdrPath = this.hdrPath!;
@@ -1838,7 +2049,14 @@ export class Wallpaper implements WallpaperControl {
       advance: () => {
         const start = performance.now();
         this.guard.beginFrame();
-        this.advanceTo(this.qualityTime!);
+        // (the splashes' fall is left to the fork's task, and the waves' advance to the end of the fork: the splashes' impacts come in the fork's answer)
+        const forks = this.splashes.task !== null && this.quality.forking();
+        this.splashes.forking = forks;
+        try {
+          this.advanceTo(this.qualityTime!, forks);
+        } finally {
+          this.splashes.forking = false;
+        }
         if (this.qFrame) {
           this.qFrame.advanceMs = performance.now() - start;
         }
@@ -1858,8 +2076,36 @@ export class Wallpaper implements WallpaperControl {
       work: () => {
         // (nothing yet that can run without the quality and without changing a result)
       },
+      fork: () => {
+        const asked: Promise<void>[] = [];
+        // (the strikes' light of the frame given to the fog as render gives it, so that Fog.fork plans with the values its update reads; idempotent)
+        this.fog.setStrikes(this.lightning.levelsAt(this.time), this.lightning.color);
+        // (this frame's strikes' growth and lights, for the effects' jobs: render sets the same values again from the same time)
+        this.bolt.setStrikes(this.lightning.slots, this.lightning.boltLevelsAt(this.time));
+        for (const effect of this.effects!) {
+          const answer = effect.fork(this.time);
+          if (answer) {
+            asked.push(answer);
+          }
+        }
+        return asked.length ? Promise.all(asked) : Promise.resolve();
+      },
+      // (the camera's matrices: the quality job's parameters read them, so they are asked and awaited before the jobs and the parameters are made)
+      forkFirst: () => {
+        const asked: Promise<void>[] = [];
+        const splashes = this.splashes.forkFirst(this.time);
+        if (splashes) {
+          asked.push(splashes);
+        }
+        const camera = this.forkFrame();
+        if (camera) {
+          asked.push(camera);
+        }
+        return asked.length ? Promise.all(asked) : Promise.resolve();
+      },
       draw: () => {
         const start = performance.now();
+        this.finishAdvance();
         this.render();
         this.guard.endFrame();
         if (this.readout.shown) {
@@ -2267,6 +2513,20 @@ if (inWorker()) {
     M.MusicWorker.serve();
   } else if (name === "parallax") {
     M.ParallaxWorker.serve();
+  } else if (name === "strikeplan") {
+    M.StrikePlanWorker.serve();
+  } else if (name === "fogplan") {
+    M.FogPlanWorker.serve();
+  } else if (name === "boltlist") {
+    M.BoltListWorker.serve();
+  } else if (name === "frame") {
+    M.FrameWorker.serve();
+  } else if (name === "splash") {
+    M.SplashWorker.serve();
+  } else if (name === "simmusic") {
+    M.SimMusicWorker.serve();
+  } else if (name === "textlayout") {
+    M.TextLayoutWorker.serve();
   }
 } else if (document.getElementById("gl")) {
   // (the bundle's URL: its workers are made from it; read while it runs, as it loads)

@@ -108,6 +108,11 @@ export class Effect {
   gl: WebGL2RenderingContext;
   // (no initializer: the field is not written until the pool gives a result)
   qualityResult: EffectQuality | undefined;
+  // the effect's per-frame job asked of its worker with the frame's exact inputs (after the frame's advance, before its draw), a promise of its answer being taken in (null: none; the
+  // effect then does the work inline in update, as it always did). Called by the wallpaper's fork() in the quality mode workers only.
+  fork(_time: number): Promise<void> | null {
+    return null;
+  }
   // its place in the effects' order (set by makeEffects: -1 until then), the index of its job in the pool
   qualityIndex: number;
   // whether the levels lower the effect's detail (level of detail below what the camera can see); false: every unit not hidden is drawn at full

@@ -71,7 +71,6 @@ function AudioGen(kind, seed) {
           (f == 1 ? 0.3
           : f == 0 || f == 2 ? 0.08
           : 0) / (kind == "tone100quiet" ? 12 : 1);
-        n = 1;
       } else if (kind == "steady") {
         // constantly loud, with only small changes
         v = 0.5 * (0.6 + 0.8 * bass(f)) * tilt(f) * n;

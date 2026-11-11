@@ -52,15 +52,23 @@ M.linear = (c: number): number => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.05
 // sent to uniforms as it is)
 M.color = (value: string): Float32Array => Float32Array.from(value.split(" ").slice(0, 3), (c) => M.linear(parseFloat(c)));
 
-// random numbers from a seed (mulberry32), so the tests can repeat them
-M.seededRandom = (seed: number): (() => number) => {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+// random numbers from a seed (mulberry32), so the tests can repeat them; Mulberry keeps its state (a) in the open, to be handed to a worker and taken back
+export class Mulberry {
+  a: number;
+  constructor(seed: number) {
+    this.a = seed >>> 0;
+  }
+  next(): number {
+    this.a = (this.a + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(this.a ^ (this.a >>> 15), 1 | this.a);
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
+  }
+}
+M.Mulberry = Mulberry;
+M.seededRandom = (seed: number): (() => number) => {
+  const r = new Mulberry(seed);
+  return () => r.next();
 };
 
 // what the device can do, looked up once a context: float pictures to draw into (and so the

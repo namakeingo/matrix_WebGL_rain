@@ -41,6 +41,8 @@ import type { EffectContext } from "../engine/effect";
 import type { Programs, ProgramSources, ShaderProgram, RenderTarget } from "../engine/gl";
 import type { StepClock } from "../engine/clock";
 import type { TextLayout, TextPlace } from "../models/letters";
+import type { JobTask } from "../platform/jobtask";
+import type { LayoutJob, LayoutOut } from "../workers/textlayoutworker";
 import type { OledShift } from "../models/oled";
 import type { RainColors } from "./rain";
 import { TextVisibility } from "../models/textvisibility";
@@ -108,11 +110,14 @@ export class Text extends M.Effect {
   // (made in init)
   glyphsProgram!: ShaderProgram;
   sceneProgram!: ShaderProgram;
+  // the layout's task (src/index.ts gives it: workers/textlayoutworker.ts), asked by fork when the layout is owed and awaited by the frame
+  layoutTask: JobTask<LayoutJob, LayoutOut> | null;
 
   constructor(context: EffectContext) {
     super(context);
     const gl = this.gl;
     this.steps = context.clock;
+    this.layoutTask = null;
     // (project.json's defaults: the clock shown, the message hidden)
     this.clock = {
       shown: true,
@@ -283,14 +288,41 @@ export class Text extends M.Effect {
     this.stamp(this.steps.stepAt(time));
   }
 
-  // both texts' letters, their rectangles sent to the GPU, the box of them all
+  // both texts' letters, laid out here (the quality mode workers asks the task in fork instead: the same function)
   layOut() {
     this.dirty = false;
+    const job = this.layoutJob();
+    const out = M.TextLayoutWorker.job(job);
+    this.applyLayouts(out.clock, out.message);
+  }
+
+  // what lays both texts out, as the layout's job takes it: the texts, their places, the screen and the shift
+  layoutJob(): LayoutJob {
     const s = this.shift;
     const clock = this.clock;
     const message = this.message;
-    clock.layout = clock.shown ? M.Letters.layout(clock.text, clock.place, this.width, this.height, this.scale, CLOCK_MEASURE, s.clock.x, s.clock.y) : null;
-    message.layout = message.shown ? M.Letters.layout(message.text, message.place, this.width, this.height, this.scale, undefined, s.message.x, s.message.y) : null;
+    return {
+      clock: clock.shown ? { text: clock.text, place: clock.place, width: this.width, height: this.height, scale: this.scale, measure: CLOCK_MEASURE, dx: s.clock.x, dy: s.clock.y } : null,
+      message: message.shown ? { text: message.text, place: message.place, width: this.width, height: this.height, scale: this.scale, dx: s.message.x, dy: s.message.y } : null,
+    };
+  }
+
+  // the layout owed asked of the task with its exact input and awaited by the frame (Effect.fork): taken in before the frame's update
+  fork(_time: number): Promise<void> | null {
+    const task = this.layoutTask;
+    if (!task || !this.dirty || this.width <= 0) {
+      return null;
+    }
+    this.dirty = false;
+    return task.ask(this.layoutJob()).then((out) => this.applyLayouts(out.clock, out.message));
+  }
+
+  // both texts' letters in place: their rectangles sent to the GPU, the box of them all
+  applyLayouts(clockLayout: TextLayout | null, messageLayout: TextLayout | null) {
+    const clock = this.clock;
+    const message = this.message;
+    clock.layout = clockLayout;
+    message.layout = messageLayout;
     const count = (clock.layout ? clock.layout.count : 0) + (message.layout ? message.layout.count : 0);
     if (this.rectData.length < count * 4) {
       this.rectData = new Float32Array(count * 4);

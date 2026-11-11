@@ -207,6 +207,73 @@ const makeTestApi = (wallpaper: Wallpaper, ready: Promise<void>) => {
     // (the music: an audio array given at `now` ms, and what the music does now)
     feedAudio: (array: ArrayLike<number>, now: number) => wallpaper.takeAudio(array, now),
     music: () => wallpaper.musicState(),
+    // the text's laid-out rectangles as a number: their count and the sum of their sizes (not their places: the OLED pixel shift moves those every 10 s)
+    textSum: () => {
+      const t = wallpaper.text;
+      let s = t.rectCount;
+      for (let i = 0; i < t.rectCount; i++) {
+        s += t.rectData[i * 4 + 2] * ((i % 5) + 1) + t.rectData[i * 4 + 3] * ((i % 3) + 1);
+      }
+      return Math.round(s * 100);
+    },
+    // the bolt's piece lists' job asked of its task (its worker or, after a kill, inline) with a fixed input (a sum of the masks and the cut's others): the same number whoever worked it out
+    boltListSum: () => {
+      const task = wallpaper.boltListTask;
+      const F = Matrix3D.BoltItems.SEGMENT_FLOATS;
+      const rnd = Matrix3D.seededRandom(99);
+      const segments = new Float32Array(400 * F);
+      for (let i = 0; i < 400; i++) {
+        segments[i * F + 7] = 0.1 + rnd();
+        segments[i * F + 11] = rnd() < 0.5 ? 2 : 1;
+        segments[i * F + 16] = rnd() * 0.5;
+        segments[i * F + 17] = rnd();
+        segments[i * F + 19] = 0.6 + rnd();
+      }
+      const empty = { version: 0, count: 0, segments: null, grown: 0, main: 0, branch: 0, radiance: 0 };
+      const input = { slots: [empty, empty, { version: -77, count: 400, segments, grown: 0.8, main: 0.9, branch: 0.5, radiance: 0.9 }], band: 0.8, share: 0.8 };
+      const sum = (o: { masks: (Uint8Array | null)[]; missing: number[]; others: number }) => {
+        let s = Math.round(o.others * 1e6);
+        for (const m of o.masks) {
+          for (let i = 0; m && i < m.length; i++) {
+            s += m[i] * ((i % 13) + 1);
+          }
+        }
+        return s + o.missing.length * 1e9;
+      };
+      return task ? task.ask(input).then(sum) : Promise.resolve(-1);
+    },
+    // the splashes' state as a number: the next serial, the live count and the live splashes' ring rows summed (what the effect uploads and the quality reads)
+    splashSum: (base = 0) => {
+      const s = wallpaper.splashes;
+      const ring = s.ringFloats;
+      let sum = (s.nextSerial - base) * 1e3 + s.count;
+      for (let i = 0; i < s.count; i++) {
+        const o = (s.serial[i]! % 8192) * 16;
+        sum += ring[o]! * 3 + ring[o + 1]! * 5 + ring[o + 4]! * 7 + ring[o + 5]! * 11 + ring[o + 6]! * 13;
+      }
+      return Math.round(sum * 1e3);
+    },
+    splashSerial: () => wallpaper.splashes.nextSerial,
+    // the rain's wheel state the render thread reads as a number: the counts, the step, the lives and the layout's phases summed (the same whoever stepped the wheel)
+    rainSum: () => {
+      const r = wallpaper.rain;
+      let sum = r.active * 7 + r.reach * 11 + r.wanted * 13 + r.lastStep * 17 + r.wokenCount * 19;
+      const life = r.life;
+      for (let i = 0; i < life.length; i += 4) {
+        if (life[i] !== 0xffffffff) {
+          sum = (sum + (life[i]! % 9973) * 3 + (life[i + 1]! % 9973) * 5 + (life[i + 2]! % 9973) * 7 + 1) % 2000003;
+        }
+      }
+      const layout = r.layout;
+      for (let i = 2; layout && i < layout.length; i += 64) {
+        sum = (sum + layout[i]! * 3) % 2000003;
+      }
+      return Math.round(sum * 1e3);
+    },
+    // the planned strikes' seeds, in order
+    plannedSeeds: () => wallpaper.lightning.queue.map((s) => s.seed),
+    // the arrays taken so far (the simulated music's count)
+    audioSeq: () => wallpaper.audioSeq,
     get musicClient() {
       return wallpaper.musicClient;
     },
@@ -288,10 +355,27 @@ const makeTestApi = (wallpaper: Wallpaper, ready: Promise<void>) => {
     get boltTask() {
       return wallpaper.boltTask;
     },
+    // the fog and its plan task (the kill spec asks the task with the fog's own input)
+    get fog() {
+      return wallpaper.fog;
+    },
+    get fogPlanTask() {
+      return wallpaper.fogPlanTask;
+    },
     taskInfo: (name: string) => {
       const task = name === "hdr" ? wallpaper.hdrPath && wallpaper.hdrPath.task : wallpaper.tasks[name];
       return task ? { state: task.state, alive: task.alive, inline: task.inline, attempts: task.attempts, restarts: task.restarts, why: task.why, events: task.events.slice() } : null;
     },
+    // a sum of the camera's view-projection matrix and uniform block (the same whoever made them: the frame worker or the camera), and the answers of the frame worker it took
+    frameSum: () => {
+      let s = 0;
+      const data = wallpaper.camera.ubo.data;
+      for (let i = 0; i < 36; i++) {
+        s += data[i] * ((i % 7) + 1);
+      }
+      return Math.round(s * 1e6);
+    },
+    frameTaken: () => wallpaper.camera.taken,
     parallaxOffsets: () => ({ yaw: wallpaper.camera.yaw, pitchShift: wallpaper.camera.pitchShift, eyeX: wallpaper.camera.eyeX, eyeShift: wallpaper.camera.eyeShift }),
     toScreen: (x: number, y: number, z: number) => wallpaper.camera.toScreen(x, y, z),
     rayAt: (x: number, y: number) => wallpaper.camera.rayAt(x, y),

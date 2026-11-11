@@ -13,12 +13,15 @@
 // so what depends on the base alone (a strike's shape) is not made again as the parallax moves. tilt() is the pitch with its shift, eyeY() the eye's height with its shift.
 //
 // Changelog:
+// 2026-11-10: update() makes its matrices and block with models/frame.ts's compute (one function; axes() too), and takes a worker's answer (offer) made for the same view inputs.
 // 2026-11-09: the mouse parallax's offsets (yaw, pitchShift, eyeX, eyeShift), setParallax, baseVersion; the axes, project, toScreen, rayAt, topAt, the view matrix and the uniform block take them.
 // 2026-11-04: TypeScript, a module of src/engine/ (was engine/camera.js).
 // 2026-11-05: the Plane height setting removed (the camera looks level); its rotation code moved to engine/parallax.ts.
 import { M } from "./core";
 import { fill } from "./glsl";
 import { Parallax } from "./parallax";
+import { Frame } from "../models/frame";
+import type { FrameInput, FrameOutput } from "../models/frame";
 import type { UniformBlock } from "./gl";
 import CAMERA_SOURCE from "../shaders/camera/camera.glsl";
 
@@ -45,6 +48,11 @@ export class Camera {
   eyeShift: number;
   // the base as of the last update (a change of it moves baseVersion)
   baseKey: number[];
+  // an answer a worker made for the frame (offer), taken by the next update when its input is the frame's own
+  answered: { input: FrameInput; output: FrameOutput } | null;
+  own: FrameOutput;
+  // the answers taken (for the tests)
+  taken: number;
   height: number;
   width: number;
   far: number;
@@ -70,11 +78,14 @@ export class Camera {
     this.eyeX = 0;
     this.eyeShift = 0;
     this.baseKey = [];
+    this.answered = null;
+    this.taken = 0;
     this.viewProjection = new Float32Array(16);
     this.view = new Float32Array(16);
     this.projection = new Float32Array(16);
     // (std140: the matrix, then eye + focal, forward + near, right + far, up, screen)
     this.ubo = new M.UniformBlock(gl, "Camera", 36);
+    this.own = { view: this.view, projection: this.projection, viewProjection: this.viewProjection, block: this.ubo.data, step: 0 };
   }
 
   static halfFov() {
@@ -94,6 +105,33 @@ export class Camera {
     this.width = width;
     this.height = height;
     this.dirty = true;
+  }
+
+  // the inputs of the matrices and the block (models/frame.ts's compute) as they stand, at a size when given (the frame's fork asks before applySize has set it) and with the step
+  // clock's inputs when given (the frame's step is computed with the matrices; the camera's own update does not use it)
+  frameInput(width = this.width, height = this.height, clock?: { base: number; from: number; rate: number }, time = 0): FrameInput {
+    return {
+      width,
+      height,
+      pitch: this.pitch,
+      eyeHeight: this.eyeHeight,
+      yaw: this.yaw,
+      pitchShift: this.pitchShift,
+      eyeX: this.eyeX,
+      eyeShift: this.eyeShift,
+      near: this.near,
+      far: this.far,
+      halfFov: this.halfFov(),
+      base: clock ? clock.base : 0,
+      from: clock ? clock.from : 0,
+      rate: clock ? clock.rate : 1,
+      time,
+    };
+  }
+
+  // an answer made by a worker for the frame: update() uses it when its view inputs are the camera's own then, else makes the values itself
+  offer(answer: { input: FrameInput; output: FrameOutput }) {
+    this.answered = answer;
   }
 
   // the mouse parallax's offsets (the camera is dirty only when one changed)
@@ -118,15 +156,7 @@ export class Camera {
 
   // the axes of the view: the pitch, then the yaw about the vertical (turning right: forward towards +x)
   axes() {
-    const p = this.tilt();
-    const cp = Math.cos(p);
-    const sp = Math.sin(p);
-    if (this.yaw === 0) {
-      return { right: [1, 0, 0], up: [0, cp, sp], forward: [0, sp, -cp] };
-    }
-    const cy = Math.cos(this.yaw);
-    const sy = Math.sin(this.yaw);
-    return { right: [cy, 0, sy], up: [-sp * sy, cp, sp * cy], forward: [cp * sy, sp, -cp * cy] };
+    return Frame.axes(this.tilt(), this.yaw);
   }
 
   // where a place of the world is on the screen (pixels from the top left)
@@ -200,6 +230,7 @@ export class Camera {
   // its values for the shaders, when they changed
   update() {
     if (!this.dirty) {
+      this.answered = null;
       return;
     }
     this.dirty = false;
@@ -212,53 +243,24 @@ export class Camera {
       key[3] = this.height;
       this.baseVersion++;
     }
-    const eyeY = this.eyeY();
-    const f = 1 / Math.tan(this.halfFov());
-    const aspect = this.width / this.height;
-    const a = this.axes();
-    const rows = [a.right, a.up, a.forward.map((c) => -c)];
-    const view = this.view;
-    view.fill(0);
-    for (let r = 0; r < 3; r++) {
-      for (let c = 0; c < 3; c++) {
-        view[c * 4 + r] = rows[r][c];
-      }
-      view[12 + r] = -(rows[r][0] * this.eyeX + rows[r][1] * eyeY);
+    // (the matrices and the block: models/frame.ts's compute, the one function; an answer a worker made under this very input is copied in, else it is made here, in place)
+    const input = this.frameInput();
+    const answered = this.answered;
+    this.answered = null;
+    if (answered && Frame.sameView(answered.input, input)) {
+      this.taken++;
+      this.view.set(answered.output.view);
+      this.projection.set(answered.output.projection);
+      this.viewProjection.set(answered.output.viewProjection);
+      this.ubo.data.set(answered.output.block);
+    } else {
+      const own = this.own;
+      own.view = this.view;
+      own.projection = this.projection;
+      own.viewProjection = this.viewProjection;
+      own.block = this.ubo.data;
+      Frame.compute(input, own);
     }
-    view[15] = 1;
-    const n = this.near;
-    const far = this.far;
-    const proj = this.projection;
-    proj.fill(0);
-    proj[0] = f / aspect;
-    proj[5] = f;
-    proj[10] = (far + n) / (n - far);
-    proj[11] = -1;
-    proj[14] = (2 * far * n) / (n - far);
-    for (let col = 0; col < 4; col++) {
-      for (let row = 0; row < 4; row++) {
-        let s = 0;
-        for (let k = 0; k < 4; k++) {
-          s += proj[k * 4 + row] * view[col * 4 + k];
-        }
-        this.viewProjection[col * 4 + row] = s;
-      }
-    }
-    const d = this.ubo.data;
-    d.set(this.viewProjection, 0);
-    d[16] = this.eyeX;
-    d[17] = eyeY;
-    d[18] = 0;
-    d[19] = this.focal();
-    d.set(a.forward, 20);
-    d[23] = this.near;
-    d.set(a.right, 24);
-    d[27] = this.far;
-    d.set(a.up, 28);
-    d[31] = 0;
-    d[32] = this.width;
-    d[33] = this.height;
-    d[34] = Math.tan(this.halfFov() - this.tilt());
     this.ubo.upload();
   }
 

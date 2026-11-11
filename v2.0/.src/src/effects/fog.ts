@@ -87,6 +87,7 @@
 //   `QualityFog.Lod`) the refresh period grows to 32 sweeps and more octaves are read as their mean (`uDrop`). With lod off none applies.
 //
 // Changelog:
+// 2026-11-10: the frame's plan (uniform block values, the view decisions, the shade draws owed, the slices' periods and runs of slices built) is models/fogplan.ts's pure function, run here or asked of its worker in Fog.fork.
 // 2026-11-07: level of detail by the slice's physical level (QualityFog.Lod): the refresh period (to 32 sweeps) and the octaves read as their mean (uDrop) by level.
 // 2026-11-07: level of detail: the dense tail, the refresh by distance and the far octaves (Effect.lod).
 // 2026-11-06: the quality job "fog" (the slices are its units): slices past the water along a column's rays are held, not
@@ -112,6 +113,9 @@ import type { EffectQuality, QualityJob, QualityShared } from "../models/quality
 import type { QualityStatics, QualityParams } from "../models/quality/jobs";
 import type { FogQualityView } from "../models/quality/fog";
 import type { ParallaxOffsets } from "../models/mouseparallax";
+import { FogPlan } from "../models/fogplan";
+import type { FogPlanInput, FogPlanOutput } from "../models/fogplan";
+import type { JobTask } from "../platform/jobtask";
 import SEED_FRAGMENT_SOURCE from "../shaders/fog/seed_fragment.glsl";
 import BLUR_FRAGMENT_SOURCE from "../shaders/fog/blur_fragment.glsl";
 import FINISH_FRAGMENT_SOURCE from "../shaders/fog/finish_fragment.glsl";
@@ -157,7 +161,6 @@ const SHADE_NEAR = 0.5;
 // the volume's slices and the shadow grid's draws refreshed a second (a quarter of the volume and
 // one draw a frame at 24 frames a second); all of it after a gap in time of more than
 // REFRESH_GAP (s)
-const VOLUME_RATE = SLICES / QualityFog.SWEEP_SECONDS;
 const SHADE_RATE = 24;
 const REFRESH_GAP = 0.5;
 // the quality pool's id for the shade grid's static data (the noise's levels 3..7), apart from the jobs' effects' indices
@@ -388,7 +391,9 @@ export class Fog extends M.Effect {
   everyVersion: number;
   everyAcross: number;
   sweep: number;
-  refreshView: FogQualityView;
+  // the plan task (src/index.ts gives it; null: the plan is made inline) and the answer its fork got for the frame: the input it was asked with and the plan
+  planTask: JobTask<FogPlanInput, FogPlanOutput> | null;
+  answer: { input: FogPlanInput; output: FogPlanOutput } | null;
   qualityView: FogQualityView | null;
   sentBounds: boolean;
   ready: Uint8Array;
@@ -453,7 +458,8 @@ export class Fog extends M.Effect {
     this.everyVersion = -1;
     this.everyAcross = -1;
     this.sweep = 0;
-    this.refreshView = { inputs: { eyeY: 0, focal: 1, width: 1, height: 1, waterDrawn: false, sigma: 0, air: 0 }, pitch: 0, margin: MARGIN, across: 0, down: 0 };
+    this.planTask = null;
+    this.answer = null;
     this.qualityView = null;
     this.sentBounds = false;
     // the last refresh: its time, the view's version, where the next starts and the work owed
@@ -1093,31 +1099,13 @@ export class Fog extends M.Effect {
   // its values for this frame, and its pictures refreshed (after the camera's values)
   update(time: number) {
     const gl = this.gl;
-    const built = this.caps.floats && this.on && this.columns[0] > 0 && !!this.passes;
-    let shining = false;
-    for (let slot = 0; slot < SLOTS; slot++) {
-      shining = shining || (this.levels[slot] > 0 && this.shows(slot));
-    }
-    const d = this.ubo.data;
-    d[0] = this.sigma();
-    d[1] = time;
-    d[2] = !this.on ? -1 : built ? 1 : 0;
-    d[3] = built && shining ? 1 : 0;
-    d.set(this.colorMain, 4);
-    d.set(this.colorSecondary, 8);
-    d[12] = this.columns[0];
-    d[13] = this.columns[1];
-    d[14] = this.columns[2];
-    d[15] = MARGIN;
-    for (let slot = 0; slot < SLOTS; slot++) {
-      d[16 + slot] = this.shows(slot) ? this.levels[slot] / STRIKE_SCALE : 0;
-    }
-    d.set(this.boltColor, 20);
-    // (the tests' march's segments, given at run time: a loop of a constant count is unrolled by
-    // Direct3D's compiler through ANGLE)
-    d[23] = MARCH_SEGMENTS;
-    d.set(this.skyGain, 24);
-    d.set(this.moonGain, 28);
+    // the frame's plan (models/fogplan.ts): the answer its fork asked of the worker when it is for exactly these values, else the function run here
+    const input = this.planInput(time, false);
+    const answered = this.answer;
+    this.answer = null;
+    const plan = answered && FogPlan.same(answered.input, input) ? answered.output : FogPlan.plan(input);
+    const built = input.built;
+    this.ubo.data.set(plan.ubo);
     this.ubo.upload();
     if (!built) {
       return;
@@ -1127,18 +1115,16 @@ export class Fog extends M.Effect {
     if (!this.warmed) {
       this.warm();
     }
-    const settings = this.stale;
-    const passed = time - this.lastTime;
-    const jump = Math.abs(passed) > REFRESH_GAP;
-    // (the view moved: its base changed, or the mouse parallax's offsets drifted past the tolerance of the view the volume and the shade were built for; a smaller drift only
-    // goes on with the slices' own refresh, which reads the view as it is then)
+    // (the plan's decisions: a setting's change, a gap in time, the view moved (its base changed, or the mouse parallax's offsets drifted past the tolerance of the view the volume
+    // and the shade were built for; a smaller drift only goes on with the slices' own refresh, which reads the view as it is then), the shade grid baked by the workers or by the
+    // GPU alone (a change of that path is a whole new bake, as a setting's change is))
+    const settings = plan.settings;
+    const jump = plan.jump;
     const camera = this.camera;
-    const moved = camera.baseVersion !== this.baseSeen || M.MouseParallax.farFrom(camera, this.builtFor);
-    // (the shade grid baked by the workers or by the GPU alone: a change of that path is a whole new bake, as a setting's change is)
-    const cpu = this.lod && this.shadeSched !== null;
-    const switched = cpu !== this.shadeCpu;
+    const moved = plan.moved;
+    const cpu = plan.cpu;
     this.shadeCpu = cpu;
-    const view = settings || jump || moved || switched;
+    const view = plan.view;
     this.stale = false;
     this.lastTime = time;
     this.cameraVersion = this.camera.version;
@@ -1159,7 +1145,6 @@ export class Fog extends M.Effect {
     // the clouds' shadow of the sky and the moon (fixed in the world, baked over the view): the
     // draws of its layers the time passed owes, all of them after a gap, a setting's change or a
     // change of the view
-    const draws = this.shadeDraws.length;
     let owed: number;
     if (cpu) {
       // Effect.lod on with the workers: the draws the schedule owes, uploaded from their worker's reply when it is whole and current, baked by the GPU
@@ -1186,20 +1171,16 @@ export class Fog extends M.Effect {
       }
       this.postShade();
       // (the earlier path's state, when it takes over again: from draw 0 with no credit)
-      this.shadeCredit = 0;
-      this.shadePart = 0;
+      this.shadeCredit = plan.shadeCredit;
+      this.shadePart = plan.shadePart;
     } else {
-      this.shadeCredit += view ? 0 : Math.max(0, passed) * SHADE_RATE;
-      owed = view ? draws : Math.min(draws, Math.floor(this.shadeCredit + 1e-6));
-      this.shadeCredit = view ? 0 : Math.max(0, this.shadeCredit - owed);
-      const shadeFrom = view ? 0 : this.shadePart;
-      for (let n = 0; n < owed; ) {
-        const from = (shadeFrom + n) % draws;
-        const to = Math.min(draws, from + owed - n);
-        this.bake("fog shade", passes.shade, this.shadeDraws, from, to, -1);
-        n += to - from;
+      // (the runs of draws the plan owes)
+      owed = plan.owed;
+      for (let i = 0; i < plan.shadeBakes.length; i += 2) {
+        this.bake("fog shade", passes.shade, this.shadeDraws, plan.shadeBakes[i], plan.shadeBakes[i + 1], -1);
       }
-      this.shadePart = (shadeFrom + owed) % draws;
+      this.shadeCredit = plan.shadeCredit;
+      this.shadePart = plan.shadePart;
     }
     // the strikes' grids baked ahead: the schedule's view of the frame (a setting's change drops them all), its jobs posted
     if (this.strikeSched && this.lod) {
@@ -1244,24 +1225,21 @@ export class Fog extends M.Effect {
     }
     // the fog's volume: the slices the time passed owes (from where the last frame stopped), all
     // of them when the view changed
-    this.sliceCredit += view ? 0 : Math.max(0, passed) * VOLUME_RATE;
-    const slices = view ? SLICES : Math.min(SLICES, Math.floor(this.sliceCredit + 1e-6));
-    this.sliceCredit = view ? 0 : Math.max(0, this.sliceCredit - slices);
-    const sliceFrom = view ? 0 : this.sliceNext;
+    // (the plan's slices: the periods made again when the view's numbers changed, the runs of slices due built, a sweep done counted)
+    const slices = plan.slices;
+    const sliceFrom = plan.sliceFrom;
+    this.sliceCredit = plan.sliceCredit;
+    this.every.set(plan.every);
+    this.drop.set(plan.drop);
+    this.everyVersion = plan.everyVersion;
+    this.everyAcross = plan.everyAcross;
     this.testValues(passes.volume);
-    this.setEvery(view);
-    let drawn = 0;
-    for (let n = 0; n < slices; ) {
-      const from = (sliceFrom + n) % SLICES;
-      const to = Math.min(SLICES, from + slices - n);
-      drawn += this.buildDue(from, to, view, passes);
-      // (a sweep done: the slices refreshed every N-th one count it)
-      if (to === SLICES) {
-        this.sweep++;
-      }
-      n += to - from;
+    for (let i = 0; i < plan.runs.length; i += 2) {
+      this.light.build("fog volume", passes.volume, passes.copy, plan.runs[i], plan.runs[i + 1], 0, this.heldNow, this.lod ? this.drop : null);
     }
-    this.sliceNext = (sliceFrom + slices) % SLICES;
+    const drawn = plan.drawn;
+    this.sweep = plan.sweep;
+    this.sliceNext = plan.sliceNext;
     // (stages 4 and 5: its light in the fog, a half of its slices each; then done)
     let gatheredNow = 0;
     if (active >= 0) {
@@ -1283,65 +1261,78 @@ export class Fog extends M.Effect {
     this.refreshed.strikeSlots = gatheredNow;
   }
 
-  // the slices' refresh periods for the view (the camera's focal and size, the volume's columns): made again only when they change;
-  // every slice every sweep with lod off
-  setEvery(all: boolean) {
+  // the frame's values and the state the plan (models/fogplan.ts) works from; `copy`: the arrays and objects copied, for an input kept to be compared (the fork's)
+  planInput(time: number, copy: boolean): FogPlanInput {
     const c = this.camera;
-    if (!this.lod) {
-      this.every.fill(1);
-      this.drop.fill(0);
-      this.everyVersion = -1;
-      return;
+    const built = this.caps.floats && this.on && this.columns[0] > 0 && !!this.passes;
+    const strike: number[] = [];
+    let shining = false;
+    for (let slot = 0; slot < SLOTS; slot++) {
+      const shown = this.shows(slot);
+      shining = shining || (this.levels[slot] > 0 && shown);
+      strike.push(shown ? this.levels[slot] : 0);
     }
-    if (!all && this.everyVersion === c.version && this.everyAcross === this.columns[0]) {
-      return;
-    }
-    const v = this.refreshView;
-    v.inputs.eyeY = c.eyeY();
-    v.inputs.focal = c.focal();
-    v.inputs.width = c.width;
-    v.inputs.height = c.height;
-    v.across = this.columns[0];
-    v.down = this.columns[1];
-    v.inputs.sigma = this.sigma();
-    v.inputs.air = AIR;
-    v.pitch = c.tilt();
-    // (by the slice's physical level: its transmittance bound; a held slice (level 0) is refreshed the least often: its mirrored volume
-    // is read behind the same fog)
-    for (let k = 0; k < SLICES; k++) {
-      const level = QualityFog.Lod.sliceLevel(v, k);
-      const n = QualityFog.Lod.levelRefresh(v, k, level);
-      this.every[k] = n > 0 ? n : QualityFog.Lod.LEVEL_REFRESH_MOST;
-      this.drop[k] = QualityFog.Lod.levelOctaves(v, k, level);
-    }
-    this.everyVersion = c.version;
-    this.everyAcross = this.columns[0];
+    const arrays = <T extends ArrayLike<number>>(a: T): T => (copy ? ((a as unknown as { slice(): T }).slice()) : a);
+    const offsets = (o: ParallaxOffsets): ParallaxOffsets => ({ yaw: o.yaw, pitchShift: o.pitchShift, eyeX: o.eyeX, eyeShift: o.eyeShift });
+    return {
+      time,
+      lastTime: this.lastTime,
+      stale: this.stale,
+      built,
+      sigma: this.sigma(),
+      on: this.on,
+      shining,
+      colorMain: arrays(this.colorMain),
+      colorSecondary: arrays(this.colorSecondary),
+      columns: this.columns.slice(),
+      margin: MARGIN,
+      strike,
+      strikeScale: STRIKE_SCALE,
+      boltColor: arrays(this.boltColor),
+      // (the tests' march's segments, given at run time: a loop of a constant count is unrolled by Direct3D's compiler through ANGLE)
+      marchSegments: MARCH_SEGMENTS,
+      skyGain: arrays(this.skyGain),
+      moonGain: arrays(this.moonGain),
+      lod: this.lod,
+      hasSched: this.shadeSched !== null,
+      shadeCpu: this.shadeCpu,
+      baseChanged: c.baseVersion !== this.baseSeen,
+      offsets: offsets(c),
+      builtFor: offsets(this.builtFor),
+      gap: REFRESH_GAP,
+      draws: this.shadeDraws.length,
+      shadeRate: SHADE_RATE,
+      shadeCredit: this.shadeCredit,
+      shadePart: this.shadePart,
+      sliceCredit: this.sliceCredit,
+      sliceNext: this.sliceNext,
+      sweep: this.sweep,
+      every: arrays(this.every),
+      drop: arrays(this.drop),
+      everyVersion: this.everyVersion,
+      everyAcross: this.everyAcross,
+      cameraVersion: c.version,
+      eyeY: c.eyeY(),
+      focal: c.focal(),
+      width: c.width,
+      height: c.height,
+      tilt: c.tilt(),
+      air: AIR,
+      waterDrawn: false,
+    };
   }
 
-  // whether slice k is built in this sweep
-  due(k: number, all: boolean): boolean {
-    return all || this.every[k] === 1 || (this.sweep + (k >> 3)) % this.every[k] === 0;
-  }
-
-  // slices from..to of one sweep built, those due: every slice on a full refresh, else the slices whose period divides the sweep's
-  // number shifted by their block of 8 (so the due ones come in runs); the others keep their last volume. Returns the slices built
-  buildDue(from: number, to: number, all: boolean, passes: FogPasses): number {
-    let built = 0;
-    let k = from;
-    while (k < to) {
-      if (!this.due(k, all)) {
-        k++;
-        continue;
-      }
-      let end = k + 1;
-      while (end < to && this.due(end, all)) {
-        end++;
-      }
-      this.light.build("fog volume", passes.volume, passes.copy, k, end, 0, this.heldNow, this.lod ? this.drop : null);
-      built += end - k;
-      k = end;
+  // the frame's plan asked of its worker with the frame's exact values (after the frame's advance, before the draw: Effect.fork), the draw waiting for the answer; update takes it when
+  // the values it gathers then are the same (the camera's size, a setting or a strike's light changed in between: it plans here instead)
+  fork(time: number): Promise<void> | null {
+    const task = this.planTask;
+    if (!task) {
+      return null;
     }
-    return built;
+    const input = this.planInput(time, true);
+    return task.ask(input).then((output) => {
+      this.answer = { input, output };
+    });
   }
 
   // the shadow grid's cells the view can read, for each draw of `layers` layers: the columns of
