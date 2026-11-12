@@ -26,8 +26,10 @@
 // qualityRainJob has the signature of a quality pool's job (statics, params, from, to, out).
 //
 // Changelog:
+// 2026-11-12: the drops' x over the spawn box's width (params.box, models/spawnbox.ts), was distance x SPAN.
 // 2026-11-06: new.
 // 2026-11-06: the pool's job kind "rain" registered.
+// 2026-11-12: the mirrored view's frustum is inputs.mirror's (the reflection's larger picture) when given.
 // 2026-11-06: the mirrored view's levels (units drops .. 2 drops-1, params.drops): the frustum only.
 // 2026-11-07: QualityRain.Lod: a trail's cell whose light is under LIGHT_CUT is not drawn (the rain's vertex shader, uLightCut).
 // 2026-11-07: QualityRain.Lod.trailCells (the trail's instances by level, TRAIL_KEEP) and fogOnce (one fog read from FOG_ONCE_DISTANCE).
@@ -63,6 +65,8 @@ export interface RainQualityParams {
   step: number;
   floor: FloorView;
   inputs: QualityFrame;
+  // the spawn box's sides (SpawnBox.halfWidth: min(span x z, slope x z + shift)); absent: the world's width (Camera.SPAN x z)
+  box?: { slope: number; shift: number };
 }
 
 // a drop's places at a step
@@ -83,10 +87,11 @@ export interface RainPlace {
   remnantX: number;
 }
 
-// the rain's place across in a fall (effects/rain.ts, Rain.x)
-function xOf(i: number, cycle: number, distance: number): number {
+// the rain's place across in a fall (effects/rain.ts, Rain.x): over the spawn box's width at the drop's distance
+function xOf(i: number, cycle: number, distance: number, box: { slope: number; shift: number } | undefined): number {
   const across = M.hash(((Math.imul(i, 2654435761) ^ Math.imul(cycle, 40503)) + RainLayout.SEED) >>> 0) / 4294967296;
-  return (across * 2 - 1) * distance * M.Camera.SPAN;
+  const span = M.Camera.SPAN;
+  return (across * 2 - 1) * (box ? M.SpawnBox.widthAt(box.slope, box.shift, span, distance) : distance * span);
 }
 
 function place(stat: RainQualityStatic, params: RainQualityParams, i: number, into: RainPlace): RainPlace {
@@ -100,7 +105,7 @@ function place(stat: RainQualityStatic, params: RainQualityParams, i: number, in
   const floorY = Floor.heightAt(f.kind, distance, f.eyeHeight, f.halfFov, f.pitch);
   const headY = RainLayout.headY(data, i, params.step, f);
   const cells = Math.min(stat.trail, head + 1);
-  into.x = xOf(i, cycle, distance);
+  into.x = xOf(i, cycle, distance, params.box);
   into.z = -distance;
   into.distance = distance;
   into.head = head;
@@ -109,7 +114,7 @@ function place(stat: RainQualityStatic, params: RainQualityParams, i: number, in
   into.topY = headY + cells * RainLayout.CELL;
   into.floorY = floorY;
   into.remnantTopY = head < stat.trail ? floorY + (stat.trail - head) * RainLayout.CELL : NaN;
-  into.remnantX = head < stat.trail ? xOf(i, cycle - 1, distance) : NaN;
+  into.remnantX = head < stat.trail ? xOf(i, cycle - 1, distance, params.box) : NaN;
   return into;
 }
 
@@ -213,13 +218,14 @@ function processChunk(stat: RainQualityStatic, params: RainQualityParams, drop0:
 // blur, no water, no rectangles)
 function setInputs(params: RainQualityParams, mirrored: boolean): void {
   const f = params.inputs;
-  UNITS.viewProjection = f.viewProjection;
+  const v = mirrored && f.mirror ? f.mirror : f;
+  UNITS.viewProjection = v.viewProjection;
   UNITS.eyeX = f.eyeX;
   UNITS.eyeY = f.eyeY;
   UNITS.eyeZ = f.eyeZ;
   UNITS.focal = f.focal;
-  UNITS.width = f.width;
-  UNITS.height = f.height;
+  UNITS.width = v.width;
+  UNITS.height = v.height;
   UNITS.sigma = mirrored ? 0 : f.sigma * FOG_SLACK;
   UNITS.air = mirrored ? 0 : f.air * FOG_SLACK;
   UNITS.waterDrawn = mirrored ? false : f.waterDrawn;

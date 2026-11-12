@@ -26,6 +26,21 @@ const vec3 MOON_BASE = vec3(${MOON.map((v) => v.toFixed(2)).join(", ")});
 #define SKY (SKY_BASE * fSkyGain.xyz)
 #define MOON (MOON_BASE * fMoonGain.xyz)
 const vec3 MOON_DIR = vec3(${MOON_DIR.map((v) => v.toFixed(2)).join(", ")});
+// the moon's disc: its angular radius and solid angle (pi r^2), and its radiance (the irradiance MOON over the solid angle)
+const float MOON_RADIUS = ${MOON_RADIUS.toFixed(6)};
+const float MOON_SOLID_ANGLE = ${MOON_SOLID_ANGLE.toExponential(6)};
+#define MOON_RADIANCE (MOON / MOON_SOLID_ANGLE)
+// the sky box's light on a surface with the unit normal n, per unit albedo: its flat walls' radiance SKY over the hemisphere above the horizon, the
+// cosine integral pi SKY (1 + n.y) / 2 over pi, times skyShade (the baked transmittance of the clouds towards the sky). For an upward normal it is
+// SKY x skyShade. (materials/sky.ts: SkyBox.diffuse)
+vec3 skyIrradiance(vec3 n, float skyShade) {
+  return SKY * ((1.0 + n.y) * 0.5) * skyShade;
+}
+// the baked sky's and moon's light on a surface with the unit normal n, per unit albedo, from the one read of the shade bake's two channels (shade.x
+// towards the sky, shade.y towards the moon): the sky box's term and the moon's MOON x max(n.m, 0) / pi (materials/sky.ts: SkyBox.glyphLight)
+vec3 glyphSkyMoonLight(vec3 n, vec2 shade) {
+  return skyIrradiance(n, shade.x) + MOON * max(dot(n, normalize(MOON_DIR)), 0.0) / PI * shade.y;
+}
 // the strikes' color (Lightning flash hue)
 #define BOLT (fBolt.rgb)
 const float SLICES = ${SLICES.toFixed(1)};

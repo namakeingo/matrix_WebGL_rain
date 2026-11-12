@@ -23,6 +23,7 @@
 // - compare(a, b): how many values of two arrays differ, and the first.
 //
 // Changelog:
+// 2026-11-12: the spawn plane the rain gives is the spawn box's top (comment only; the layout's arithmetic is unchanged).
 // 2026-11-05: the floor (the water's, or the bottom of the screen's): layout, restartOf, headY.
 // 2026-11-04: TypeScript, a module of src/models/ (was engine/rainlayout.js).
 import { M } from "../engine/core";
@@ -37,8 +38,8 @@ export interface LayoutInput {
   trail: number;
   // the floor the drops fall to (omitted: the water, y = 0)
   floor?: FloorView;
-  // the plane the falls start from, for React to music (omitted: the world's ceiling, whatever the camera): the top of the view (the eye's height, the pitch and the half
-  // field of view), not turned: 0 distance from the view's top at the nearest distance and at the furthest
+  // the plane the falls start from (omitted: the world's ceiling, whatever the camera): the rain gives the spawn box's top (models/spawnbox.ts: SpawnBox.planeEye and planePitch), and with
+  // React to music the top of the view (the eye's height, the pitch and the half field of view), not turned: 0 distance from the view's top at the nearest distance and at the furthest
   spawn?: SpawnPlane;
 }
 
@@ -220,7 +221,8 @@ const restartOf = (p: RestartParams, into: Partial<RestartArrays> = {}): Restart
 const compare = (a: ArrayLike<number>, b: ArrayLike<number>): CompareResult => {
   let wrong = 0;
   let first = -1;
-  for (let i = 0; i < a.length; i++) {
+  const common = Math.min(a.length, b.length);
+  for (let i = 0; i < common; i++) {
     if (a[i] !== b[i]) {
       wrong++;
       if (first < 0) {
@@ -228,11 +230,13 @@ const compare = (a: ArrayLike<number>, b: ArrayLike<number>): CompareResult => {
       }
     }
   }
+  // (a value one array has beyond the other's end differs, once)
   if (a.length !== b.length) {
     wrong += Math.abs(a.length - b.length);
-    first = first < 0 ? Math.min(a.length, b.length) : first;
+    first = first < 0 ? common : first;
   }
-  return { wrong, first, a: first >= 0 ? a[first] : 0, b: first >= 0 ? b[first] : 0 };
+  // (a value beyond an array's end reads 0)
+  return { wrong, first, a: first >= 0 ? (a[first] ?? 0) : 0, b: first >= 0 ? (b[first] ?? 0) : 0 };
 };
 
 export const RainLayout = { COUNT, CELL, SEED, SLOWEST, NONE, distanceAt, hashes, layout, restartOf, total, headY, falls, landed, nextLanding, firstFrom, compare };

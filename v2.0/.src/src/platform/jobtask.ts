@@ -10,6 +10,7 @@
 // serveJob is the worker's side: `{ type: "job", id, input }` answered with `{ type: "result", id, output }` (the output's transferables given by transferOf).
 //
 // Changelog:
+// 2026-11-11: the late answer of a job asked by `ask` (after its timeout) is dropped in arrive, no longer kept for take().
 // 2026-11-10: new.
 import { M } from "../engine/core";
 import { serveTask } from "./servetask";
@@ -71,6 +72,8 @@ export interface JobTaskOptions<I, O> extends TaskOptions {
 
 // the answers late in a row after which a worker is counted lost
 const LATE_LOST = 5;
+// the most ids of asked jobs remembered (the oldest dropped: a worker that never answers them)
+const ASKED_KEPT = 64;
 
 interface Waiter<I, O> {
   input: I;
@@ -90,6 +93,8 @@ export class JobTask<I, O> extends ThreadedTask<null, JobHandle> {
   private newest: JobResult<O> | null;
   private lastTaken: number;
   private flying: Set<number>;
+  // the ids of the jobs asked by `ask` and not answered: their answers (late, after a timeout) are dropped, never kept for take()
+  private asked: Set<number>;
 
   constructor(options: JobTaskOptions<I, O>) {
     super(null, options);
@@ -101,6 +106,7 @@ export class JobTask<I, O> extends ThreadedTask<null, JobHandle> {
     this.newest = null;
     this.lastTaken = 0;
     this.flying = new Set();
+    this.asked = new Set();
     this.late = 0;
     this.lateRun = 0;
     this.waiters = new Map();
@@ -116,6 +122,7 @@ export class JobTask<I, O> extends ThreadedTask<null, JobHandle> {
   // the jobs in flight are lost with the worker: the caller asks again
   protected dropped(): void {
     this.flying.clear();
+    this.asked.clear();
     // (the jobs a frame waits for: run here, so that no frame waits for a worker that is gone)
     for (const [id, w] of Array.from(this.waiters.entries())) {
       this.waiters.delete(id);
@@ -127,11 +134,15 @@ export class JobTask<I, O> extends ThreadedTask<null, JobHandle> {
   private arrive(id: number, output: O): void {
     this.flying.delete(id);
     const waiter = this.waiters.get(id);
+    const wasAsked = this.asked.delete(id);
     if (waiter) {
       this.waiters.delete(id);
       this.timers.clearTimeout(waiter.timer);
       this.lateRun = 0;
       waiter.resolve(output);
+      return;
+    }
+    if (wasAsked) {
       return;
     }
     if (id > this.lastTaken && (!this.newest || id > this.newest.id)) {
@@ -159,6 +170,10 @@ export class JobTask<I, O> extends ThreadedTask<null, JobHandle> {
       return Promise.resolve(this.fn(input));
     }
     const id = ++this.serial;
+    this.asked.add(id);
+    if (this.asked.size > ASKED_KEPT) {
+      this.asked.delete(this.asked.values().next().value as number);
+    }
     return new Promise<O>((resolve) => {
       const timer = this.timers.setTimeout(() => {
         const waiter = this.waiters.get(id);

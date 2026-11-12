@@ -3,8 +3,10 @@
 //   furthest distance along the water (DISTANCE_SIZE m over Font size Max and over Font size Min:
 //   16 and 1 give 2.5 and 40 m), over the world's width (Camera.SPAN, x / distance), as many per
 //   square metre everywhere (so more of them further away, where the width is greater), each
-//   falling from the world's ceiling at its distance (Camera.ceilingAt) to the water. Plane height
-//   changes only what the camera sees of them.
+//   falling from the spawn box's top at its distance (models/spawnbox.ts) to the water. The
+//   box is limited on each side to what the camera sees or could see: the view, and with the mouse
+//   parallax the view extended by the range its setting reaches; nothing is behind the eye (the
+//   world's width, Camera.SPAN, stays the fog's, the water's and the shade's grid).
 // - How many fall (the target): matrix_web_rain's, the drops in view, RAIN_SCALE x Density x the
 //   window's width in pixels x the average of 1 / font size over the sizes (its rainCount); the
 //   pool's drops falling are that over the share of the world's width the view takes.
@@ -79,6 +81,12 @@
 //   by column.
 //
 // Changelog:
+// 2026-11-12: the drops' last rows lift by the water's live height at their place (uWaterWaves, waterWaves; shaders/waves/lift.glsl, models/wavelift.ts), fading over the highest wave and one cell.
+// 2026-11-12: the glyphs' lights (the shade at the glyph and the strikes' light the fog gives, passed to the lit fragment shader: LIGHT_VERTEX_GLSL, uShade) and 3D Symbols (uSymbols3d, symbols3d).
+// 2026-11-12: spawnNow is the box's top with React to music too (the live view's top moved with the parallax's offsets and laid the drops out again).
+// 2026-11-12: the spawn box (models/spawnbox.ts): the drops' x over its width at their distance (uSpawn in shaders/rain/cell.glsl, was distance x SPAN), their falls start from its top (spawnNow), setSpawnBox (its inputs, recorded wheel settings).
+// 2026-11-11: setQuality's mean level is over the drops with a level above 0 (a woken drop at level 0 no longer dilutes it); rateChanged, setWave, setMusicLight, despawn, wake, setLife, dirty and schedule keep no view in their recorded call (they do not read it).
+// 2026-11-11: drop() clears partReady too (a stale part's swap is not installed by a later packet).
 // 2026-11-10: with a driver (the splashes' task: RainDriver) the steps are made in the task's tick (models/rainsimtick.ts, on a worker when there is one), the calls made to the wheel kept in
 // order for it (RainCall), the layout's fields set together (installLayout), the colours set by setColor.
 // 2026-11-10: the landings wheel and the state it keeps moved to a pure model (models/rainwheel.ts, RainWheel), which the rain delegates to: the view is copied to it before each call, the
@@ -100,6 +108,8 @@ import { fill } from "../engine/glsl";
 import CELL_SOURCE from "../shaders/rain/cell.glsl";
 import VERTEX_SOURCE from "../shaders/rain/vertex.glsl";
 import COLOR_SOURCE from "../shaders/rain/color.glsl";
+import WAVE_LIFT_SOURCE from "../shaders/waves/lift.glsl";
+import WAVE_GRID_SOURCE from "../shaders/waves/grid.glsl";
 import NEWEST_VERTEX_SOURCE from "../shaders/rain/newest_vertex.glsl";
 import NEWEST_FRAGMENT_SOURCE from "../shaders/rain/newest_fragment.glsl";
 import type { EffectContext, SharedGlsl } from "../engine/effect";
@@ -164,10 +174,13 @@ const WHEEL_FIELDS = [
   "life", "layout", "slots", "nextInSlot", "inWheel", "active", "reach", "dirtyFirst", "dirtyLast", "lastStep", "wanted", "inView", "shares", "woken", "wokenCount", "fillPart", "fillFor",
   "musicCredit", "meanFall", "meanFallFor", "musicLight", "musicShown", "musicDeficit", "musicFree", "musicShowing", "musicOut", "musicAt", "staticAt", "trail", "time", "steady", "height",
   "width", "density", "fontMax", "fontMin", "layoutDirty", "layoutFloor", "layoutPitch", "layoutEye", "tiltResponsiveness", "wavePerStep", "waveStep", "wavePhase", "waveWidth", "waveSpeed",
-  "wave", "custom", "colors", "at", "landing", "wrongLandings",
+  "wave", "custom", "colors", "at", "landing", "wrongLandings", "boxPitch", "boxEyeHeight", "boxYaw", "boxPitchReach", "boxReachX", "boxReachY",
 ] as const;
 // the settings the render thread sets on the wheel through the rain's own fields: kept in order among the calls made to the wheel (RainCall "set") while a task keeps a copy of it
-const RECORDED_SETS: Record<string, boolean> = { width: true, height: true, density: true, fontMin: true, fontMax: true, steady: true, custom: true, tiltResponsiveness: true };
+const RECORDED_SETS: Record<string, boolean> = {
+  width: true, height: true, density: true, fontMin: true, fontMax: true, steady: true, custom: true, tiltResponsiveness: true,
+  boxPitch: true, boxEyeHeight: true, boxYaw: true, boxPitchReach: true, boxReachX: true, boxReachY: true,
+};
 
 // what the rain asks of the task that runs its steps (the splashes: effects/splashes.ts, src/index.ts gives it): whether it does (a task exists), whether the calls made to the wheel are
 // to be kept for it, and the rain's part of the frame given to it
@@ -243,6 +256,13 @@ export class Rain extends M.Effect {
   declare fontMax: number;
   declare fontMin: number;
   declare layoutDirty: boolean;
+  // the spawn box's inputs (models/spawnbox.ts, the wheel's scalars): the base tilt and eye's height, and the mouse parallax's reach (angles, metres)
+  declare boxPitch: number;
+  declare boxEyeHeight: number;
+  declare boxYaw: number;
+  declare boxPitchReach: number;
+  declare boxReachX: number;
+  declare boxReachY: number;
   // the floor, the pitch and the eye's height the layout in use was made for, with the mouse parallax's shift of it
   declare layoutFloor: FloorKind;
   declare layoutPitch: number;
@@ -255,6 +275,8 @@ export class Rain extends M.Effect {
   declare waveSpeed: number;
   declare wave: boolean;
   declare custom: boolean;
+  // the glyphs drawn with their relief (the setting "3D Symbols")
+  declare symbols3d: boolean;
   declare colors: Float32Array[];
   declare at: Partial<DropState>;
   declare landing: Partial<DropState>;
@@ -262,6 +284,8 @@ export class Rain extends M.Effect {
   declare wrongLandings: number;
   // the floor the drops fall to (models/floor.ts) as set
   floorKind: FloorKind;
+  // whether the water shows waves (Collision plane and Ripples on): the drops' last rows are lifted by the wave under them only then (uWaterWaves)
+  waterWaves: boolean;
   // React to music: the falls start from the top of the view (the spawn plane)
   tiltOn: boolean;
   layoutSpawn: SpawnPlane | null;
@@ -281,7 +305,7 @@ export class Rain extends M.Effect {
   // what qualityStatics last gave, and the parameters object qualityParams keeps
   sentLayout: Float32Array | null;
   sentTrail: number;
-  qualityParamValues: { drops: number; step: number; floor: { kind: string; eyeHeight: number; pitch: number; halfFov: number }; inputs: QualityViewInputs } | null;
+  qualityParamValues: { drops: number; step: number; floor: { kind: string; eyeHeight: number; pitch: number; halfFov: number }; inputs: QualityViewInputs; box: { slope: number; shift: number } } | null;
   listVersion: number;
   listBuffer!: WebGLBuffer;
   listArray!: WebGLVertexArrayObject;
@@ -293,6 +317,9 @@ export class Rain extends M.Effect {
   hashes: Uint32Array | null;
   covered: boolean;
   viewScale: number;
+  // (the tests' knobs of the glyphs' lit term: its gain, and a normal in place of the glyph's, [x, y, z, w] with w over 0)
+  litScale: number;
+  litNormal: Float32Array;
   nextTrail: number;
   head: number;
   relay: boolean;
@@ -327,6 +354,7 @@ export class Rain extends M.Effect {
     // a new layout owed (a setting that lays the drops out again), and the layout's upload owed
     this.relay = false;
     this.floorKind = "water";
+    this.waterWaves = true;
     this.tiltOn = false;
     this.layoutSpawn = null;
     this.head = M.GlyphAtlas.HEAD;
@@ -338,10 +366,13 @@ export class Rain extends M.Effect {
     this.steady = false;
     // (the tests' scale of the characters' light: with M.TEST only)
     this.viewScale = 1;
+    this.litScale = 1;
+    this.litNormal = new Float32Array(4);
     // whether the bolt covers what lies behind it this frame (Characters lightning: set by src/index.ts)
     this.covered = false;
     this.hashes = null;
     this.onlyDrop = -1;
+    this.symbols3d = true;
     this.headOnly = false;
     this.texture = null;
     this.lifeTexture = null;
@@ -375,7 +406,7 @@ export class Rain extends M.Effect {
 
   static programs(glsl: SharedGlsl): ProgramSources {
     return {
-      rain: [Rain.vertex(glsl, M.TEST), M.GlyphAtlas.fragment(glsl, M.TEST, true, true)],
+      rain: [Rain.vertex(glsl, M.TEST), M.GlyphAtlas.fragment(glsl, M.TEST, true, true, true)],
       rainNewest: [Rain.newestVertex(M.TEST), Rain.newestFragment(M.TEST)],
     };
   }
@@ -384,22 +415,23 @@ export class Rain extends M.Effect {
 
   static properties() {
     return {
-      p102_setting_FontSizeMin: (rain: Rain, v: number) => rain.setFonts(v, rain.fontMax),
-      p103_setting_FontSizeMax: (rain: Rain, v: number) => rain.setFonts(rain.fontMin, v),
-      p104_setting_RainDensity: (rain: Rain, v: number) => {
+      p102_setting_3DSymbols: (rain: Rain, v: boolean) => (rain.symbols3d = v),
+      p103_setting_FontSizeMin: (rain: Rain, v: number) => rain.setFonts(v, rain.fontMax),
+      p104_setting_FontSizeMax: (rain: Rain, v: number) => rain.setFonts(rain.fontMin, v),
+      p105_setting_RainDensity: (rain: Rain, v: number) => {
         rain.density = v;
         rain.retarget();
       },
-      p105_setting_HeadBrightness: (rain: Rain, v: number) => (rain.head = v / 100),
-      p109_setting_CustomColors: (rain: Rain, v: boolean) => (rain.custom = v),
-      p110_setting_Color1: (rain: Rain, v: string) => rain.setColor(0, M.color(v)),
-      p111_setting_Color2: (rain: Rain, v: string) => rain.setColor(1, M.color(v)),
-      p112_setting_Color3: (rain: Rain, v: string) => rain.setColor(2, M.color(v)),
-      p113_setting_Color4: (rain: Rain, v: string) => rain.setColor(3, M.color(v)),
-      p114_setting_ColorWave: (rain: Rain, v: boolean) => rain.setWave(v, rain.waveSpeed, rain.waveWidth),
-      p115_setting_WaveSpeed: (rain: Rain, v: number) => rain.setWave(rain.wave, v / 100, rain.waveWidth),
-      p116_setting_WaveWidth: (rain: Rain, v: number) => rain.setWave(rain.wave, rain.waveSpeed, v / 100),
-      p118_setting_TrailLength: (rain: Rain, v: number) => rain.setTrail(Math.max(1, Math.round(v * TRAIL_PER_LENGTH))),
+      p106_setting_HeadBrightness: (rain: Rain, v: number) => (rain.head = v / 100),
+      p110_setting_CustomColors: (rain: Rain, v: boolean) => (rain.custom = v),
+      p111_setting_Color1: (rain: Rain, v: string) => rain.setColor(0, M.color(v)),
+      p112_setting_Color2: (rain: Rain, v: string) => rain.setColor(1, M.color(v)),
+      p113_setting_Color3: (rain: Rain, v: string) => rain.setColor(2, M.color(v)),
+      p114_setting_Color4: (rain: Rain, v: string) => rain.setColor(3, M.color(v)),
+      p115_setting_ColorWave: (rain: Rain, v: boolean) => rain.setWave(v, rain.waveSpeed, rain.waveWidth),
+      p116_setting_WaveSpeed: (rain: Rain, v: number) => rain.setWave(rain.wave, v / 100, rain.waveWidth),
+      p117_setting_WaveWidth: (rain: Rain, v: number) => rain.setWave(rain.wave, rain.waveSpeed, v / 100),
+      p119_setting_TrailLength: (rain: Rain, v: number) => rain.setTrail(Math.max(1, Math.round(v * TRAIL_PER_LENGTH))),
     };
   }
 
@@ -415,6 +447,9 @@ export class Rain extends M.Effect {
       uFogMirror: M.UNITS.fogMirror,
       uStrikeDirect: M.UNITS.strikeDirect,
       uStrikeMirror: M.UNITS.strikeMirror,
+      uShade: M.UNITS.shade,
+      // (the clouds' noise, declared by the medium GLSL the shade read is in: a sampler left on unit 0 beside another sampler type makes the draw fail)
+      uNoise: M.UNITS.noise,
       uBoltCover: M.UNITS.boltCover,
       uBoltNear: M.UNITS.boltNear,
     });
@@ -459,6 +494,7 @@ export class Rain extends M.Effect {
     this.layGeneration++;
     this.pending = null;
     this.ready = null;
+    this.partReady = null;
   }
 
   // the trail's cells (the drops laid out again for them, from a clean screen: in the next
@@ -514,6 +550,7 @@ export class Rain extends M.Effect {
     let mirrorCount = 0;
     let drawn = 0;
     let sum = 0;
+    let seen = 0;
     let top = 0;
     for (let i = 0; i < this.reach; i++) {
       if (i >= n) {
@@ -530,6 +567,7 @@ export class Rain extends M.Effect {
         list[count++] = this.lod ? i | (M.QualityRain.Lod.trailCells(level, this.trail) << CELLS_SHIFT) : i;
         drawn++;
         sum += level;
+        seen++;
         if (level > top) {
           top = level;
         }
@@ -541,7 +579,8 @@ export class Rain extends M.Effect {
     q.units = n;
     q.drawn = drawn;
     q.level = top;
-    q.meanLevel = drawn > 0 ? sum / drawn : 0;
+    // (the mean over the drops with a level: a woken drop at level 0 is drawn but has no level to average)
+    q.meanLevel = seen > 0 ? sum / seen : 0;
     q.visible = drawn > 0;
     this.dropCount = count;
     this.mirrorCount = mirrorCount;
@@ -569,7 +608,7 @@ export class Rain extends M.Effect {
   qualityParams(shared: QualityShared): QualityParams {
     let p = this.qualityParamValues;
     if (!p) {
-      p = this.qualityParamValues = { drops: 0, step: 0, floor: { kind: "water", eyeHeight: 0, pitch: 0, halfFov: 0 }, inputs: shared.inputs };
+      p = this.qualityParamValues = { drops: 0, step: 0, floor: { kind: "water", eyeHeight: 0, pitch: 0, halfFov: 0 }, inputs: shared.inputs, box: { slope: 0, shift: 0 } };
     }
     const camera = this.camera;
     p.drops = this.qualityDrops();
@@ -579,6 +618,9 @@ export class Rain extends M.Effect {
     p.floor.pitch = this.layoutPitch;
     p.floor.halfFov = camera.halfFov();
     p.inputs = shared.inputs;
+    const box = this.wheel.box();
+    p.box.slope = box.slope;
+    p.box.shift = box.shift;
     return p as unknown as QualityParams;
   }
 
@@ -600,13 +642,27 @@ export class Rain extends M.Effect {
     this.tiltResponsiveness = responsiveness;
   }
 
-  // the plane the falls start from now: the world's ceiling (null), or with React to music the top of the view, raised at the nearest distance by a part of the box's height there
-  spawnNow(): SpawnPlane | null {
-    if (!this.tiltOn) {
-      return null;
+  // the plane the falls start from now: the spawn box's top (the base view's tilt plus the parallax's pitch reach, the eye's height plus its reach), with React to music on or off:
+  // a plane that holds the parallax's whole reach does not move with its instantaneous offsets, so they never lay the drops out again
+  spawnNow(): SpawnPlane {
+    const box = this.wheel.box();
+    return { eyeHeight: box.planeEye, pitch: box.planePitch, halfFov: box.halfFov };
+  }
+
+  // the spawn box's inputs (src/index.ts, each frame): the camera's base tilt and eye's height (never the parallax's live offsets) and the range the mouse parallax reaches (zero
+  // with the parallax off); a change is a recorded setting of the wheel (the splashes' worker's copy has it in order) and the drops counted again; the layout's top follows through
+  // spawnNow (the layout owed when the top moved past the tolerance)
+  setSpawnBox(pitch: number, eyeHeight: number, reach: { yaw: number; pitch: number; eyeX: number; eyeY: number }): void {
+    if (this.boxPitch === pitch && this.boxEyeHeight === eyeHeight && this.boxYaw === reach.yaw && this.boxPitchReach === reach.pitch && this.boxReachX === reach.eyeX && this.boxReachY === reach.eyeY) {
+      return;
     }
-    const camera = this.camera;
-    return { eyeHeight: camera.eyeY(), pitch: camera.tilt(), halfFov: camera.halfFov() };
+    this.boxPitch = pitch;
+    this.boxEyeHeight = eyeHeight;
+    this.boxYaw = reach.yaw;
+    this.boxPitchReach = reach.pitch;
+    this.boxReachX = reach.eyeX;
+    this.boxReachY = reach.eyeY;
+    this.retarget();
   }
 
   // the layout owed (one for any number of settings changed since): asked of the worker, or
@@ -766,13 +822,13 @@ export class Rain extends M.Effect {
 
   // the steps' rate changed (Speed, src/index.ts's): the wave goes on from where it is at the new rate
   rateChanged() {
-    this.rec("rateChanged", []);
+    this.rec("rateChanged", [], false);
     this.wheel.rateChanged();
   }
 
   // the wave: on or off, its speed and width; its phase going on from where it is (a step of the rain's), at the steps' rate now
   setWave(on: boolean, speed: number, width: number) {
-    this.rec("setWave", [on, speed, width]);
+    this.rec("setWave", [on, speed, width], false);
     this.wheel.setWave(on, speed, width);
   }
 
@@ -813,7 +869,7 @@ export class Rain extends M.Effect {
 
   // the drops' light emittance across the window (the multiple of their light by bin, left to right; null: none)
   setMusicLight(light: Float32Array | null) {
-    this.rec("setMusicLight", [light ? light.slice() : null]);
+    this.rec("setMusicLight", [light ? light.slice() : null], false);
     this.wheel.setMusicLight(light);
   }
 
@@ -846,12 +902,12 @@ export class Rain extends M.Effect {
   }
 
   despawn(i: number, cycle: number) {
-    this.rec("despawn", [i, cycle]);
+    this.rec("despawn", [i, cycle], false);
     this.wheel.despawn(i, cycle);
   }
 
   wake(i: number, step: number, phase: number, cycle: number, mask: number) {
-    this.rec("wake", [i, step, phase, cycle, mask]);
+    this.rec("wake", [i, step, phase, cycle, mask], false);
     this.wheel.wake(i, step, phase, cycle, mask);
   }
 
@@ -879,12 +935,12 @@ export class Rain extends M.Effect {
   }
 
   setLife(i: number, first: number, end: number, again: number) {
-    this.rec("setLife", [i, first, end, again]);
+    this.rec("setLife", [i, first, end, again], false);
     this.wheel.setLife(i, first, end, again);
   }
 
   dirty(i: number) {
-    this.rec("dirty", [i]);
+    this.rec("dirty", [i], false);
     this.wheel.dirty(i);
   }
 
@@ -973,7 +1029,7 @@ export class Rain extends M.Effect {
   }
 
   schedule(i: number, step: number) {
-    this.rec("schedule", [i, step]);
+    this.rec("schedule", [i, step], false);
     this.wheel.schedule(i, step);
   }
 
@@ -1140,6 +1196,8 @@ export class Rain extends M.Effect {
       gl.uniform1i(u.uOnlyDrop, this.onlyDrop);
       gl.uniform1i(u.uHeadOnly, this.headOnly ? 1 : 0);
       gl.uniform1f(u.uViewScale, this.viewScale);
+      gl.uniform1f(u.uLitScale, this.litScale);
+      gl.uniform4fv(u.uLitNormal, this.litNormal);
     }
     gl.uniform3fv(u.uColor1, this.colors[0]);
     gl.uniform3fv(u.uColor2, this.colors[1]);
@@ -1159,10 +1217,15 @@ export class Rain extends M.Effect {
     gl.uniform1f(u.uWavePerStep, this.wavePerStep);
     gl.uniform1f(u.uHead, this.head);
     gl.uniform1f(u.uFloor, this.layoutFloor === "screen" ? 1 : 0);
+    gl.uniform1f(u.uWaterWaves, this.waterWaves && this.layoutFloor !== "screen" ? 1 : 0);
+    // (the spawn box's sides: the half width over z and the metres added, the drops' place across)
+    const box = this.wheel.box();
+    gl.uniform2f(u.uSpawn, box.slope, box.shift);
     // (the newest characters' program: the frame's values; drawNewest sets each step's)
     const n = this.newest.use();
     gl.uniform1i(n.uGlyphs, this.atlas.count);
     gl.uniform1f(n.uFloor, this.layoutFloor === "screen" ? 1 : 0);
+    gl.uniform2f(n.uSpawn, box.slope, box.shift);
     gl.uniform3fv(n.uColor1, this.colors[0]);
     gl.uniform3fv(n.uColor2, this.colors[1]);
     gl.uniform3fv(n.uColor3, this.colors[2]);
@@ -1262,6 +1325,7 @@ export class Rain extends M.Effect {
     gl.uniform1f(u.uFogOnce, this.lod && !mirror ? M.QualityRain.Lod.FOG_ONCE_DISTANCE : 0);
     gl.uniform1f(u.uLightCut, this.lod && !mirror ? M.QualityRain.Lod.LIGHT_CUT : 0);
     gl.uniform1i(u.uCovered, this.covered ? 1 : 0);
+    gl.uniform1i(u.uSymbols3d, this.symbols3d ? 1 : 0);
     M.GlyphAtlas.setNearness(gl, u, mirror ? null : this.nearness);
     const name = mirror ? "rain mirrored" : "rain";
     const chunk = this.guard.size(name, "chunk");
@@ -1337,10 +1401,12 @@ Rain.DISTANCE_SIZE = DISTANCE_SIZE;
 // a drop's cells: its layout (from uDrops) and its life (from uLife), and at a step the cell it
 // drew age steps ago (in this fall, or in the last one: its trail where it landed), whether its
 // fall shows, and its place across in a fall (new for every fall); after M.HASH_GLSL
+// the lift's GLSL (WaveLift): the waves' switch, the reach and the share over the floor
+const WAVE_LIFT_GLSL = fill(WAVE_LIFT_SOURCE, { "GRID_GLSL": WAVE_GRID_SOURCE, "WAVE_CALM": M.WaveLift.CALM.toFixed(6) });
 const CELL_GLSL = fill(CELL_SOURCE, { "CELL.toFixed(4)": CELL.toFixed(4), "SEED": SEED, "M.Camera.SPAN.toFixed(4)": M.Camera.SPAN.toFixed(4), "DROPS_ACROSS": DROPS_ACROSS });
 
 // (test: with the tests' uniforms, only one drop or only the heads drawn)
-Rain.vertex = (glsl, test) => fill(VERTEX_SOURCE, { "TEST_VIEWS": test ? "#define TEST_VIEWS" : "", "M.Camera.GLSL": M.Camera.GLSL, "glsl.fog": glsl.fog, "M.GlyphAtlas.VERTEX_GLSL": M.GlyphAtlas.VERTEX_GLSL, "M.HASH_GLSL": M.HASH_GLSL, "CELL_GLSL": CELL_GLSL, "WAVE_SCREEN.toFixed(6)": WAVE_SCREEN.toFixed(6), "COLOR_GLSL": COLOR_SOURCE });
+Rain.vertex = (glsl, test) => fill(VERTEX_SOURCE, { "TEST_VIEWS": test ? "#define TEST_VIEWS" : "", "M.Camera.GLSL": M.Camera.GLSL, "WAVE_LIFT_GLSL": WAVE_LIFT_GLSL, "glsl.fog": glsl.fog, "glsl.medium": glsl.medium, "glsl.shade": glsl.shade, "M.GlyphAtlas.VERTEX_GLSL": M.GlyphAtlas.VERTEX_GLSL, "M.GlyphAtlas.LIGHT_VERTEX_GLSL": M.GlyphAtlas.LIGHT_VERTEX_GLSL, "M.HASH_GLSL": M.HASH_GLSL, "CELL_GLSL": CELL_GLSL, "WAVE_SCREEN.toFixed(6)": WAVE_SCREEN.toFixed(6), "COLOR_GLSL": COLOR_SOURCE });
 // (the newest characters' shaders: drawNewest)
 Rain.newestVertex = (test) => fill(NEWEST_VERTEX_SOURCE, { "TEST_VIEWS": test ? "#define TEST_VIEWS" : "", "M.Camera.GLSL": M.Camera.GLSL, "M.HASH_GLSL": M.HASH_GLSL, "CELL_GLSL": CELL_GLSL, "WAVE_SCREEN.toFixed(6)": WAVE_SCREEN.toFixed(6), "COLOR_GLSL": COLOR_SOURCE });
 Rain.newestFragment = (test) => fill(NEWEST_FRAGMENT_SOURCE, { "TEST_VIEWS": test ? "#define TEST_VIEWS" : "" });

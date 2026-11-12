@@ -27,6 +27,7 @@
 // levels. qualityBoltJob has the signature of a quality pool's job (statics, params, from, to, out).
 //
 // Changelog:
+// 2026-11-12: the mirrored units' frustum is inputs.mirror's (the reflection's larger picture) when given.
 // 2026-11-06: new.
 // 2026-11-07: LOD of the band's tail (tailEpsTable, tailEnd, peakOf, bellSum, profileReachTo, extentLevel).
 // 2026-11-07: the characters' units after the pieces' 2n (direct, then mirrored): culled exactly for the quad (the 12 corners of the path all outside one
@@ -269,10 +270,10 @@ function glyphRange(stat: BoltQualityStatic, params: BoltQualityParams, from: nu
     return;
   }
   const f = params.inputs;
-  const vp = f.viewProjection;
   const g = Math.floor(pts.length / GLYPH_UNIT_FLOATS);
   for (let u = from; u < to; u++) {
     const mirrored = u >= g;
+    const vp = mirrored && f.mirror ? f.mirror.viewProjection : f.viewProjection;
     const o = (mirrored ? u - g : u) * GLYPH_UNIT_FLOATS;
     const flip = mirrored ? -1 : 1;
     const w = pts[o + 9];
@@ -414,6 +415,11 @@ function process(stat: BoltQualityStatic, params: BoltQualityParams, from: numbe
     const m = Math.min(CHUNK, to - first, mirrored ? 2 * n - first : n - first);
     const flip = mirrored ? -1 : 1;
     const base = mirrored ? first - n : first;
+    // (the mirror images' frustum: the reflection's larger picture when given; the depths, the w row, are the same)
+    const v = mirrored && f.mirror ? f.mirror : f;
+    UNITS.viewProjection = v.viewProjection;
+    UNITS.width = v.width;
+    UNITS.height = v.height;
     for (let j = 0; j < m; j++) {
       const i = base + j;
       const o = i * 6;

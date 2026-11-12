@@ -31,6 +31,8 @@
 // (materials/drops.ts).
 //
 // Changelog:
+// 2026-11-12: the relief of 3D Symbols (RELIEF_GLSL, uSymbols3d: the ink read at the parallax's uv), and the lit variant (LIT: the glyph's colour x the sky's, the moon's and the strikes'
+//   light added to its emission, in the same pass).
 // 2026-11-04: TypeScript, a module of src/engine/ (was engine/glyphs.js); the drawing moved to
 //   models/atlas.ts (drawBatch, SIZE, BATCH), the head's whitening and gain to materials/drops.ts.
 // 2026-11-03: the characters drawn in the scene's worker (drawBatch on its OffscreenCanvas), the
@@ -45,6 +47,9 @@ import VERTEX_SOURCE from "../shaders/glyphs/vertex.glsl";
 import FRAGMENT_SOURCE from "../shaders/glyphs/fragment.glsl";
 import COLOR_UNIFORM_SOURCE from "../shaders/glyphs/color_uniform.glsl";
 import COLOR_VERTEX_SOURCE from "../shaders/glyphs/color_vertex.glsl";
+import LIGHT_VERTEX_SOURCE from "../shaders/glyphs/light_vertex.glsl";
+import RELIEF_SOURCE from "../shaders/glyphs/relief.glsl";
+import { GlyphRelief } from "../models/glyphrelief";
 import { SIZE, BATCH, drawBatch } from "../models/atlas";
 import type { AtlasContext } from "../models/atlas";
 import { HEAD, HEAD_GAIN } from "../materials/drops";
@@ -67,7 +72,9 @@ export class GlyphAtlas {
   static setNearness: (gl: WebGL2RenderingContext, u: Uniforms, nearFar: ArrayLike<number> | null) => void;
   static VERTEX_GLSL: string;
   static HEAD: number;
-  static fragment: (glsl: { waves: string }, test: boolean, vertexColor?: boolean, covered?: boolean) => string;
+  static fragment: (glsl: { waves: string; fog?: string }, test: boolean, vertexColor?: boolean, covered?: boolean, lit?: boolean) => string;
+  static RELIEF_GLSL: string;
+  static LIGHT_VERTEX_GLSL: string;
   static NEAR_SCALE: number;
   waiting: boolean;
   generation: number;
@@ -234,6 +241,9 @@ GlyphAtlas.DEFAULT_SYMBOLS = DEFAULT_SYMBOLS;
 // - what the fog lets through to a corner (world, at clip; mirrored: from the mirrored volume)
 GlyphAtlas.VERTEX_GLSL = VERTEX_SOURCE;
 
+// the lit glyphs' vertex GLSL (the rain's and the splashes': after Fog.SHADE_GLSL): the baked shade at a place, the fog's strike light, the light's bound
+GlyphAtlas.LIGHT_VERTEX_GLSL = LIGHT_VERTEX_SOURCE;
+
 GlyphAtlas.HEAD = HEAD;
 GlyphAtlas.NEAR_SCALE = NEAR_SCALE;
 GlyphAtlas.COVER_BEHIND = COVER_BEHIND;
@@ -241,8 +251,13 @@ GlyphAtlas.COVER_BEHIND = COVER_BEHIND;
 // the characters' fragment shader, with the camera and the waves (whose GLSL it is given; test:
 // their light scaled by uViewScale, so a test can read light past 1); their colour from their
 // vertex shader (vertexColor: vColor, each drop's and splash's own) or a uniform (uColor);
-// covered: dimmed where the bolt covers them (see above)
-GlyphAtlas.fragment = (glsl, test, vertexColor, covered) => fill(FRAGMENT_SOURCE, { "TEST_VIEWS": test ? "#define TEST_VIEWS" : "", "COVERED": covered ? "#define COVERED" : "", "color": vertexColor ? COLOR_VERTEX_SOURCE : COLOR_UNIFORM_SOURCE, "M.Camera.GLSL": M.Camera.GLSL, "glsl.waves": glsl.waves, "M.Nearness.GLSL": M.Nearness.GLSL, "HEAD_GAIN.toFixed(1)": HEAD_GAIN.toFixed(1), "NEAR_SCALE.toFixed(1)": NEAR_SCALE.toFixed(1), "COVER_BEHIND.toFixed(3)": COVER_BEHIND.toFixed(3), "(covered ? M.Bolt.COVER : 0).toFixed(4)": (covered ? M.Bolt.COVER : 0).toFixed(4) });
+// covered: dimmed where the bolt covers them (see above); lit (the rain's and the splashes': glsl.fog given too): one term of the sky's, the moon's and the strikes' light the
+// glyph reflects added to its emission
+GlyphAtlas.fragment = (glsl, test, vertexColor, covered, lit) => fill(FRAGMENT_SOURCE, { "TEST_VIEWS": test ? "#define TEST_VIEWS" : "", "COVERED": covered ? "#define COVERED" : "", "LIT": lit ? "#define LIT" : "", "glsl.fog": lit ? glsl.fog! : "", "RELIEF_GLSL": GlyphAtlas.RELIEF_GLSL, "color": vertexColor ? COLOR_VERTEX_SOURCE : COLOR_UNIFORM_SOURCE, "M.Camera.GLSL": M.Camera.GLSL, "glsl.waves": glsl.waves, "M.Nearness.GLSL": M.Nearness.GLSL, "HEAD_GAIN.toFixed(1)": HEAD_GAIN.toFixed(1), "NEAR_SCALE.toFixed(1)": NEAR_SCALE.toFixed(1), "COVER_BEHIND.toFixed(3)": COVER_BEHIND.toFixed(3), "(covered ? M.Bolt.COVER : 0).toFixed(4)": (covered ? M.Bolt.COVER : 0).toFixed(4) });
+
+// the relief's GLSL (3D Symbols: the twin of models/glyphrelief.ts, with its constants; after the atlas sampler, uMirror and the camera block), in the characters' fragment shader and
+// the bolt's mask's
+GlyphAtlas.RELIEF_GLSL = fill(RELIEF_SOURCE, { "RELIEF.toFixed(4)": GlyphRelief.RELIEF.toFixed(4), "RELIEF_STEPS": GlyphRelief.STEPS, "RELIEF_VIEW_MIN.toFixed(4)": GlyphRelief.VIEW_MIN.toFixed(4), "RELIEF_SKIP_PX.toFixed(4)": GlyphRelief.SKIP_PX.toFixed(4), "RELIEF_NORMAL_FOOTPRINT.toFixed(4)": GlyphRelief.NORMAL_FOOTPRINT.toFixed(4), "RELIEF_ATLAS.toFixed(1)": SIZE.toFixed(1) });
 
 // the Nearness view in a program of the characters' fragment shader (nearFar: the rain's nearest
 // and furthest distances; null: off)

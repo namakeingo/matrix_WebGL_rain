@@ -7,6 +7,7 @@ uniform sampler2DArray uAtlas;
 uniform float uMirror;
 ${M.Camera.GLSL}
 ${glsl.waves}
+${M.GlyphAtlas.RELIEF_GLSL}
 in vec2 vUv;
 flat in int vGlyph;
 in float vLight;
@@ -17,7 +18,9 @@ layout(location = 1) out vec4 outCover;
 layout(location = 2) out vec4 outNear;
 const float NEAR_SCALE = ${NEAR_SCALE.toFixed(1)};
 void main() {
-  float ink = texture(uAtlas, vec3(vUv, float(vGlyph))).r;
+  // (3D Symbols: the depth offset only, the ink read at the parallax's uv; no light, so no normal)
+  float footprint = max(length(dFdx(vUv)), length(dFdy(vUv)));
+  float ink = uSymbols3d ? reliefAt(vUv, vGlyph, vWorld, footprint).ink : texture(uAtlas, vec3(vUv, float(vGlyph))).r;
   if (ink <= 0.0 || vCover <= 0.0 || (abs(vWorld.y) < highestWave() && abs(vWorld.y) < waveHeight(vec2(vWorld.x, -vWorld.z)))) discard;
   bool mirrored = uMirror < 0.0;
   float c = ink * vCover;

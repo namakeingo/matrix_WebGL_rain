@@ -52,7 +52,9 @@ Cell cellOf(int drop, uint step, int age) {
   c.since = uint(r - up);
   return c;
 }
+// the spawn box's sides (models/spawnbox.ts, SpawnBox.halfWidth): x = the half width over z, y = the metres added; the box is inside the world's width (SPAN)
+uniform vec2 uSpawn;
 float acrossOf(int drop, uint fall, float z) {
   float across = float(hash(((uint(drop) * 2654435761u) ^ (fall * 40503u)) + SEED)) / 4294967296.0;
-  return (across * 2.0 - 1.0) * z * SPAN;
+  return (across * 2.0 - 1.0) * min(z * SPAN, z * uSpawn.x + uSpawn.y);
 }

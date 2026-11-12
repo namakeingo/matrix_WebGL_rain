@@ -31,8 +31,12 @@
 // platform/renderlink.ts.
 //
 // Changelog:
+// 2026-11-12: Support.workers and Support.sceneWorker are set to "" when the first attempt of the bolt's or the scene's worker fails or is refused (no Worker), so the readout says "Workers: no".
+// 2026-11-12: the drops, the splashes and the strikes' feet rest on the waves' live height where the waves are stepped (applyWaterState gives them waterWaves; the quality units' margin is the highest wave read back).
+// 2026-11-12: the mirrored picture larger than the view (Reflection.MARGIN): the fog read through its pixels in drawMirrored, the water's margin, the quality inputs' mirrored frustum.
 // 2026-11-04: TypeScript, bundled (dist/bundle.js); the platforms, the shell, the renderer's
 //   worker and the tests' API in modules of their own; no scripts loaded (one bundle).
+// 2026-11-11: the lightning's onFailure reports an error of its asynchronous answers as the wallpaper's failure.
 import "./engine/core";
 import "./platform/renderlink";
 import "./engine/clock";
@@ -51,6 +55,7 @@ import "./models/waterstate";
 import "./models/watertone";
 import "./models/ripplespeed";
 import "./models/wavesteps";
+import "./models/wavelift";
 import "./models/quality/tasks";
 import "./models/quality/jobs";
 import "./models/quality/unit";
@@ -79,6 +84,8 @@ import "./models/musicfollower";
 import "./models/musicrain";
 import "./models/musicidle";
 import "./models/mouseparallax";
+import "./models/spawnbox";
+import "./models/glyphrelief";
 import "./platform/workers";
 import "./workers/sceneworker";
 import "./workers/boltworker";
@@ -323,6 +330,13 @@ export class Wallpaper implements WallpaperControl {
   parallaxMoving: boolean;
   // the tests' hold (the test API's setParallax): the camera's offsets set by hand are not replaced by the parallax worker's replies until the cursor is driven again (parallaxTo)
   parallaxHold: boolean;
+  // the spawn box's reach of the mouse parallax (followSpawnBox): the limits for the window's size, the reach for the setting, and what they were worked out for
+  spawnLimits: ParallaxLimits | null = null;
+  spawnReach: ParallaxLimits = { yaw: 0, pitch: 0, eyeX: 0, eyeY: 0 };
+  spawnSize = 0;
+  spawnOn = false;
+  spawnMode = "";
+  spawnAmount = -1;
   audioArray: Float32Array;
   audioSeq: number;
   audioSeen: number;
@@ -535,9 +549,12 @@ export class Wallpaper implements WallpaperControl {
     this.nearFar = new Float32Array(2);
     this.drawNothing = () => undefined;
     this.drawMirrored = () => {
+      // (the fog's volume read through the larger picture's pixels, and the view's again after)
+      this.fog.readMargin(this.reflection.frame);
       this.rain.draw(this.step, true);
       this.splashes.draw(this.step, true);
       this.bolt.draw(true);
+      this.fog.readMargin(null);
     };
   }
 
@@ -561,6 +578,12 @@ export class Wallpaper implements WallpaperControl {
     }
     if (this.water) {
       this.water.off = !this.waterState.waterDrawn;
+    }
+    // (the drops, the splashes and the strikes' feet rest on the waves' live height only where the waves are stepped: Collision plane and Ripples on)
+    for (const effect of [this.rain, this.splashes, this.bolt]) {
+      if (effect) {
+        effect.waterWaves = this.waterState.wavesStepped;
+      }
     }
   }
 
@@ -589,7 +612,7 @@ export class Wallpaper implements WallpaperControl {
   ownTable(): Record<string, OwnSetter> {
     const s = this.settings;
     return {
-      p108_setting_HDR: (v: boolean) => {
+      p109_setting_HDR: (v: boolean) => {
         s.hdr = !!v;
       },
       p615_setting_DebugMode: (v: boolean) => {
@@ -730,7 +753,7 @@ export class Wallpaper implements WallpaperControl {
         }
       },
       // (the steps go on from where they are at the new rate)
-      p119_setting_Speed: (v: number) => {
+      p120_setting_Speed: (v: number) => {
         s.speed = v;
         if (this.clock && this.effects) {
           this.clock.setRate(this.stepRate(), this.time);
@@ -835,6 +858,36 @@ export class Wallpaper implements WallpaperControl {
       camera.setParallax(reply.yaw, reply.pitch, reply.eyeX, reply.eyeY);
       this.parallaxMoving = reply.moving;
     }
+  }
+
+  // the rain's spawn box (models/spawnbox.ts, shared by the strikes): its inputs given to the rain each frame, the camera's base tilt and eye's height (never the parallax's live
+  // offsets) and the range the mouse parallax's setting reaches (MouseParallax.reach: none with the parallax off), worked out again only when the window or the setting changed
+  followSpawnBox(): void {
+    const camera = this.camera;
+    const rain = this.rain;
+    if (!camera || !rain || !this.M) {
+      return;
+    }
+    const M = this.M;
+    const p = this.settings.parallax;
+    const size = camera.width * 65536 + camera.height;
+    if (!this.spawnLimits || size !== this.spawnSize || p.on !== this.spawnOn || p.mode !== this.spawnMode || p.amount !== this.spawnAmount) {
+      if (!this.spawnLimits || size !== this.spawnSize) {
+        this.spawnLimits = M.MouseParallax.limitsFor({
+          span: M.Camera.SPAN,
+          aspect: camera.width / camera.height,
+          halfFov: camera.halfFov(),
+          near: M.Camera.nearestWater(),
+          highestPitch: M.Camera.HIGHEST_PITCH,
+        });
+      }
+      this.spawnSize = size;
+      this.spawnOn = p.on;
+      this.spawnMode = p.mode;
+      this.spawnAmount = p.amount;
+      this.spawnReach = p.on ? M.MouseParallax.reach(p.mode, p.amount, this.spawnLimits) : { yaw: 0, pitch: 0, eyeX: 0, eyeY: 0 };
+    }
+    rain.setSpawnBox(camera.pitch, camera.eyeHeight, this.spawnReach);
   }
 
   // the music's reactions (matrix_web_rain's, the maths in the music worker: workers/musicworker.ts): the newest audio array, if a frame has not taken it yet, goes to the
@@ -1034,6 +1087,11 @@ export class Wallpaper implements WallpaperControl {
         if (event.name === "adopt") {
           this.mark("sceneWorker");
         }
+        // (no worker could be made, or one is refused: onChange is told only of a worker adopted or lost, so the support report says "none" here)
+        if ((event.name === "refused" || event.name === "failed") && Support.sceneWorker === undefined) {
+          Support.sceneWorker = "";
+          this.showReadout();
+        }
       },
       onChange: (client) => {
         Support.sceneWorker = client ? client.kind : "";
@@ -1071,6 +1129,11 @@ export class Wallpaper implements WallpaperControl {
         }
         if (event.name === "refused" || event.name === "failed" || (event.name === "lost" && bolt.alive === 0)) {
           M.BoltShape.warm();
+        }
+        // (no worker could be made, or one is refused: onChange is told only of a worker adopted or lost, so the readout's Workers line says "no" here)
+        if ((event.name === "refused" || event.name === "failed") && Support.workers === undefined) {
+          Support.workers = bolt.kind;
+          this.showReadout();
         }
       },
       onChange: () => {
@@ -1384,6 +1447,8 @@ export class Wallpaper implements WallpaperControl {
     this.lightning.planTask = this.strikePlanTask;
     this.fog.planTask = this.fogPlanTask;
     this.lightning.onPlanned = (s) => this.fog.announceStrike(s.uid!, s.start, s.flash!);
+    // (an unexpected error in the lightning's asynchronous answers: reported as a failure of the wallpaper, as a frame's error is)
+    this.lightning.onFailure = (error) => this.fail(error);
     // (the bolt's items made in the worker with each shape: none asked before the bolt exists)
     this.lightning.itemsOptionsOf = (s) => (this.bolt ? this.bolt.itemsOptionsOf(s) : undefined);
     if (this.boltTask) {
@@ -1426,6 +1491,9 @@ export class Wallpaper implements WallpaperControl {
     this.rain.driver = this.splashes;
     this.splashes.rain = this.rain;
     this.splashes.tick.wheel = this.rain.wheel;
+    // (the strikes' feet and tops are drawn across the rain's spawn box; the box's inputs given before the first layout)
+    this.lightning.boxOf = () => this.rain.wheel.box();
+    this.followSpawnBox();
     this.reflection = new M.Reflection(context);
     this.water = new M.Water(context);
     this.applyWaterState();
@@ -1614,6 +1682,7 @@ export class Wallpaper implements WallpaperControl {
     this.wavesDeferred = false;
     this.followMusic();
     this.followParallax();
+    this.followSpawnBox();
     for (let i = 0; i < this.effects!.length; i++) {
       if (forked && this.effects![i] === this.waves) {
         this.wavesDeferred = true;
@@ -1759,6 +1828,9 @@ export class Wallpaper implements WallpaperControl {
       if (this.test) {
         this.test.noWaterLight = !!p.noWaterLight;
       }
+      // (the mirrored picture's margin, after the pass has made its frame)
+      this.water.mirrorMargin[0] = this.reflection.frame.marginX;
+      this.water.mirrorMargin[1] = this.reflection.frame.marginY;
       this.water.draw(mode, this.test);
     }
     if (covers && mode) {
@@ -2190,6 +2262,12 @@ export class Wallpaper implements WallpaperControl {
     inputs.height = camera.height;
     inputs.sigma = this.fog.sigma();
     inputs.waterDrawn = this.waterState.waterDrawn;
+    // (a drop, a splash or a foot lifted by a wave is at most the highest wave over the floor: every unit's radius grows by it, so the frustum test keeps every lifted one)
+    inputs.margin = this.waterState.wavesStepped && this.waves ? this.waves.highest : 0;
+    // (the mirrored view's frustum: the reflection's larger picture, for the units drawn in it)
+    camera.setMirror(this.M.Reflection.MARGIN);
+    camera.mirrorUpdate();
+    inputs.mirror = camera.mirrorView;
     for (const effect of this.effects!) {
       if (effect.qualityKind() !== "") {
         this.qualityParams[effect.qualityIndex] = effect.qualityParams(shared);

@@ -26,6 +26,8 @@
 // Changelog:
 // 2026-11-04: TypeScript, a module of src/models/ (was engine/boltitems.js); the bell's constants
 //   (BELL_SPREAD, BELL_PX, BELL_LEAST, BELL_END) in materials/bolt.ts.
+// 2026-11-11: line() builds nothing for an until that is not a finite number above 0; places() returns at a step that is not above 0 or not finite (was an endless loop).
+// 2026-11-11: the bell's integral is bellBand(size) (BoltItems.bellBand: BAND_PER_SIZE is bellBand(64), the same value), so the thin-line arm of the bell can be tested.
 import { M } from "../engine/core";
 import { BELL_SPREAD, BELL_PX, BELL_LEAST, BELL_END } from "../materials/bolt";
 import type { ShapeLine } from "./boltshape";
@@ -102,8 +104,7 @@ const bellG = (r: number, size: number) => {
   return r <= rt ? (r * r) / (2 * s2) : (rt * rt) / (2 * s2) + (r - rt) / lambda;
 };
 // the bell's light a metre over its size and radiance, for a wide line (its middle 1)
-const BAND_PER_SIZE = (() => {
-  const size = 64;
+const bellBand = (size: number): number => {
   const step = 1e-3 * size;
   let sum = 0;
   for (let r = step / 2; r < 8 * size; r += step) {
@@ -114,7 +115,8 @@ const BAND_PER_SIZE = (() => {
     sum += Math.exp(-g) * step;
   }
   return (2 * sum) / size;
-})();
+};
+const BAND_PER_SIZE = bellBand(64);
 // the characters' spacing (of their size) on the main channel and the others; their share of the
 // light a metre (the line under them the rest); a character's radiance for full ink: their share x
 // BAND_PER_SIZE x their spacing
@@ -177,10 +179,7 @@ export class BoltItems {
   static CHARACTER_SPACING: number;
   static CHARACTER_MAIN: number;
   static BAND_PER_SIZE: number;
-  static BELL_END: number;
-  static BELL_LEAST: number;
-  static BELL_PX: number;
-  static BELL_SPREAD: number;
+  static bellBand: (size: number) => number;
   static GLYPH_FLOATS: number;
   static SEGMENT_FLOATS: number;
   static MAIN: number;
@@ -296,7 +295,8 @@ export class BoltItems {
       return true;
     }
     const until = Math.min(part, line.ends) * line.length;
-    if (until <= 0) {
+    // (nothing to build: no length grown, or one that is not a finite number, a line whose start is its end)
+    if (!(until > 0) || !Number.isFinite(until)) {
       return true;
     }
     const out = this.out;
@@ -391,6 +391,10 @@ export class BoltItems {
         shown = this.seen(a, q);
       }
       const step = spacing * size;
+      // (a step that is not above 0, or not finite, never takes s on: the line is taken as done)
+      if (!(step > 0) || !Number.isFinite(step)) {
+        return true;
+      }
       const after = s + step;
       let to = piece;
       if (backward) {
@@ -452,11 +456,8 @@ BoltItems.SEGMENT_FLOATS = SEGMENT_FLOATS;
 BoltItems.GLYPH_FLOATS = GLYPH_FLOATS;
 BoltItems.GENERATION_LIGHT = GENERATION_LIGHT;
 BoltItems.GENERATION_THIN = GENERATION_THIN;
-BoltItems.BELL_SPREAD = BELL_SPREAD;
-BoltItems.BELL_PX = BELL_PX;
-BoltItems.BELL_LEAST = BELL_LEAST;
-BoltItems.BELL_END = BELL_END;
 BoltItems.BAND_PER_SIZE = BAND_PER_SIZE;
+BoltItems.bellBand = bellBand;
 BoltItems.CHARACTER_MAIN = CHARACTER_MAIN;
 BoltItems.CHARACTER_SPACING = CHARACTER_SPACING;
 BoltItems.CHARACTER_SHARE = CHARACTER_SHARE;

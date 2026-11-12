@@ -59,6 +59,7 @@
 // 2026-11-06: calm flag from the highest wave read back without stalling (highest, readings, readEvery).
 // 2026-11-06: the impact queue grows when full (array and buffer doubled), none dropped; the
 //             impacts drawn in batches of at most 65536 instances, a guard piece after each
+// 2026-11-12: CALM_HEIGHT is WaveLift.CALM (one constant for the calm flag and the landings' lift).
 import { M } from "../engine/core";
 import { fill } from "../engine/glsl";
 import GRID_SOURCE from "../shaders/waves/grid.glsl";
@@ -71,6 +72,7 @@ import WAVES_SOURCE from "../shaders/waves/waves.glsl";
 import { QualityWater } from "../models/quality/water";
 import { QualityWaves } from "../models/quality/waves";
 import { WaveSteps } from "../models/wavesteps";
+import { WaveLift } from "../models/wavelift";
 import { WaveMax } from "../models/quality/wavemax";
 import { WaveFuse } from "../models/quality/wavefuse";
 import type { EffectContext } from "../engine/effect";
@@ -113,7 +115,8 @@ const IMPACTS_MOST = 4096;
 const IMPACTS_BATCH = 65536;
 const LOG_MOST = 8192;
 // the highest wave (m) under which the water counts as calm: a crest that low moves no reflection by a pixel
-const CALM_HEIGHT = 1e-5;
+// (the threshold of the lift's gate too: models/wavelift.ts)
+const CALM_HEIGHT = WaveLift.CALM;
 // the seconds between two read-backs of the highest wave
 const READ_EVERY = 0.25;
 

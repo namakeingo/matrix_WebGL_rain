@@ -1,6 +1,7 @@
 #version 300 es
 precision highp float;
 ${TEST_VIEWS}
+${M.Camera.GLSL}
 uniform sampler2D uMask;
 uniform sampler2D uBoltCover;
 uniform sampler2D uBoltNear;
@@ -12,9 +13,11 @@ uniform float uViewScale;
 #endif
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec4 outDistance;
-const float FAR_DISTANCE = ${M.Camera.FAR_DISTANCE.toFixed(1)};
 void main() {
-  ivec2 at = ivec2(gl_FragCoord.xy);
+  // (the masks are the view's size: the mirrored picture is larger by a margin on each side, in cUp.w across and cScreen.w down, 0 in the view's own block)
+  ivec2 margin = ivec2(cUp.w, cScreen.w);
+  ivec2 at = ivec2(gl_FragCoord.xy) - margin;
+  if (any(lessThan(at, ivec2(0))) || any(greaterThanEqual(at, ivec2(cScreen.xy) - 2 * margin))) discard;
   vec4 mask = texelFetch(uMask, at, 0);
   vec4 sums = texelFetch(uBoltNear, at, 0);
   bool mirrored = uMirror < 0.0;

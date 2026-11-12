@@ -1,5 +1,7 @@
 // RainWheel: the rain's landings wheel and the state it keeps, as a pure model (no GL, no page: importable in any thread), run by the rain (effects/rain.ts, which keeps the GL side
-// and the scene worker's layout protocol) and, as a stepped model (platform/steppedtask.ts's StepModel: step, run, event, snapshot, restore), by a worker.
+// and the scene worker's layout protocol) and, inside models/rainsimtick.ts (RainSimTick, the stepped model of the splashes' and the rain's worker: platform/steppedtask.ts's StepModel), by a
+// worker, which calls runStep, the recorded calls and snapshot/restore. The wheel's own run, advanceTo, step and event are NOT what the worker calls: they are the wheel as a stepped model on
+// its own, kept as the surface the tests (units.ui.rainwheel.ts and the debug API) drive it by.
 // - Its landings: each drop's next landing step worked out exactly, kept in a wheel of steps (a ring of slots, each a list of drops linked through a typed array: no allocation), so a
 //   step costs only its landings (runStep). A drop that lands with a fall that shows is reported through `onLand(drop, time)` (the drop's description by dropAt, valid during the call
 //   only, its colour in it); the next drop's fall is gated by the music's shares, and the drop scheduled again.
@@ -18,10 +20,14 @@
 // 2026-11-10: new (the wheel and its state moved out of effects/rain.ts, behaviour unchanged).
 // 2026-11-10: installLayout (the layout's fields set together); `trace` (what a stepped tick changed that its packet carries: the phases the music's wakes changed, the drops woken, the
 // layout copied).
+// 2026-11-12: musicFillPart is 1 (the music's falls start from the same spawn box top as the normal rain's).
+// 2026-11-12: the spawn box (models/spawnbox.ts): x over the box's width at the drop's distance (was distance x SPAN), targets' pool by the box's density factor, the fall's rows of musicFillPart and averageFall from the box's top (was the world's ceiling); its scalars (boxPitch ...) in the snapshot.
+// 2026-11-11: meanFallSeconds' cache also keyed on the clock's rate (meanFallRate); restore skips a scalar the snapshot lacks.
 import { M } from "../engine/core";
 import type { StepClock } from "../engine/clock";
 import type { RestartResult } from "./rainlayout";
 import type { FloorKind } from "./floor";
+import type { SpawnBoxData } from "./spawnbox";
 
 // a drop at a step (RainWheel.dropAt): its head (rows from the top of its fall), rows, fall, whether it lands in this step and whether its fall shows, its place (x, z), its head's
 // height, its colour
@@ -117,7 +123,7 @@ const waveScreen = (): number => {
 const SCALARS = [
   "time", "lastStep", "width", "height", "density", "fontMin", "fontMax", "trail", "steady", "custom", "wave", "waveSpeed", "waveWidth", "wavePhase", "waveStep", "wavePerStep",
   "tiltResponsiveness", "layoutFloor", "layoutPitch", "layoutEye", "layoutDirty", "layoutPending", "dirtyFirst", "dirtyLast", "active", "reach", "wanted", "inView", "wokenCount", "fillPart",
-  "fillFor", "musicCredit", "meanFall", "musicAt", "staticAt", "wrongLandings", "appliedSeq",
+  "fillFor", "musicCredit", "meanFall", "musicAt", "staticAt", "wrongLandings", "appliedSeq", "boxPitch", "boxEyeHeight", "boxYaw", "boxPitchReach", "boxReachX", "boxReachY",
 ] as const;
 
 export class RainWheel {
@@ -152,6 +158,18 @@ export class RainWheel {
   wavePerStep: number;
   // Music rain responsiveness (the rate of the falls the music asks for)
   tiltResponsiveness: number;
+  // the spawn box's inputs (models/spawnbox.ts), set by the effect: the base tilt and the eye's height (not the parallax's live offsets), and the range the mouse parallax reaches (yaw and
+  // pitch in radians, the eye's x and y in metres); the window's aspect, the field of view and the nearest and furthest distances the box is made from are the wheel's own
+  boxPitch: number;
+  boxEyeHeight: number;
+  boxYaw: number;
+  boxPitchReach: number;
+  boxReachX: number;
+  boxReachY: number;
+  // the box made from them (box()), what it was made from, and its density factor
+  boxData: SpawnBoxData | null;
+  boxKey: number[];
+  boxFactor: number;
   // the layout, and what it was made for: the floor, the pitch and the eye's height (the layout's upload owed: layoutDirty)
   layout: Float32Array | null;
   layoutFloor: FloorKind;
@@ -189,6 +207,8 @@ export class RainWheel {
   staticAt: number;
   meanFall: number;
   meanFallFor: Float32Array | null;
+  // the clock's rate meanFall was worked out at (the cache is valid for a layout and a rate)
+  meanFallRate: number;
   // (the scan's scratch arrays)
   musicShown: Int32Array;
   musicDeficit: Float32Array;
@@ -228,6 +248,15 @@ export class RainWheel {
     this.waveStep = 0;
     this.wavePerStep = 0;
     this.tiltResponsiveness = 2;
+    this.boxPitch = 0;
+    this.boxEyeHeight = M.Camera.EYE;
+    this.boxYaw = 0;
+    this.boxPitchReach = 0;
+    this.boxReachX = 0;
+    this.boxReachY = 0;
+    this.boxData = null;
+    this.boxKey = [];
+    this.boxFactor = 1;
     this.layout = null;
     this.layoutFloor = "water";
     this.layoutPitch = 0;
@@ -254,6 +283,7 @@ export class RainWheel {
     this.musicCredit = 0;
     this.meanFall = 1;
     this.meanFallFor = null;
+    this.meanFallRate = NaN;
     this.musicShown = new Int32Array(0);
     this.musicDeficit = new Float32Array(0);
     this.musicFree = new Int32Array(COUNT);
@@ -269,6 +299,25 @@ export class RainWheel {
   }
 
   // ---- the drops' places ----
+
+  // the spawn box (models/spawnbox.ts) of the window, the field of view, the distances and the box's scalars: made again only when one of them changed
+  box(): SpawnBoxData {
+    const key = this.boxKey;
+    const aspect = this.width / this.height;
+    const near = this.nearest();
+    const far = this.furthest();
+    const halfFov = M.Camera.halfFov();
+    const same =
+      this.boxData !== null && key.length === 10 && key[0] === aspect && key[1] === halfFov && key[2] === this.boxPitch && key[3] === this.boxEyeHeight && key[4] === this.boxYaw &&
+      key[5] === this.boxPitchReach && key[6] === this.boxReachX && key[7] === this.boxReachY && key[8] === near && key[9] === far;
+    if (!same || !this.boxData) {
+      this.boxData = M.SpawnBox.make({ aspect, halfFov, pitch: this.boxPitch, eyeHeight: this.boxEyeHeight, yaw: this.boxYaw, pitchReach: this.boxPitchReach, eyeX: this.boxReachX, eyeY: this.boxReachY, near, far }, this.boxData || undefined);
+      this.boxFactor = M.SpawnBox.densityFactor(this.boxData);
+      key.length = 0;
+      key.push(aspect, halfFov, this.boxPitch, this.boxEyeHeight, this.boxYaw, this.boxPitchReach, this.boxReachX, this.boxReachY, near, far);
+    }
+    return this.boxData;
+  }
 
   // the nearest and the furthest distance (Font size Max and Min, Min at most Max)
   nearest() {
@@ -405,14 +454,15 @@ export class RainWheel {
 
   // ---- how many ----
 
-  // the drops wanted in view (matrix_web_rain's rainCount x RAIN_SCALE) and in the pool (over the share of the world's width in view)
+  // the drops wanted in view (matrix_web_rain's rainCount x RAIN_SCALE) and in the pool: the drops in view times the box's density factor (models/spawnbox.ts: the box's width and fall are
+  // the view's plus the parallax's reach, so the drops per pixel in the view are what they were over the world's width)
   targets() {
     const min = Math.min(this.fontMin, this.fontMax);
     const max = this.fontMax;
     const perPixel = max > min ? (1 / min - 1 / max) / Math.log(max / min) : 1 / max;
     const inView = RAIN_SCALE * Math.max(1, Math.round(this.density * this.width * perPixel));
-    const share = Math.min(1, ((this.width / this.height) * Math.tan(M.Camera.halfFov())) / M.Camera.SPAN);
-    return [inView, Math.min(COUNT, Math.round(inView / share))];
+    this.box();
+    return [inView, Math.min(COUNT, Math.round(inView * this.boxFactor))];
   }
 
   // the columns' shares of the falls (null: the settled rain's): each fall is shown or not by its column's share, decided as it begins (gate), so a fall in progress is
@@ -458,31 +508,11 @@ export class RainWheel {
     return out;
   }
 
-  // the part of the drops wanted the music keeps falling, for as many in the view as the normal rain has at a time: a drop falls from the world's ceiling (the top of the highest view), and is in the view only from the
-  // top of the view down, so on average the part of its cycle that is the view's (the rows of a fall from the top of the view over the rows of a fall from the ceiling, the trail's cells included, at its distance, over every 8th drop wanted);
-  // the music's falls start from the top of the view, so every one of them is in the view: to show as many as the normal rain does the music's shares are taken times this part
+  // the part of the drops wanted the music keeps falling, for as many in the view as the normal rain has at a time: 1. The music's falls and the normal rain's have the same rows (both
+  // start from the spawn box's top: the layout's plane does not follow the view's instantaneous offsets), and a drop the music wakes begins its fall at the top of it, so the music's
+  // drops are in the view as long as the normal rain's are, and its shares need no scaling
   musicFillPart() {
-    const data = this.layout;
-    const view = this.view;
-    if (!data) {
-      return 1;
-    }
-    const key = view.eyeY + "," + view.tilt + "," + this.trail + "," + this.active + "," + data.length + "," + this.nearest() + "," + this.furthest();
-    if (this.fillFor !== key) {
-      const tan = Math.tan(view.tilt + view.halfFov);
-      let sum = 0;
-      let n = 0;
-      for (let i = 0; i < this.active; i += 8) {
-        const d = data[i * 4]!;
-        // (a fall of the music is the rows from the top of the view down, a fall of the normal rain the rows from the ceiling, each with the trail's cells: starting falls at the same
-        // rate, the music has as many falling as the normal rain has, times the first's rows over the second's)
-        sum += Math.min(1, ((view.eyeY + d * tan) / CELL + this.trail) / (M.Camera.ceilingAt(d) / CELL + this.trail));
-        n++;
-      }
-      this.fillPart = n > 0 ? sum / n : 1;
-      this.fillFor = key;
-    }
-    return this.fillPart;
+    return 1;
   }
 
   // the average time a drop takes to fall (s), over every 16th of the drops wanted: its rows over its speed in steps (a speed of s sixteenths of a row a step), at the step rate
@@ -491,7 +521,7 @@ export class RainWheel {
     if (!data) {
       return 1;
     }
-    if (this.meanFallFor !== data) {
+    if (this.meanFallFor !== data || this.meanFallRate !== this.clock.rate) {
       let sum = 0;
       let n = 0;
       for (let i = 0; i < COUNT; i += 16) {
@@ -501,6 +531,7 @@ export class RainWheel {
       const steps = sum / Math.max(1, n);
       this.meanFall = Math.max(0.1, this.clock.timeOf(this.lastStep + Math.ceil(steps)) - this.clock.timeOf(this.lastStep));
       this.meanFallFor = data;
+      this.meanFallRate = this.clock.rate;
     }
     return this.meanFall;
   }
@@ -722,10 +753,11 @@ export class RainWheel {
   averageFall() {
     const near = this.nearest();
     const far = this.furthest();
+    const box = this.box();
     let sum = 0;
     const n = 16;
     for (let k = 0; k < n; k++) {
-      sum += M.Camera.ceilingAt(near + ((far - near) * (k + 0.5)) / n) / CELL;
+      sum += M.SpawnBox.top(box, near + ((far - near) * (k + 0.5)) / n) / CELL;
     }
     return Math.max(1, sum / n);
   }
@@ -871,10 +903,11 @@ export class RainWheel {
     return Math.floor(this.total(i, step) / this.layout![i * 4 + 3]);
   }
 
-  // a drop's place across in a fall: new for every fall
+  // a drop's place across in a fall: new for every fall, over the spawn box's width at its distance
   x(i: number, cycle: number, distance: number) {
     const across = M.hash(((Math.imul(i, 2654435761) ^ Math.imul(cycle, 40503)) + SEED) >>> 0) / 4294967296;
-    return (across * 2 - 1) * distance * M.Camera.SPAN;
+    const box = this.box();
+    return (across * 2 - 1) * M.SpawnBox.widthAt(box.slope, box.shift, box.span, distance);
   }
 
   // its falls finished by a step (a fall finishes when its head reaches its lowest row)
@@ -1032,7 +1065,9 @@ export class RainWheel {
   restore(s: RainWheelSnapshot) {
     const target = this as unknown as Record<string, number | boolean | string>;
     for (const key of SCALARS) {
-      target[key] = s.numbers[key]!;
+      if (key in s.numbers) {
+        target[key] = s.numbers[key]!;
+      }
     }
     Object.assign(this.view, s.view);
     this.clock.from = s.clock.from;
@@ -1048,6 +1083,7 @@ export class RainWheel {
     this.musicLight = s.musicLight ? s.musicLight.slice() : null;
     this.colors = s.colors.map((c) => c.slice());
     this.meanFallFor = s.meanFallForLayout ? this.layout : null;
+    this.meanFallRate = this.clock.rate;
   }
 }
 

@@ -6,6 +6,9 @@ ${M.Camera.GLSL}
 ${glsl.fog}
 ${M.GlyphAtlas.VERTEX_GLSL}
 ${M.HASH_GLSL}
+#define WAVE_LIFT_AT
+${WAVE_LIFT_GLSL}
+${FOOT_GLSL}
 ${LIGHT_GLSL}
 uniform highp sampler2D uBoltGlyphs;
 uniform int uFirst;
@@ -57,6 +60,11 @@ void main() {
   vec4 j = texel(i, 2);
   vec4 n = texel(i, 3);
   vec4 r = texel(i, 4);
+  // (the foot on the water rests on the live wave at its place; no other point of the line moves)
+  float foot = footLift(p.xyz, j.xyz, n.xyz, n.xyz);
+  p.y = p.y == 0.0 ? foot : p.y;
+  j.y = j.y == 0.0 ? foot : j.y;
+  n.y = n.y == 0.0 ? foot : n.y;
   float rate = r.x;
   vUv = vec2(aCorner.x, 1.0 - aCorner.y);
   vHead = 0.0;

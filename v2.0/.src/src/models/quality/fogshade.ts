@@ -1,6 +1,6 @@
 // QualityFogShade: the fog's sky and moon shade grid (effects/fog.ts: what gets to each cell of the 128 x 64 x 96 grid from the sky and the moon through the
 // clouds) baked on the CPU, pure: no GL, no page, importable in any thread (the quality workers bake with it).
-// A cell holds (sky, moon) = through(p, p + dir 8 m, 4 places) for dir = up and the moon's direction: exp(-(the mean of the medium's density at the 4 places + AIR)
+// A cell holds (sky, moon) = through(p, p + dir 8 m, 4 places) for dir = up and, for the moon, the mean over the penumbra kernel's directions over its disc: exp(-(the mean of the medium's density at the 4 places + AIR)
 // x 8), the density of shaders/fog/medium.glsl (sigma e^(-max(y, 0) / 4), none under 1e-5; 0.2 + 0.8 smoothstep(0.4, 0.6, n); n = 0.55 N24 + 0.3 N10 + 0.15 N4,
 // each a trilinear read of the noise at the level lod - log2(size), the octaves drifting with the time). The cell's place and lod are the shader's
 // (shadePlace, shadeLod; the constants as its text prints them: the log with 6 decimals).
@@ -17,10 +17,11 @@
 // GPU and posts a job for each draw k for the time + (k + 1) / rate.
 //
 // Changelog:
+// 2026-11-12: the moon channel the mean over the penumbra kernel's directions (MoonDisc: MOON_KERNEL, the GPU's constants), the kernel an optional argument of bake.
 // 2026-11-08: new.
 import { M } from "../../engine/core";
 import { AIR } from "../../materials/fog";
-import { MOON_DIR } from "../../materials/sky";
+import { MOON_DIR, MoonDisc } from "../../materials/sky";
 
 const ACROSS = 128;
 const UP = 64;
@@ -37,10 +38,10 @@ const MIP_TEXELS = 4681;
 // how far a reply's time may be from the frame's it is uploaded in (s: about 1 cm of the clouds' drift)
 const MAX_TIME_ERROR = 0.1;
 
-const moonLength = Math.hypot(MOON_DIR[0], MOON_DIR[1], MOON_DIR[2]);
-const MOON_X = MOON_DIR[0] / moonLength;
-const MOON_Y = MOON_DIR[1] / moonLength;
-const MOON_Z = MOON_DIR[2] / moonLength;
+// the moon channel's kernel: the directions over the moon's disc (materials/sky.ts: MoonDisc.directions, the GPU's MOON_K0..: the shader's text prints them with nine
+// decimals), the first MOON_KERNEL of them; the channel is the mean of the light through 8 m of each
+const MOON_KERNEL = MoonDisc.KERNEL;
+const KERNEL_DIRS = new Float64Array(MoonDisc.directions(MOON_DIR, MoonDisc.RADIUS, MoonDisc.KERNEL_MAX));
 
 // where the levels start in the packed array: 3: 0, 4: 4096, 5: 4608, 6: 4672, 7: 4680
 const OFFSETS = [0, 4096, 4608, 4672, 4680];
@@ -209,7 +210,7 @@ function setLevel(lod: number, size: number, which: number): void {
 const LOG2_128 = 7;
 
 // cells layerFrom..layerTo-1 (layers of the grid), rows 0..rows-1, columns x0..x0+nx-1, into out as half pairs
-function bake(noise: Float32Array, sigma: number, time: number, out: Uint16Array, layerFrom: number, layerTo: number, x0: number, nx: number, rows: number): void {
+function bake(noise: Float32Array, sigma: number, time: number, out: Uint16Array, layerFrom: number, layerTo: number, x0: number, nx: number, rows: number, kernel: number = MOON_KERNEL): void {
   sigmaNow = sigma;
   timeNow = time;
   let at = 0;
@@ -228,7 +229,11 @@ function bake(noise: Float32Array, sigma: number, time: number, out: Uint16Array
       for (let ix = x0; ix < x0 + nx; ix++) {
         const x = ((ix / (ACROSS - 1)) * 2 - 1) * SPAN * z;
         out[at++] = toHalf(through(noise, x, y, -z, 0, 1, 0));
-        out[at++] = toHalf(through(noise, x, y, -z, MOON_X, MOON_Y, MOON_Z));
+        let moon = 0;
+        for (let k = 0; k < kernel; k++) {
+          moon += through(noise, x, y, -z, KERNEL_DIRS[3 * k], KERNEL_DIRS[3 * k + 1], KERNEL_DIRS[3 * k + 2]);
+        }
+        out[at++] = toHalf(moon / kernel);
       }
     }
   }
@@ -331,6 +336,6 @@ class Schedule {
   }
 }
 
-export const QualityFogShade = { ACROSS, UP, DEEP, TOP, NEAR, FAR, SPAN, MIP_FROM, MIP_LAST, MIP_TEXELS, MAX_TIME_ERROR, mipOffset, packMips, toHalf, fromHalf, slabBytes, bake, Schedule };
+export const QualityFogShade = { ACROSS, UP, DEEP, TOP, NEAR, FAR, SPAN, MOON_KERNEL, MIP_FROM, MIP_LAST, MIP_TEXELS, MAX_TIME_ERROR, mipOffset, packMips, toHalf, fromHalf, slabBytes, bake, Schedule };
 
 M.QualityFogShade = QualityFogShade;

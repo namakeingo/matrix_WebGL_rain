@@ -73,7 +73,7 @@ export default (env: BuildEnv = {}): Configuration => {
     resolve: { extensions: [".ts", ".js"] },
     module: {
       rules: [
-        { test: /\.ts$/, loader: "ts-loader", options: { transpileOnly: true, configFile: path.join(HERE, "tsconfig.json") } },
+        { test: /\.ts$/, loader: "ts-loader", options: { transpileOnly: true, configFile: path.join(HERE, "tsconfig.json"), ...(env.coverage ? { compilerOptions: { sourceMap: true } } : {}) } },
         { test: /\.(glsl|wgsl)$/, loader: path.join(HERE, "tools", "text-loader.ts") },
       ],
     },

@@ -18,6 +18,7 @@
 // the statics are unused.
 //
 // Changelog:
+// 2026-11-12: the mirror images' frustum is inputs.mirror's (the reflection's larger picture) when given; no rectangles there then.
 // 2026-11-07: ageCut and listedAges (the stamps instanced by the light left), pointPx, isPoint and pointGain (a sub-pixel quad as a point).
 // 2026-11-07: the LOD rules (lodFloor, stampPeak, stampDropped): the direct view drops stamps whose brightest light is under a quarter level.
 // 2026-11-06: new (the pool's job kind "splashes").
@@ -158,6 +159,12 @@ function chunk(params: SplashQualityParams, from: number, to: number, mirror: bo
   const f = params.inputs;
   const sign = mirror ? -1 : 1;
   const base = mirror ? params.count : 0;
+  // (the mirror images' frustum: the reflection's larger picture when given, whose pixels are not the view's: the rectangles, in the view's, are not applied there)
+  const v = mirror && f.mirror ? f.mirror : f;
+  UNITS.viewProjection = v.viewProjection;
+  UNITS.width = v.width;
+  UNITS.height = v.height;
+  UNITS.occluderCount = mirror && f.mirror ? 0 : f.occluderCount;
   const s = SCRATCH;
   const m = to - from;
   // pass 1: the spheres of the splashes with a stamp drawn

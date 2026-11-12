@@ -2,10 +2,11 @@
 // the random number generator's (Mulberry's `a`), the time of the last strike planned, the time now and the settings; its output is the strikes, the time of the last planned, the
 // strikes counted past and the generator's state after, so that a worker needs nothing handed over and a lost one is simply asked again.
 // The draws are made in the order Lightning.plan always made them: a wait (-ln(1 - r) x the mean time between strikes), the distance (Rain.distanceAt of the front-biased unit, over
-// the rain's distances), the place across the view, the playing time (a draw only when the shortest differs from the longest), the strike's seed, its flicker periods and its
+// the rain's distances), the place across the spawn box's width (the world's without a box), the playing time (a draw only when the shortest differs from the longest), the strike's seed, its flicker periods and its
 // branches'. A strike that would be over before `time` is not accepted (counted in `past`) and the loop goes on until `count` are accepted.
 //
 // Changelog:
+// 2026-11-12: the foot across the spawn box's width at its distance (input.box), was across the world's width.
 // 2026-11-10: new, from Lightning.plan.
 import { M, Mulberry } from "../engine/core";
 
@@ -24,6 +25,8 @@ export interface StrikePlanInput {
   nearest: number;
   furthest: number;
   span: number;
+  // the spawn box's sides (models/spawnbox.ts): the foot is drawn across its width at the strike's distance (absent: across the world's width, span x distance)
+  box?: { slope: number; shift: number; span: number };
 }
 
 export interface PlannedStrike {
@@ -54,7 +57,8 @@ function plan(input: StrikePlanInput): StrikePlanOutput {
     planned += -Math.log(1 - rng.next()) * input.frequency;
     const range = input.range;
     const distance = M.Rain.distanceAt(M.StrikeBias.biasedUnit(rng.next(), input.frontBias), range ? range[0] : input.nearest, range ? range[1] : input.furthest);
-    const x = (rng.next() * 2 - 1) * distance * input.span;
+    const half = input.box ? M.SpawnBox.widthAt(input.box.slope, input.box.shift, input.box.span, distance) : distance * input.span;
+    const x = (rng.next() * 2 - 1) * half;
     const duration = input.shortest < input.longest ? input.shortest + (input.longest - input.shortest) * rng.next() : input.longest;
     const seed = Math.floor(rng.next() * 4294967296);
     const periods = 3 + Math.floor(rng.next() * 4);

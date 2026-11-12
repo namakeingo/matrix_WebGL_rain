@@ -80,6 +80,10 @@
 //   with lod off (the A/B: Effect.lod off is the earlier draw), for the Nearness view and, with M.TEST, for the views other than the scene.
 //
 // Changelog:
+// 2026-11-12: the tests' displacement views (testReflection "displacementX" and "displacementY": the lookup's shift from the pixel's own place).
+// 2026-11-12: uMirrorMargin: the mirrored picture's margin past the view (the lookup, the glossy taps and the distance read map into the larger picture).
+// 2026-11-12: the moon's glint (moonGlint: the disc's radiance over the glossy beam, times the Fresnel reflectance and the moon's shade; the test view waterGlint); the
+//   diffuse sky and moon light from the shared glyphSkyMoonLight (the sky box's (1 + n.y) / 2).
 // 2026-11-08: the sky-only program for the bands above the horizon (identical pixels).
 // 2026-11-07: the level of detail by the pixel's fog and footprint (flat tolerance, shadow stride and cut, early exit).
 // 2026-11-07: the flat path (flatWater): a pixel whose normal is up to the waves' own bound takes no heights, one evaluation, no glossy read; off with lod off (uFlatPx 0).
@@ -148,6 +152,8 @@ export class Water extends M.Effect {
   covered: boolean;
   // the glossy read on (the reflection's mip chain is made: src/index.ts gives Reflection.mips); off, the point read as for a beam under a pixel
   glossOn: boolean;
+  // the mirrored picture's margin past the view, pixels on each side (src/index.ts gives Reflection.frame's: x and y)
+  mirrorMargin: Float32Array;
   // the water off (models/waterstate.ts): no surface; below the horizon the sky and the fog go on, seen along the ray
   // mirrored upwards
   off: boolean;
@@ -168,6 +174,7 @@ export class Water extends M.Effect {
   constructor(context: EffectContext) {
     super(context);
     this.strength = 1;
+    this.mirrorMargin = new Float32Array(2);
     this.tone = Float32Array.of(1, 1, 1);
     this.rippleHighlights = 0;
     this.rippleShadows = 0;
@@ -353,13 +360,14 @@ export class Water extends M.Effect {
     gl.uniform1i(u.uNearness, this.nearness ? 1 : 0);
     gl.uniform1i(u.uWaterOff, this.off ? 1 : 0);
     gl.uniform1i(u.uGlossOn, this.glossOn ? 1 : 0);
+    gl.uniform2f(u.uMirrorMargin, this.mirrorMargin[0], this.mirrorMargin[1]);
     if (this.nearness) {
       gl.uniform2f(u.uNearFar, this.nearness[0], this.nearness[1]);
     }
     if (M.TEST && test) {
       gl.uniform1i(u.uMode, Water.MODES[mode]);
       gl.uniform1i(u.uNoWaterLight, test.noWaterLight ? 1 : 0);
-      gl.uniform1i(u.uTestReflection, test.reflection === "white" ? 1 : test.reflection === "uv" ? 2 : 0);
+      gl.uniform1i(u.uTestReflection, test.reflection === "white" ? 1 : test.reflection === "uv" ? 2 : test.reflection === "displacementX" ? 3 : test.reflection === "displacementY" ? 4 : 0);
       gl.uniform1f(u.uFogDistance, test.fogDistance);
       gl.uniform1f(u.uViewScale, test.viewScale);
       gl.uniform1i(u.uMarched, test.marched ? 1 : 0);
@@ -408,13 +416,13 @@ export class Water extends M.Effect {
 
 // the tests' views: the water's pixels (white), its distance (whole metres in red, the rest in
 // green), its reflection alone, the mirrored picture (its characters and the sky behind them),
-// the strikes' light on the water alone
+// the strikes' light on the water alone, the moon's glint alone (times viewScale)
 // (times viewScale), the sky and fog alone, the light the water reflects diffusely alone (times viewScale); and
 // the fog to fogDistance from its volume and marched along the pixel's ray: what it lets
 // through, its light (times viewScale), and what it lets through mirrored (below the horizon)
 Water.MODES = {
   scene: 0, waterMask: 1, waterDistance: 2, reflection: 3, reflectionPicture: 4, waterLight: 5, sky: 6, waterOwn: 7,
-  fogT: 8, fogTMarch: 9, fogLight: 10, fogLightMarch: 11, mirrorFogT: 12, mirrorFogTMarch: 13,
+  fogT: 8, fogTMarch: 9, fogLight: 10, fogLightMarch: 11, mirrorFogT: 12, mirrorFogTMarch: 13, waterGlint: 14,
 };
 
 // the sky-only program (see the header): the water's source with the water's parts taken away, over the camera's and the fog's code

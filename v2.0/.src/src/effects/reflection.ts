@@ -18,6 +18,11 @@
 //   mipsMade counts the chains made.
 // - Once the water has read it, its contents are let go (invalidateFramebuffer).
 //
+// - The picture is larger than the view by Reflection.MARGIN of its width and height on each side (whole pixels: models/reflectionframe.ts), drawn through the view's own camera with
+//   the same focal length in pixels (the mirrored pass's own Camera block: Camera.mirrorUpdate, bindMirror), so the water's lookup, bent by the wave normal and spread by the glossy
+//   taps, finds the scene just outside the screen. The water maps a place of the view into it by the margin (Water: uMirrorMargin, `frame`). The picture's texels are the view's pixels
+//   moved by the margin: with the margin 0 it is the view's size and the picture is what it was.
+//
 // - Quality (models/quality/water.ts): a view with no water pixel (no ray below the horizon: the camera looking up past the bottom
 //   edge's horizon) reads no mirrored picture, so the whole pass (the clear, the mirrored draws, the chain) is skipped for the frame
 //   (skipped counts them). The result is used only for the camera it was made for; the wallpaper's own cameras always have water in
@@ -31,6 +36,7 @@
 //   draws and the mip chain are skipped and the picture is not invalidated after the water has read it (reused and drawn count the frames).
 //
 // Changelog:
+// 2026-11-12: the picture larger than the view by MARGIN on each side (frame), drawn with the mirrored pass's own camera block.
 // 2026-11-08: the picture reused while its inputs hold (level of detail on).
 // 2026-11-07: the pass skipped for a view whose nearest water the fog hides (level of detail on).
 // 2026-11-06: the pass skipped for a view with no water (quality job "water").
@@ -40,6 +46,8 @@
 import { M } from "../engine/core";
 import type { RenderTarget } from "../engine/gl";
 import { QualityWater } from "../models/quality/water";
+import { ReflectionFrame } from "../models/reflectionframe";
+import type { ReflectionFrameOf } from "../models/reflectionframe";
 import { QualityRainReuse } from "../models/quality/rainreuse";
 import type { ReuseInputs } from "../models/quality/rainreuse";
 import type { EffectContext } from "../engine/effect";
@@ -47,6 +55,11 @@ import type { EffectQuality, QualityJob, QualityShared, QualityViewInputs } from
 import type { QualityStatics, QualityParams } from "../models/quality/jobs";
 
 export class Reflection extends M.Effect {
+  // the margin past the view on each side, a fraction of its width and height (the 99.9th percentile of the water's lookup displacement under the strongest ripples plus 1%: scenetest
+  // reflectionlookup; the picture's size and the camera block follow it each frame, so a test can set it)
+  static MARGIN = 0.11;
+  // the picture's frame for the view's size and the margin
+  frame: ReflectionFrameOf;
   distance: GLenum[];
   light: GLenum[];
   both: GLenum[];
@@ -73,6 +86,7 @@ export class Reflection extends M.Effect {
     super(context);
     const gl = this.gl;
     this.mips = true;
+    this.frame = ReflectionFrame.of(1, 1, 0);
     this.skipped = 0;
     this.qualityFor = -1;
     this.qualitySent = false;
@@ -93,7 +107,18 @@ export class Reflection extends M.Effect {
   }
 
   resize(width: number, height: number) {
-    this.picture.resize(width, height);
+    this.fit(width, height, true);
+  }
+
+  // the frame for a view's size and the margin; the picture made again when its size changed
+  fit(width: number, height: number, force: boolean) {
+    const f = ReflectionFrame.of(width, height, Reflection.MARGIN);
+    const old = this.frame;
+    if (!force && f.marginX === old.marginX && f.marginY === old.marginY && f.viewWidth === old.viewWidth && f.viewHeight === old.viewHeight) {
+      return;
+    }
+    this.frame = f;
+    this.picture.resize(f.width, f.height);
     this.pictureStamp++;
     this.gate.reset();
   }
@@ -144,6 +169,7 @@ export class Reflection extends M.Effect {
 
   // draws the mirrored picture: drawMirrored() draws the mirrored rain and splashes
   render(drawMirrored: () => void) {
+    this.fit(this.frame.viewWidth, this.frame.viewHeight, false);
     if (this.noWater()) {
       this.skipped++;
       this.gate.reset();
@@ -159,6 +185,11 @@ export class Reflection extends M.Effect {
       return;
     }
     const gl = this.gl;
+    // (the mirrored pass's camera block: the view's with the larger picture's projection and size; the view's again after the draws)
+    const camera = this.camera;
+    camera.setMirror(Reflection.MARGIN);
+    camera.mirrorUpdate();
+    camera.bindMirror();
     this.picture.bind();
     gl.disable(gl.BLEND);
     gl.clearBufferfv(gl.COLOR, 0, this.black);
@@ -188,6 +219,7 @@ export class Reflection extends M.Effect {
     }
     gl.drawBuffers(this.both);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    camera.bindView();
     if (this.mips) {
       if (M.TEST) {
         this.mipsMade++;

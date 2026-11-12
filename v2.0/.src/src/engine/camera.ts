@@ -12,7 +12,13 @@
 // the translation mode). setParallax() sets them; `version` goes up on any change of the view, `baseVersion` only on a change of the base (the size, the pitch, the eye's height),
 // so what depends on the base alone (a strike's shape) is not made again as the parallax moves. tilt() is the pitch with its shift, eyeY() the eye's height with its shift.
 //
+// The mirrored pass (the reflection's picture, larger than the view by a margin: models/reflectionframe.ts) has its own block of the same layout, made by mirrorUpdate from the view's: cViewProj
+// with its clip x and y scaled by the view's size over the picture's (the same focal length in pixels), cScreen the picture's size (so rayOf and the pixel reads of the mirrored pass are in
+// the picture's pixels), cUp.w the margin past the view across and cScreen.w down, in pixels (0 in the view's own block). bindMirror / bindView put one or the other on the block's binding point.
+//
 // Changelog:
+// 2026-11-12: the mirrored pass's block (setMirror, mirrorUpdate, bindMirror, bindView): the view's with its clip x and y scaled for the larger picture (models/reflectionframe.ts), cScreen the picture's size, the margin in cUp.w and cScreen.w.
+// 2026-11-12: EYE (the eye's resting height, for the spawn box); ceilingAt stays the world's ceiling (the rain's spawn plane is the spawn box's top: models/spawnbox.ts).
 // 2026-11-10: update() makes its matrices and block with models/frame.ts's compute (one function; axes() too), and takes a worker's answer (offer) made for the same view inputs.
 // 2026-11-09: the mouse parallax's offsets (yaw, pitchShift, eyeX, eyeShift), setParallax, baseVersion; the axes, project, toScreen, rayAt, topAt, the view matrix and the uniform block take them.
 // 2026-11-04: TypeScript, a module of src/engine/ (was engine/camera.js).
@@ -21,6 +27,8 @@ import { M } from "./core";
 import { fill } from "./glsl";
 import { Parallax } from "./parallax";
 import { Frame } from "../models/frame";
+import { ReflectionFrame } from "../models/reflectionframe";
+import type { ReflectionFrameOf } from "../models/reflectionframe";
 import type { FrameInput, FrameOutput } from "../models/frame";
 import type { UniformBlock } from "./gl";
 import CAMERA_SOURCE from "../shaders/camera/camera.glsl";
@@ -33,6 +41,7 @@ export class Camera {
   static FAR_DISTANCE: number;
   static GLSL: string;
   static SPAN: number;
+  static EYE: number;
   static HIGHEST_PITCH: number;
   ubo: UniformBlock;
   projection: Float32Array<ArrayBuffer>;
@@ -60,8 +69,27 @@ export class Camera {
   fieldOfView: number;
   eyeHeight: number;
   gl: WebGL2RenderingContext;
+  // the mirrored picture's frame (its margin), the view-projection and the 36 floats of the block it is drawn with, the block's buffer (made at the first bindMirror), and the
+  // version of the camera and of the frame they were made for
+  mirrorFrame: ReflectionFrameOf;
+  mirrorViewProjection: Float32Array<ArrayBuffer>;
+  mirrorData: Float32Array<ArrayBuffer>;
+  mirrorBlock: UniformBlock | null;
+  mirrorFor: number;
+  mirrorForStamp: number;
+  mirrorStamp: number;
+  // the inputs the quality jobs take (the larger frustum's view-projection and size), filled in place by mirrorUpdate
+  mirrorView: { viewProjection: Float32Array; width: number; height: number };
   constructor(gl: WebGL2RenderingContext) {
     this.gl = gl;
+    this.mirrorFrame = ReflectionFrame.of(1, 1, 0);
+    this.mirrorViewProjection = new Float32Array(16);
+    this.mirrorData = new Float32Array(36);
+    this.mirrorBlock = null;
+    this.mirrorFor = -1;
+    this.mirrorForStamp = -1;
+    this.mirrorStamp = 0;
+    this.mirrorView = { viewProjection: this.mirrorViewProjection, width: 1, height: 1 };
     this.eyeHeight = EYE;
     this.fieldOfView = FIELD_OF_VIEW;
     this.near = 0.05;
@@ -264,8 +292,63 @@ export class Camera {
     this.ubo.upload();
   }
 
+  // the mirrored picture's frame for a margin (a fraction of the view's size, each side); a different frame makes the mirrored values again
+  setMirror(margin: number) {
+    const f = this.mirrorFrame;
+    if (f.viewWidth !== this.width || f.viewHeight !== this.height || f.marginX !== Math.round(margin * this.width) || f.marginY !== Math.round(margin * this.height)) {
+      this.mirrorFrame = ReflectionFrame.of(this.width, this.height, margin);
+      this.mirrorStamp++;
+    }
+  }
+
+  // the mirrored pass's values for the camera as it stands (after update()): the view's block with the clip x and y scaled and the picture's size, and the view-projection and
+  // size the quality jobs take; made again only when the camera or the frame changed
+  mirrorUpdate() {
+    if (this.mirrorFor === this.version && this.mirrorForStamp === this.mirrorStamp) {
+      return;
+    }
+    this.mirrorFor = this.version;
+    this.mirrorForStamp = this.mirrorStamp;
+    const f = this.mirrorFrame;
+    const d = this.mirrorData;
+    d.set(this.ubo.data);
+    ReflectionFrame.scaleViewProjection(this.viewProjection, f, this.mirrorViewProjection);
+    d.set(this.mirrorViewProjection, 0);
+    d[31] = f.marginX;
+    d[32] = f.width;
+    d[33] = f.height;
+    d[35] = f.marginY;
+    this.mirrorView.width = f.width;
+    this.mirrorView.height = f.height;
+    const block = this.mirrorBlock;
+    if (block) {
+      block.data.set(d);
+      block.upload();
+    }
+  }
+
+  // the Camera block's binding point on the mirrored pass's block (made here the first time), and back on the view's
+  bindMirror() {
+    const gl = this.gl;
+    let block = this.mirrorBlock;
+    if (!block) {
+      block = this.mirrorBlock = new M.UniformBlock(gl, "Camera", 36);
+      block.data.set(this.mirrorData);
+      block.upload();
+    }
+    gl.bindBufferBase(gl.UNIFORM_BUFFER, M.BLOCKS.Camera, block.buffer);
+  }
+
+  bindView() {
+    const gl = this.gl;
+    gl.bindBufferBase(gl.UNIFORM_BUFFER, M.BLOCKS.Camera, this.ubo.buffer);
+  }
+
   destroy() {
     this.ubo.destroy();
+    if (this.mirrorBlock) {
+      this.mirrorBlock.destroy();
+    }
   }
 
   static dot(a: ArrayLike<number>, b: ArrayLike<number>) {
@@ -280,6 +363,7 @@ Camera.prototype.eyeX = 0;
 Camera.prototype.eyeShift = 0;
 Camera.prototype.baseVersion = 0;
 Camera.SPAN = 1.0;
+Camera.EYE = EYE;
 // a distance for nothing seen there (the farthest a half float holds)
 Camera.FAR_DISTANCE = 65504;
 Camera.HIGHEST_PITCH = Parallax.pitchFor(LOWEST_PLANE_HEIGHT, Camera.halfFov());

@@ -6,6 +6,7 @@
 //
 // Changelog:
 // 2026-11-10: new, from Fog.update, Fog.setEvery, Fog.due and Fog.buildDue.
+// 2026-11-11: same() tells an array from a typed array or a non-array, compares key sets both ways by own property, and takes objects that are not plain data by reference only.
 import { M } from "../engine/core";
 import { QualityFog } from "./quality/fog";
 import type { FogQualityView } from "./quality/fog";
@@ -264,7 +265,13 @@ function same(a: unknown, b: unknown): boolean {
   if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) {
     return false;
   }
-  if (ArrayBuffer.isView(a) || Array.isArray(a)) {
+  const listA = ArrayBuffer.isView(a) || Array.isArray(a);
+  const listB = ArrayBuffer.isView(b) || Array.isArray(b);
+  if (listA || listB) {
+    // (an array only with an array, a typed array only with one of its own kind)
+    if (!listA || !listB || Array.isArray(a) !== Array.isArray(b) || (!Array.isArray(a) && a.constructor !== b.constructor)) {
+      return false;
+    }
     const x = a as ArrayLike<unknown>;
     const y = b as ArrayLike<unknown>;
     if (x.length !== y.length) {
@@ -277,11 +284,22 @@ function same(a: unknown, b: unknown): boolean {
     }
     return true;
   }
+  // (an object that is not plain data, a Map, a Date, a class instance: the same only by reference)
+  const plain = (o: object) => {
+    const proto = Object.getPrototypeOf(o);
+    return proto === Object.prototype || proto === null;
+  };
+  if (!plain(a) || !plain(b)) {
+    return false;
+  }
   const keys = Object.keys(a);
   if (keys.length !== Object.keys(b).length) {
     return false;
   }
   for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(b, key)) {
+      return false;
+    }
     if (!same((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key])) {
       return false;
     }

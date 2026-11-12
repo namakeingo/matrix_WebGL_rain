@@ -17,6 +17,9 @@ uniform sampler2D uReflection;
 uniform highp sampler2D uReflectionDistance;
 uniform float uStrength;
 uniform bool uCovered;
+// the mirrored picture's margin past the view on each side (whole pixels: Reflection's frame; 0: the picture is the view). A place of the view (pixels) is the
+// picture's texel at the place plus the margin; the picture is the view's size plus twice the margin
+uniform vec2 uMirrorMargin;
 // the water off: no surface, the rays below the horizon show the sky and the fog of the rays mirrored upwards
 uniform bool uWaterOff;
 // the glossy read on: the reflection's mip chain is made (off, while the waves are calm: every beam is under a pixel, the point read)
@@ -138,10 +141,25 @@ bool flatWater(vec2 xz, vec2 foot, float t) {
   return false;
 }
 
-// the light the water reflects diffusely at s (normal n): its albedo lit by the sky and the moon
+// the light the water reflects diffusely at s (normal n): its albedo lit by the sky box and the moon (the one light term of the fog's shared text: the sky box's
+// SKY x (1 + n.y) / 2 x the clouds' transmittance, which for an upward normal is SKY x shade.x, and MOON x max(n.m, 0) / PI x the moon's)
 vec3 waterOwnShaded(vec2 shade, vec3 n) {
-  vec3 moon = normalize(MOON_DIR);
-  return WATER_ALBEDO * uTone * (SKY * shade.x + MOON * max(dot(n, moon), 0.0) / PI * shade.y);
+  return WATER_ALBEDO * uTone * glyphSkyMoonLight(n, shade);
+}
+// the moon's disc seen in the water's mirror, along the reflected unit direction r over the glossy beam a pixel covers (footprint: its angular radius, from
+// the reflected direction's change a pixel across): the disc's radiance MOON / solid angle over the part of the beam it covers, its edge smoothed over the
+// squared angle (the light kept is exact: the integral over the sphere is pi s^2 for the radius s = the larger of the disc's and the beam's), a beam wider
+// than the disc spreading the disc's light over its width, times the clouds' transmittance towards the moon. (materials/sky.ts: MoonDisc.glint)
+vec3 moonGlint(vec3 r, float footprint, float moonShade) {
+  vec3 m = normalize(MOON_DIR);
+  if (dot(r, m) <= 0.0) return vec3(0.0);
+  vec3 across = cross(r, m);
+  float delta2 = dot(across, across);
+  float s = max(MOON_RADIUS, footprint);
+  float s2 = s * s;
+  float cover = 1.0 - smoothstep(0.6 * s2, 1.4 * s2, delta2);
+  float spread = (MOON_RADIUS * MOON_RADIUS) / s2;
+  return MOON_RADIANCE * (cover * spread * moonShade);
 }
 vec3 waterOwn(vec3 s, vec3 n, float lod) {
   return waterOwnShaded(skyShade(s, lod, uMarched), n);
@@ -170,14 +188,15 @@ vec3 mirroredSky(vec2 at, out vec3 strike) {
 // there (a level is the exact mean of the texels it covers: the light is kept, spread)
 vec3 glyphsOver(vec2 at, vec2 major, float minor) {
   float len = length(major);
-  if (len < GLOSS_MIN) return texelFetch(uReflection, ivec2(at), 0).rgb;
+  if (len < GLOSS_MIN) return texelFetch(uReflection, ivec2(at + uMirrorMargin), 0).rgb;
+  vec2 pictureSize = cScreen.xy + 2.0 * uMirrorMargin;
   int n = clamp(int(ceil(len / minor - 0.01)), 1, 4);
   float level = log2(max(len / float(n), minor));
   vec3 sum = vec3(0.0);
   for (int i = 0; i < 4; i++) {
     if (i >= n) break;
     vec2 p = at + major * ((float(i) + 0.5) / float(n) - 0.5);
-    sum += textureLod(uReflection, p / cScreen.xy, level).rgb;
+    sum += textureLod(uReflection, (p + uMirrorMargin) / pictureSize, level).rgb;
   }
   return sum / float(n);
 }
@@ -191,11 +210,13 @@ vec3 glyphsOver(vec2 at, vec2 major, float minor) {
 vec3 mirroredAt(vec2 at, vec2 major, float minor, out vec3 emitted, out vec3 scene) {
   vec2 edge = cScreen.xy * fVolume.w;
   vec3 glyphs = vec3(0.0);
-  bool inside = all(greaterThanEqual(at, vec2(0.0))) && all(lessThan(at, cScreen.xy));
+  // (the picture holds the view and its margin; the bolt's cover pictures are the view's alone: the cover is not applied past the view)
+  bool inside = all(greaterThanEqual(at, -uMirrorMargin)) && all(lessThan(at, cScreen.xy + uMirrorMargin));
+  bool onScreen = all(greaterThanEqual(at, vec2(0.0))) && all(lessThan(at, cScreen.xy));
   if (inside) glyphs = glyphsOver(at, major, minor);
   vec3 strike;
   vec3 sky = mirroredSky(clamp(at, -edge, cScreen.xy + edge), strike);
-  if (uCovered && inside) {
+  if (uCovered && onScreen) {
     vec4 cover = texelFetch(uBoltCover, ivec2(at), 0);
     vec4 sums = texelFetch(uBoltNear, ivec2(at), 0);
     float near = sums.a > 0.0 ? sums.g / sums.a : 0.0;
@@ -224,14 +245,15 @@ vec3 reflectedAt(vec3 s, float hit, vec3 r, vec3 n, ivec2 pixel, float lod, bool
   emitted = vec3(0.0);
   scene = vec3(0.0);
   if (uTestReflection == 1) return vec3(1.0);
+  if (uTestReflection >= 3 && r.y < 0.0) return vec3(0.0);
   if (r.y < 0.0) return waterOwn(s, n, lod);
   vec2 at = vec2(pixel) + 0.5;
   float ink = FOG_FAR;
   for (int k = 0; k < 2; k++) {
-    bool inside = all(greaterThanEqual(at, vec2(0.0))) && all(lessThan(at, cScreen.xy));
+    bool inside = all(greaterThanEqual(at, -uMirrorMargin)) && all(lessThan(at, cScreen.xy + uMirrorMargin));
     // (the distance picture holds distances only in half floats: without them, 8 bits clamp it)
 #ifdef FLOAT_PICTURES
-    ink = inside ? min(texelFetch(uReflectionDistance, ivec2(at), 0).r, FOG_FAR) : FOG_FAR;
+    ink = inside ? min(texelFetch(uReflectionDistance, ivec2(at + uMirrorMargin), 0).r, FOG_FAR) : FOG_FAR;
 #else
     ink = FOG_FAR;
 #endif
@@ -242,6 +264,13 @@ vec3 reflectedAt(vec3 s, float hit, vec3 r, vec3 n, ivec2 pixel, float lod, bool
     at = (c.xy / c.w * 0.5 + 0.5) * cScreen.xy;
   }
   if (uTestReflection == 2) return vec3(clamp(at / cScreen.xy, 0.0, 1.0), 0.0);
+  // (the tests' displacement views, 3 across and 4 down: the lookup's displacement from the pixel's own place as a share of the size, +-0.2 over 16 bits in red (whole
+  // 255ths) and green (their fraction); blue 1 for a water pixel whose ray is reflected up)
+  if (uTestReflection >= 3) {
+    vec2 shift = (at - (vec2(pixel) + 0.5)) / cScreen.xy;
+    float v = clamp((uTestReflection == 3 ? shift.x : shift.y) * 2.5 + 0.5, 0.0, 1.0) * 255.0;
+    return vec3(floor(v) / 255.0, fract(v), 1.0);
+  }
   vec2 major = vec2(0.0);
   float minor = 1.0;
   if (gloss && uGlossOn && !uNoGlossyRead) {
@@ -341,7 +370,8 @@ void main() {
   ivec2 pixel = ivec2(gl_FragCoord.xy);
   outReflected = vec4(0.0, 0.0, 0.0, 1.0);
 #ifdef TEST_VIEWS
-  if (uMode >= MODE_FOGT) {
+  // (the fog views: the modes from MODE_FOGT on, but the glint view, numbered after them)
+  if (uMode >= MODE_FOGT && uMode != MODE_WATERGLINT) {
     bool mirrored = uMode == MODE_MIRRORFOGT || uMode == MODE_MIRRORFOGTMARCH;
     bool march = uMode == MODE_FOGTMARCH || uMode == MODE_FOGLIGHTMARCH || uMode == MODE_MIRRORFOGTMARCH;
     if (mirrored && d.y >= 0.0) {
@@ -358,7 +388,7 @@ void main() {
     vec3 emitted;
     vec3 scene;
     vec3 skyMirror = d.y < 0.0 && !uWaterOff ? mirroredAt(gl_FragCoord.xy, vec2(0.0), 1.0, emitted, scene) : vec3(0.0);
-    outColor = vec4(d.y < 0.0 && !uWaterOff ? skyMirror + scene : texelFetch(uReflection, pixel, 0).rgb, 1.0);
+    outColor = vec4(d.y < 0.0 && !uWaterOff ? skyMirror + scene : texelFetch(uReflection, pixel + ivec2(uMirrorMargin), 0).rgb, 1.0);
     return;
   }
   if (uMode == MODE_WATERMASK) {
@@ -438,6 +468,9 @@ void main() {
     // the mirrored scene's light (the drops, the splashes, the bolt) at the Reflection strength: added after the
     // ripples' gain, which acts on the water's own light and shadows only
     vec3 sceneLight = vec3(0.0);
+    // the moon's glint on the ripples' normal, times the Fresnel reflectance (a mirror's light: not in the pass's body light, not in the ripples' gain, not in
+    // the bloom's source)
+    vec3 glintLight = vec3(0.0);
     int passes = isFlat ? 1 : uRipplePasses;
     for (int pass = 0; pass < passes; pass++) {
       if (pass >= 2) break;
@@ -454,6 +487,7 @@ void main() {
       // added with it after the gain)
       vec3 reflectedPass = (uNoWaterLight ? vec3(0.0) : litPass * uTone) * (1.0 - fPass) + (em - scn) * fPass;
       if (pass == 0) {
+        if (!isFlat) glintLight = moonGlint(reflect(d, nn), 0.5 * max(length(drx), length(dry)), shade.y) * fPass;
         mirrored = mir + scn * uStrength;
         sceneLight = scn * uStrength * fPass;
         color = colorPass;
@@ -467,7 +501,7 @@ void main() {
       color = rippleGain(colorStill, color);
       reflected = rippleGain(reflectedStill, reflected);
     }
-    color += sceneLight;
+    color += sceneLight + glintLight;
     reflected += sceneLight;
 #ifdef TEST_VIEWS
     if (uMode == MODE_REFLECTION) {
@@ -478,6 +512,10 @@ void main() {
       outColor = vec4(waterOwn(s, n, lod) * uViewScale, 1.0);
       return;
     }
+    if (uMode == MODE_WATERGLINT) {
+      outColor = vec4(glintLight * uViewScale, 1.0);
+      return;
+    }
     if (uMode == MODE_WATERLIGHT) {
       outColor = vec4(lit * uViewScale, 1.0);
       return;
@@ -485,7 +523,7 @@ void main() {
 #endif
   }
 #ifdef TEST_VIEWS
-  else if (uMode == MODE_WATERDISTANCE || uMode == MODE_REFLECTION || uMode == MODE_WATERLIGHT || uMode == MODE_WATEROWN) {
+  else if (uMode == MODE_WATERDISTANCE || uMode == MODE_REFLECTION || uMode == MODE_WATERLIGHT || uMode == MODE_WATEROWN || uMode == MODE_WATERGLINT) {
     outColor = vec4(0.0, 0.0, 0.0, 1.0);
     return;
   }

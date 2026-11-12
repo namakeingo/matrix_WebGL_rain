@@ -1,0 +1,1 @@
+const vec3 MOON_K${k} = vec3(${x}, ${y}, ${z});

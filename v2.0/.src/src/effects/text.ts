@@ -192,7 +192,7 @@ export class Text extends M.Effect {
       text.dirty = true;
     };
     return {
-      p117_setting_HighContrastText: (text: Text, v: boolean) => (text.highContrast = v),
+      p118_setting_HighContrastText: (text: Text, v: boolean) => (text.highContrast = v),
       p401_setting_ShowClock: (text: Text, v: boolean) => clock(text, (c) => (c.shown = v)),
       p402_setting_ClockRelativeSize: (text: Text, v: boolean) => clock(text, (c) => (c.place.relativeSize = v)),
       p403_setting_ClockSize: (text: Text, v: number) => clock(text, (c) => (c.place.size = v)),

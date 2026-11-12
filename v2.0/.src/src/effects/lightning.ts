@@ -17,9 +17,10 @@
 //   by the angle from each region's light.
 // - Its place: as the rain's drops, at a uniform density over the water (as many per square metre
 //   everywhere: Rain.distanceAt), over the rain's distances (range: the rain's nearest and
-//   furthest; NEAREST and FURTHEST without one), over the world's width; its top a place of its
-//   own, drawn apart from the foot (ends): its distance by the same law, across within
-//   TOP_INSIDE of the view. Its main channel's size
+//   furthest; NEAREST and FURTHEST without one), across the rain's spawn box (models/spawnbox.ts: the
+//   view and what the mouse parallax could bring into it); its top a place of its own, drawn apart
+//   from the foot (ends): its distance by the same law, across the box at that distance; a strike
+//   with both ends outside the view is drawn again (ends). Its main channel's size
 //   (mainSize) is Rain.DISTANCE_SIZE / the focal length in px: 1 px wide at 40 m, 40 / d px at d.
 // - Its timing: random waits (an exponential distribution, Lightning frequency seconds on
 //   average), at most M.STRIKES_MOST at once (a strike due while that many play is not made), each playing for a random time between Lightning
@@ -83,6 +84,14 @@
 //   strikes planned after it: the AHEAD already planned keep their place.
 //
 // Changelog:
+// 2026-11-12: the strikes' ends over the spawn box (models/spawnbox.ts, boxOf): the foot (the plan's) and the top across its width at their distances, kept when an end is within the view, both drawn again (at most MOST_REDRAWS) from the strike's own generator when both are outside; the leaders' meeting at the foot as drawn; TOP_INSIDE removed.
+// 2026-11-11: Debug's spare strike draws from a generator of its own (spareRng), so the plan's stream is the same with and without a bolt worker.
+// 2026-11-11: a music peak and a strike asked while Lightning is off are cleared (advance and the Lightning handler), not kept for when it is switched on.
+// 2026-11-11: a throw in the worker answer's handler is reported (onFailure, else rethrown from a timer) and the shape made here when the strike is still wanted.
+// 2026-11-11: a refit answered with null clears its marker, so a later advance asks again for the current view.
+// 2026-11-11: Strike now served without the spare ends the unused spare.
+// 2026-11-11: update() takes the slots' light from levelsAt (the same values).
+// 2026-11-11: a strike's number (uid) is given when it is accepted (queued, or placed), not in planOf: the queue's numbers are the same with and without a plan task, also with strikes past, and Debug's spare takes its number when placed.
 // 2026-11-07: the quality job "lightning" (QualityLightning): a slot whose light is under what the fog and the water can show is sent as 0.
 // 2026-11-05: the floor (floorKind, Lightning.ends): with the water off a bolt's foot is at the bottom of the screen at its distance.
 // 2026-11-05: Lightning brightness and flash brightness both from the reference 50 (was 95), FLASH_PEAK 5x; Lightning front bias
@@ -91,6 +100,7 @@ import { M } from "../engine/core";
 import { fill } from "../engine/glsl";
 import type { EffectContext } from "../engine/effect";
 import type { Camera } from "../engine/camera";
+import type { BoxLimits } from "../models/spawnbox";
 import type { FloorKind } from "../models/floor";
 import type { UniformBlock } from "../engine/gl";
 import type { AnyShape, Making } from "../models/boltshape";
@@ -113,8 +123,8 @@ const MOST = M.STRIKES_MOST;
 const PEAK_SCALE = 60;
 const BOLT_PEAK = (PEAK_SCALE * 5) / 95;
 const FLASH_PEAK = (PEAK_SCALE * 50 * 5) / 95;
-// the most of the view's half width the top is placed in (at its own distance)
-const TOP_INSIDE = 0.9;
+// the most draws again of a strike whose two ends are outside the view (Lightning.ends): the last draw is kept after them
+const MOST_REDRAWS = 8;
 // the emitter's regions (one baked shadow each, a component of a vec4) and its texture's rows a
 // slot (Flash.TEXELS_ACROSS texels a row)
 const GROUPS = M.Flash.REGIONS;
@@ -194,7 +204,7 @@ export interface Strike {
   // the Lightning front bias the strike was planned with: its ends are drawn with it again when it
   // is made again for a new view
   bias?: number;
-  // the strike's number (planOf) and the flash last announced for it (onPlanned)
+  // the strike's number (given when it is queued or placed) and the flash last announced for it (onPlanned)
   uid?: number;
   plannedFor?: Float32Array | null;
 }
@@ -253,6 +263,7 @@ export class Lightning extends M.Effect {
   levels!: Float32Array<ArrayBuffer>;
   spare!: Strike | null;
   generation!: number;
+  // (fromWorker, rushed, skipped, past and frameInfo are counters and records read only by the tests: the test API of the shipped class)
   fromWorker!: number;
   worker!: BoltPool | null;
   past!: number;
@@ -265,6 +276,10 @@ export class Lightning extends M.Effect {
   // the generator behind `random` (its state in the open: handed to the plan's worker with each request), the plan's task (src/index.ts gives it: workers/strikeplanworker.ts), the
   // request not answered yet (its id; 0: none) with the generation, the generator's state and the front bias it was asked for
   rng!: Mulberry;
+  // Debug's spare strike's own generator: its place and its plan's draws, apart from the plan's stream
+  spareRng!: Mulberry;
+  // where an unexpected error of an asynchronous callback is reported (src/index.ts gives it); without one it is thrown from a timer, so it is not lost
+  onFailure: ((error: unknown) => void) | null = null;
   planTask: JobTask<StrikePlanInput, StrikePlanOutput> | null = null;
   planAsked = 0;
   planFor: { generation: number; rng: number; frontBias: number } | null = null;
@@ -299,6 +314,8 @@ export class Lightning extends M.Effect {
   // view): a strike's shape seen through the camera, started (BoltShape.start with its F:
   // step(budget) gives it once made)
   // range(): the nearest and the furthest distance strikes are placed at (the rain's)
+  // boxOf(): the spawn box (models/spawnbox.ts) the strikes' feet and tops are drawn across (src/index.ts gives the rain's); none: the camera's view
+  boxOf: (() => BoxLimits) | undefined;
   constructor(context: EffectContext, onStart: (slot: number) => void, onMeet: (x: number, z: number, weight: number) => void, startShape: StartShape, range?: () => number[]) {
     super(context);
     this.onStart = onStart;
@@ -342,6 +359,7 @@ export class Lightning extends M.Effect {
     this.slots = new Array(MOST).fill(null);
     this.wait = () => -Math.log(1 - this.random()) * this.frequency;
     this.rng = new M.Mulberry(this.seed);
+    this.spareRng = new M.Mulberry(Lightning.spareSeed(this.seed));
     this.random = () => this.rng.next();
     // the strikes planned, in order (time, place, playing time, seed, flickers, its shape's
     // making), the time of the last planned (-1: none yet), and the strikes whose shape was
@@ -394,9 +412,10 @@ export class Lightning extends M.Effect {
 
   static properties() {
     return {
-      p120_setting_Lightning: (lightning: Lightning, v: boolean) => {
+      p121_setting_Lightning: (lightning: Lightning, v: boolean) => {
         lightning.enabled = v;
         lightning.strikeAsked = lightning.strikeAsked && v;
+        lightning.musicAsked = lightning.musicAsked && v;
         lightning.replan();
       },
       // (a toggle, either way, asks for a strike now, with Debug mode and Lightning on; the
@@ -408,16 +427,16 @@ export class Lightning extends M.Effect {
         lightning.strikeNowLast = v;
       },
       p619_setting_DebugStrikeDistance: (lightning: Lightning, v: number) => (lightning.strikeDistance = v),
-      p126_setting_LightningFrequency: (lightning: Lightning, v: number) => {
+      p127_setting_LightningFrequency: (lightning: Lightning, v: number) => {
         lightning.frequency = v;
         lightning.replan();
       },
-      p121_setting_LightningPlayTimeMin: (lightning: Lightning, v: number) => (lightning.shortest = v / 1000),
-      p122_setting_LightningPlayTimeMax: (lightning: Lightning, v: number) => (lightning.longest = v / 1000),
-      p123_setting_LightningBrightness: (lightning: Lightning, v: number) => (lightning.brightness = v),
-      p124_setting_LightningFlashBrightness: (lightning: Lightning, v: number) => (lightning.flashBrightness = v),
-      p128_setting_LightningFrontBias: (lightning: Lightning, v: number) => (lightning.frontBias = v),
-      p125_setting_LightningFlashHue: (lightning: Lightning, v: number) => (lightning.color = Lightning.colorOf(v)),
+      p122_setting_LightningPlayTimeMin: (lightning: Lightning, v: number) => (lightning.shortest = v / 1000),
+      p123_setting_LightningPlayTimeMax: (lightning: Lightning, v: number) => (lightning.longest = v / 1000),
+      p124_setting_LightningBrightness: (lightning: Lightning, v: number) => (lightning.brightness = v),
+      p125_setting_LightningFlashBrightness: (lightning: Lightning, v: number) => (lightning.flashBrightness = v),
+      p129_setting_LightningFrontBias: (lightning: Lightning, v: number) => (lightning.frontBias = v),
+      p126_setting_LightningFlashHue: (lightning: Lightning, v: number) => (lightning.color = Lightning.colorOf(v)),
       // (Debug mode's No lightning flash: the light the strikes cast off, levelsAt 0; their bolts
       // drawn and their impacts made)
       p622_setting_DebugNoFlash: (lightning: Lightning, v: boolean) => (lightning.noFlash = v),
@@ -480,6 +499,11 @@ export class Lightning extends M.Effect {
     return (seed + 0x9e3779b9) >>> 0;
   }
 
+  // the seed of the spare strike's generator, apart from the plan's (seed) and the shapes' (shapeSeed of a strike's)
+  static spareSeed(seed: number) {
+    return (seed + 0x7f4a7c15) >>> 0;
+  }
+
   // the bolt's shapes made in a worker from now (BoltWorker's client; null: on the main thread):
   // a planned strike asks it for its shape, made here at once only if due before it comes
   useWorker(client: BoltPool | null) {
@@ -499,7 +523,7 @@ export class Lightning extends M.Effect {
   // a strike's shape asked of the worker (its generation, and when it is wanted: soonest made
   // first): done(shape) when it comes if wanted() still says so, else given back; null when
   // cancelled; fallback() when the worker failed
-  request(s: Strike, ends: StrikeEnds, generation: number, at: number, wanted: () => boolean, done: (shape: WorkerShape) => void, fallback: () => void) {
+  request(s: Strike, ends: StrikeEnds, generation: number, at: number, wanted: () => boolean, done: (shape: WorkerShape) => void, fallback: () => void, cancelled?: () => void) {
     const view = this.camera;
     const token = {};
     s.asked = token;
@@ -512,19 +536,34 @@ export class Lightning extends M.Effect {
     };
     this.worker!.make(spec, { generation, at }).then(
       (shape: WorkerShape | null) => {
-        if (!shape) {
-          if (s.asked === token) {
-            s.asked = null;
+        try {
+          if (!shape) {
+            if (s.asked === token) {
+              s.asked = null;
+              if (cancelled) {
+                cancelled();
+              }
+            }
+            return;
           }
-          return;
+          if (s.asked !== token || !wanted()) {
+            shape.destroy!();
+            return;
+          }
+          s.asked = null;
+          this.fromWorker++;
+          done(shape);
+        } catch (error) {
+          // (a throw here would be a rejection nobody handles, the strike lost: reported, and made here if still wanted)
+          this.report(error);
+          try {
+            if (wanted()) {
+              fallback();
+            }
+          } catch (again) {
+            this.report(again);
+          }
         }
-        if (s.asked !== token || !wanted()) {
-          shape.destroy!();
-          return;
-        }
-        s.asked = null;
-        this.fromWorker++;
-        done(shape);
       },
       () => {
         if (s.asked === token) {
@@ -533,6 +572,17 @@ export class Lightning extends M.Effect {
         }
       }
     );
+  }
+
+  // an unexpected error of an asynchronous callback: given to onFailure, else thrown from a timer (an uncaught error, never swallowed)
+  report(error: unknown) {
+    if (this.onFailure) {
+      this.onFailure(error);
+    } else {
+      setTimeout(() => {
+        throw error;
+      });
+    }
   }
 
   // a shape from the worker given to its strike, its flash worked out there with it
@@ -559,7 +609,7 @@ export class Lightning extends M.Effect {
   refit(s: Strike) {
     const version = this.camera.baseVersion;
     const again: Strike = Object.assign({}, s, { shape: null, making: null, asked: null, refit: null, flashFrom: null, version });
-    const ends = Lightning.ends(again.x, again.z, this.camera, M.seededRandom(again.seed), this.range ? this.range() : null, again.bias, this.floorKind);
+    const ends = Lightning.ends(again.x, again.z, this.camera, M.seededRandom(again.seed), this.range ? this.range() : null, again.bias, this.floorKind, this.boxOf ? this.boxOf() : undefined);
     again.top = ends.top;
     again.foot = ends.foot;
     s.refit = { version };
@@ -584,6 +634,11 @@ export class Lightning extends M.Effect {
         this.fit(again);
         swap();
       }
+    }, () => {
+      // (no shape came: asked again by the next advance for the view then)
+      if (s.refit && s.refit.version === version) {
+        s.refit = null;
+      }
     });
   }
 
@@ -604,14 +659,23 @@ export class Lightning extends M.Effect {
     const along = -view.eyeHeight * Math.sin(view.pitch) + d * Math.cos(view.pitch);
     const half = 0.8 * (view.width / view.height) * Math.tan(view.halfFov()) * along;
     this.settlePlan();
-    const s = this.planOf((this.random() * 2 - 1) * half, -d, 0);
-    const ends = Lightning.ends(s.x, s.z, view, M.seededRandom(s.seed), this.range ? this.range() : null, s.bias, this.floorKind);
+    // (its draws from the generator of its own: the plan's stream, settled above, stays as it is without a worker)
+    const shared = this.rng;
+    this.rng = this.spareRng;
+    let s: Strike;
+    try {
+      s = this.planOf((this.random() * 2 - 1) * half, -d, 0);
+    } finally {
+      this.rng = shared;
+    }
+    const ends = Lightning.ends(s.x, s.z, view, M.seededRandom(s.seed), this.range ? this.range() : null, s.bias, this.floorKind, this.boxOf ? this.boxOf() : undefined);
     s.distance = d;
     s.version = version;
     s.top = ends.top;
     s.foot = ends.foot;
     this.spare = s;
-    this.request(s, ends, 0, Infinity, () => this.spare === s && this.camera.baseVersion === version, (shape: WorkerShape) => Lightning.take(s, shape), () => {});
+    const spare = s;
+    this.request(spare, ends, 0, Infinity, () => this.spare === spare && this.camera.baseVersion === version, (shape: WorkerShape) => Lightning.take(spare, shape), () => {});
   }
 
   // the floor the feet stand on, from now: the strikes are fitted again to the new floor with the view (src/index.ts
@@ -620,21 +684,50 @@ export class Lightning extends M.Effect {
     this.floorKind = kind;
   }
 
-  // a strike's top and foot, for a foot at x, z on the water: the top a place of its own, drawn
-  // apart from the foot: its distance as a strike's foot's (as many per square metre:
-  // Rain.distanceAt over range, [nearest, furthest], else NEAREST to FURTHEST), across anywhere
-  // within TOP_INSIDE of the view's half width at that distance, at the top of the view there
-  // (the bolt fitted from the water at the foot's distance to the top of the screen at the
-  // top's); the distance's draw biased toward the front by bias (Lightning front bias, 0 to 100:
-  // StrikeBias.biasedUnit, the draw unchanged at 0)
-  static ends(x: number, z: number, view: Camera, random: () => number, range: number[] | null, bias = 0, floor: FloorKind = "water"): StrikeEnds {
-    const distance = M.Rain.distanceAt(M.StrikeBias.biasedUnit(random(), bias), range ? range[0] : NEAREST, range ? range[1] : FURTHEST);
-    const across = random() * 2 - 1;
-    const tz = -distance;
-    const ty = view.topAt(distance);
-    const along = (ty - view.eyeHeight) * Math.sin(view.pitch) - tz * Math.cos(view.pitch);
-    const half = TOP_INSIDE * (view.width / view.height) * Math.tan(view.halfFov()) * along;
-    return { top: [across * half, ty, tz], foot: [x, M.Floor.heightAt(floor, -z, view.eyeHeight, view.halfFov(), view.pitch), z] };
+  // a strike's top and foot, for a foot at x, z on the water (the plan's draw): the top a place of its own, drawn apart from the foot: its distance as a strike's foot's (as many per
+  // square metre: Rain.distanceAt over range, [nearest, furthest], else NEAREST to FURTHEST), across anywhere within the spawn box's width at that distance (box, models/spawnbox.ts;
+  // none: the camera's view as a box), at the top of the view there (the bolt fitted from the water at the foot's distance to the top of the screen at the top's); the distance's draw
+  // biased toward the front by bias (Lightning front bias, 0 to 100: StrikeBias.biasedUnit, the draw unchanged at 0).
+  // The strike is kept if at least one of its two ends is within the view's width at its distance (the camera's view as it is, the parallax's offsets applied when it is on: the
+  // spawn box is wider than the view by the range the parallax reaches); drawn again if both are outside: the foot (distance and across the box) and the top, up to MOST_REDRAWS
+  // times, from the strike's own generator `random` only (a strike made again for another view draws the same numbers, so it keeps its ends where they are in the view), the last
+  // draw kept after them. Pure in its inputs.
+  static ends(x: number, z: number, view: Camera, random: () => number, range: number[] | null, bias = 0, floor: FloorKind = "water", box?: BoxLimits): StrikeEnds {
+    const near = range ? range[0] : NEAREST;
+    const far = range ? range[1] : FURTHEST;
+    const aspect = view.width / view.height;
+    const halfFov = view.halfFov();
+    const sides = box || Lightning.viewBox(view);
+    const seen = { eyeX: view.eyeX, eyeY: view.eyeY(), tilt: view.tilt(), yaw: view.yaw, aspect, halfFov };
+    let footX = x;
+    let footZ = z;
+    let distance = M.Rain.distanceAt(M.StrikeBias.biasedUnit(random(), bias), near, far);
+    let across = random() * 2 - 1;
+    for (let draws = 0; ; draws++) {
+      const ty = view.topAt(distance);
+      const footY = M.Floor.heightAt(floor, -footZ, view.eyeHeight, halfFov, view.pitch);
+      const ends: StrikeEnds = { top: [across * M.SpawnBox.widthAt(sides.slope, sides.shift, sides.span, distance), ty, -distance], foot: [footX, footY, footZ] };
+      if (draws >= MOST_REDRAWS || M.SpawnBox.sees(seen, ends.top[0]!, ty, ends.top[2]!) || M.SpawnBox.sees(seen, footX, footY, footZ)) {
+        return ends;
+      }
+      // (both ends are outside the view: the foot and the top drawn again, in this order)
+      const footDistance = M.Rain.distanceAt(M.StrikeBias.biasedUnit(random(), bias), near, far);
+      footX = (random() * 2 - 1) * M.SpawnBox.widthAt(sides.slope, sides.shift, sides.span, footDistance);
+      footZ = -footDistance;
+      distance = M.Rain.distanceAt(M.StrikeBias.biasedUnit(random(), bias), near, far);
+      across = random() * 2 - 1;
+    }
+  }
+
+  // a box's sides as plain data (what the strikes' plan is given: a worker's input)
+  static limitsOf(box: BoxLimits): BoxLimits {
+    return { slope: box.slope, shift: box.shift, span: box.span };
+  }
+
+  // the camera's view as a box (no parallax reach): the sides ends() draws across when it is given none
+  static viewBox(view: Camera): BoxLimits {
+    const b = M.SpawnBox.make({ aspect: view.width / view.height, halfFov: view.halfFov(), pitch: view.pitch, eyeHeight: view.eyeHeight, yaw: 0, pitchReach: 0, eyeX: 0, eyeY: 0, near: NEAREST, far: FURTHEST });
+    return { slope: b.slope, shift: b.shift, span: b.span };
   }
 
   // a strike's shape for the camera's view now, from its own random numbers (the same strike
@@ -652,7 +745,7 @@ export class Lightning extends M.Effect {
   // from its seed, its shape's from shapeSeed): asked of the worker when there is one (not when
   // it is wanted at once), else made here a slice at a time
   begin(s: Strike, atOnce = false) {
-    const ends = Lightning.ends(s.x, s.z, this.camera, M.seededRandom(s.seed), this.range ? this.range() : null, s.bias, this.floorKind);
+    const ends = Lightning.ends(s.x, s.z, this.camera, M.seededRandom(s.seed), this.range ? this.range() : null, s.bias, this.floorKind, this.boxOf ? this.boxOf() : undefined);
     s.shape = null;
     s.making = null;
     s.version = this.camera.baseVersion;
@@ -681,7 +774,6 @@ export class Lightning extends M.Effect {
       z,
       met: false,
       bias: this.frontBias,
-      uid: ++this.uids,
     };
   }
 
@@ -701,11 +793,13 @@ export class Lightning extends M.Effect {
       // (as many per square metre: the distance's density grows with it)
       const range = this.range ? this.range() : null;
       const distance = M.Rain.distanceAt(M.StrikeBias.biasedUnit(this.random(), this.frontBias), range ? range[0] : NEAREST, range ? range[1] : FURTHEST);
-      const s = this.planOf((this.random() * 2 - 1) * distance * M.Camera.SPAN, -distance, this.planned);
+      const box = this.boxOf ? this.boxOf() : null;
+      const s = this.planOf((this.random() * 2 - 1) * (box ? M.SpawnBox.halfWidth(box, distance) : distance * M.Camera.SPAN), -distance, this.planned);
       if (s.start + longest < time) {
         this.past++;
         continue;
       }
+      s.uid = ++this.uids;
       this.begin(s);
       this.queue.push(s);
     }
@@ -732,6 +826,7 @@ export class Lightning extends M.Effect {
         nearest: NEAREST,
         furthest: FURTHEST,
         span: M.Camera.SPAN,
+        box: this.boxOf ? Lightning.limitsOf(this.boxOf()) : undefined,
       };
       this.planAsked = task.request(this.planInput);
       this.takePlan();
@@ -774,6 +869,7 @@ export class Lightning extends M.Effect {
         bias: frontBias,
         uid: ++this.uids,
       };
+      // (accepted here: the number is given only to a strike queued)
       this.begin(s);
       this.queue.push(s);
     }
@@ -808,6 +904,10 @@ export class Lightning extends M.Effect {
   // a strike made, in a free slot or the oldest strike's (its foot strikes the water at its
   // meeting, in advance)
   place(s: Strike) {
+    // (a strike made on demand, or Debug's spare, is numbered when placed; a queued strike has its number)
+    if (s.uid === undefined) {
+      s.uid = ++this.uids;
+    }
     s.F = s.shape!.F;
     if (s.flashFrom !== s.shape) {
       s.flash = Lightning.flashOf(s.shape!).floats;
@@ -975,7 +1075,8 @@ export class Lightning extends M.Effect {
       const s = this.slots[i];
       if (s && !s.met && time >= s.start + MEET * s.duration) {
         s.met = true;
-        this.onMeet(s.x, s.z, IMPACT);
+        // (the foot as drawn: the plan's, or the one drawn again when both ends were outside the view)
+        this.onMeet(s.foot ? s.foot[0]! : s.x, s.foot ? s.foot[2]! : s.z, IMPACT);
       }
       if (s && time > s.start + s.duration) {
         Lightning.end(s);
@@ -985,6 +1086,9 @@ export class Lightning extends M.Effect {
       }
     }
     if (!this.enabled) {
+      // (a peak or a strike asked while it is off is not kept for when it is on)
+      this.musicAsked = false;
+      this.strikeAsked = false;
       return;
     }
     const info = this.frameInfo;
@@ -1099,6 +1203,10 @@ export class Lightning extends M.Effect {
         s.start = time;
         this.place(s);
       } else {
+        if (this.spare) {
+          Lightning.end(this.spare);
+          this.spare = null;
+        }
         const view = this.camera;
         const d = this.strikeDistance;
         const along = -view.eyeHeight * Math.sin(view.pitch) + d * Math.cos(view.pitch);
@@ -1145,12 +1253,10 @@ export class Lightning extends M.Effect {
     gl.bindBuffer(gl.UNIFORM_BUFFER, this.ubo.buffer);
     this.sent = playing;
     let any = false;
-    // (Debug mode's No lightning flash: no light cast)
-    const off = this.debug && this.noFlash;
+    // (the slots' light: levelsAt, with Debug mode's No lightning flash)
+    const levels = this.levelsAt(time);
     for (let k = 0; k < 4; k++) {
-      const s = k < MOST && !off ? this.slots[k] : null;
-      const light = s ? this.light(s, time) : 0;
-      const level = QualityLightning.visible(light) ? light : 0;
+      const level = k < MOST ? levels[k] : 0;
       d[4 + k] = level;
       any = any || level > 0;
     }
@@ -1183,6 +1289,7 @@ export class Lightning extends M.Effect {
     this.planned = -1;
     this.rushed = 0;
     this.rng = new M.Mulberry(this.seed);
+    this.spareRng = new M.Mulberry(Lightning.spareSeed(this.seed));
     this.random = () => this.rng.next();
     this.sent = true;
     this.flashDue.fill(0);

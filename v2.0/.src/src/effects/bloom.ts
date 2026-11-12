@@ -174,7 +174,7 @@ export class Bloom extends M.Effect {
   }
 
   static properties() {
-    return { p106_setting_Bloom: (bloom: Bloom, v: number) => (bloom.share = (v / 100) * SHARE_FULL) };
+    return { p107_setting_Bloom: (bloom: Bloom, v: number) => (bloom.share = (v / 100) * SHARE_FULL) };
   }
 
   init(programs: Programs) {

@@ -66,7 +66,33 @@ float shadeLod(vec3 p) {
   float up = 2.0 * sqrt(max(p.y, 0.0) * SHADE_TOP) / (SHADE_CELLS.y - 1.0);
   return lodOf(max(max(2.0 * SHADE_SPAN * z / (SHADE_CELLS.x - 1.0), up), z * SHADE_LOG / (SHADE_CELLS.z - 1.0)));
 }
+// the moon's penumbra kernel: the directions over the disc (materials/sky.ts: MoonDisc.directions, the centre first, then the edge), the number of
+// them the bake takes, and the most there are
+const int MOON_KERNEL = ${MOON_KERNEL};
+const int MOON_KERNEL_MAX = ${MOON_KERNEL_MAX};
+${moonKernelConstants}
+// the count of the kernel's directions, given at run time (0, never set outside the tests: MOON_KERNEL): a loop of a count the compiler knows is unrolled by
+// Direct3D's compiler through ANGLE, each direction's march inlined
+uniform int uMoonKernel;
+vec3 moonDirection(int i) {
+  if (i == 0) return MOON_K0;
+  if (i == 1) return MOON_K1;
+  if (i == 2) return MOON_K2;
+  if (i == 3) return MOON_K3;
+  return MOON_K4;
+}
+// how much of the moon's light gets to p through the clouds: the mean over the kernel's directions of the light through 8 m of them (the count a value at
+// run time, the constant most checked inside, the heavy march called from one place)
+float moonThrough(vec3 p, float lod) {
+  int n = uMoonKernel > 0 ? uMoonKernel : MOON_KERNEL;
+  float sum = 0.0;
+  for (int i = 0; i < n; i++) {
+    if (i >= MOON_KERNEL_MAX) break;
+    sum += lightThrough(p, moonDirection(i), lod);
+  }
+  return sum / float(min(n, MOON_KERNEL_MAX));
+}
 // what gets to p from the sky (x) and the moon (y) through the clouds, marched
 vec2 skyShadeMarched(vec3 p, float lod) {
-  return vec2(lightThrough(p, vec3(0.0, 1.0, 0.0), lod), lightThrough(p, normalize(MOON_DIR), lod));
+  return vec2(lightThrough(p, vec3(0.0, 1.0, 0.0), lod), moonThrough(p, lod));
 }

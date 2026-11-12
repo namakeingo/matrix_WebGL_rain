@@ -15,6 +15,7 @@
 // each unit's level depends only on its own values and the inputs, so any split of a range gives the whole's result.
 //
 // Changelog:
+// 2026-11-12: QualityInputs.mirror (the mirrored view's larger frustum).
 // 2026-11-06: new.
 import { M } from "../../engine/core";
 import { INVISIBLE, QUALITY_LEVELS } from "./types";
@@ -56,6 +57,9 @@ export interface QualityInputs {
   waterY: number;
   // world metres added to every unit's radius for the frustum test (the glyph's side margins)
   margin: number;
+  // the mirrored view's frustum when it is larger than the view's (the reflection's margin, models/reflectionframe.ts): the picture's view-projection and size, at the
+  // view's focal length; absent: the mirrored view is the view's own
+  mirror?: { viewProjection: Float32Array; width: number; height: number };
   // the blur term, 0 to 1 (1: no blur)
   blur: number;
   // the opaque rectangles in screen pixels, x0 y0 x1 y1 each, and how many

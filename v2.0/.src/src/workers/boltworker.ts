@@ -1,9 +1,12 @@
 // BoltWorker: the bolt's shapes made in Web Workers (BoltWorker.serve, the bundle's "bolt" part),
-// off the main thread. BoltWorker.start(base, { workers, force }) makes a pool of min(2, cores - 2)
-// workers (at least 1) through Workers.start (platform/workers.ts: by the bundle's URL, else a Blob
-// of its registered body, else of it fetched), each told the tests' flag; it resolves
-// with a client, or null when no worker can be made (the shapes then made on the main thread, a
-// slice at a time). Everything waits by promises.
+// off the main thread. The shipped path is BoltTask (below, a ClientTask: min(2, cores - 2) slots,
+// each a BoltWorker of ONE worker made by BoltWorker.single through Workers.start, platform/workers.ts:
+// by the bundle's URL, else a Blob of its registered body, else of it fetched; each told the tests'
+// flag); a slot resolves with a client, or null when no worker can be made (the shapes then made on the
+// main thread, a slice at a time). BoltWorker.start(base, { workers, force }) (a pool of several workers
+// in one client) is the older way: nothing shipped uses it, only the browser unit page does.
+// Everything waits by promises. This file holds the client, its queue, BoltTask and the worker's loop
+// (it is not a thin entry point like the other workers' files).
 // - client.make(spec, { generation, at }): a promise of the shape (BoltShape.fromFlat of a
 //   worker's flat form, its flash worked out there: shape.flash, and with spec.items the bolt's
 //   items built there: shape.items); spec { seed (the shape's own random numbers), top, foot, F,
@@ -18,15 +21,19 @@
 //   one's }); client.inFlight(); client.size; client.close().
 // - A worker that fails (an error, a shape it could not make) breaks the client: what it was asked
 //   is rejected, onFail(why) is called, and it is asked no more (Lightning makes the shapes itself).
-// BoltWorker.serve() is the worker's side: its jobs one a task (a MessageChannel's message between
-// them, so a cancel is seen), its warm-up when asked (client.warm(), once the page's start is
-// done) or before its first job, its buffers back in its pools.
+// BoltWorker.serve() is the worker's side: its own loop, not serveTask (it answers ping, make, cancel,
+// warm, give, stats and init, and ignores an unknown message type; an exception in a make is answered
+// "failed", one in warm, give or stats reaches worker.onerror and breaks the client): its jobs one a
+// task (a MessageChannel's message between them, so a cancel is seen), its warm-up when asked
+// (client.warm(), once the page's start is done) or before its first job, its buffers back in its pools.
 //
 // Changelog:
 // 2026-11-04: TypeScript, a module of src/workers/ (was engine/boltworker.js).
+// 2026-11-11: a shape that fromFlat cannot build rejects its own job (the queue goes on); fail() resets every member's inFlight.
+// 2026-11-11: a make not answered within MAKE_DEADLINE_MS (from its posting) breaks the client; onmessageerror breaks it; the constructor, single and BoltTask take injectable timers.
 import { M } from "../engine/core";
 import { ClientTask } from "../platform/threadedtask";
-import type { ClientTaskOptions } from "../platform/threadedtask";
+import type { ClientTaskOptions, TaskTimers } from "../platform/threadedtask";
 import type { Camera } from "../engine/camera";
 import type { MadeWorker } from "../platform/workers";
 import type { FlatShape } from "../models/boltshape";
@@ -71,6 +78,8 @@ interface BoltJob {
   resolve: (shape: WorkerShape | null) => void;
   reject: (error: Error) => void;
   member: BoltMember | null;
+  // the deadline's timer, from the make's posting to its answer
+  timer: unknown;
 }
 
 // the page's messages to a worker
@@ -102,6 +111,10 @@ declare const self: BoltWorkerScope;
 
 // the shapes asked of the workers at once
 const IN_FLIGHT = 3;
+// a make asked of a worker and not answered within this breaks the client (a shape takes tens of milliseconds, a few hundred under heavy load)
+const MAKE_DEADLINE_MS = 10000;
+// the stats of a worker that cannot answer
+const EMPTY_STATS: BoltWorkerStats = { fresh: 0, pooled: 0, made: 0, given: 0, test: false };
 // the worker's part of the bundle (its name: src/index.ts)
 const JOB = { name: "bolt" };
 
@@ -118,8 +131,11 @@ export class BoltWorker {
   members: BoltMember[];
   // the makes asked of the workers at once
   limit: number;
-  constructor(members: MadeWorker[], limit = IN_FLIGHT) {
+  // the clock of the deadline's timers (the globals unless given)
+  private timers: Pick<TaskTimers, "setTimeout" | "clearTimeout">;
+  constructor(members: MadeWorker[], limit = IN_FLIGHT, timers?: Pick<TaskTimers, "setTimeout" | "clearTimeout">) {
     this.limit = limit;
+    this.timers = timers || { setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>) };
     this.members = members as BoltMember[];
     this.size = members.length;
     this.kind = members[0].kind;
@@ -136,13 +152,14 @@ export class BoltWorker {
       member.inFlight = 0;
       member.worker.onmessage = (event: MessageEvent<FromWorker>) => this.receive(member, event.data);
       member.worker.onerror = (event: ErrorEvent) => this.fail((event && event.message) || "the bolt's worker failed");
+      member.worker.onmessageerror = () => this.fail("the bolt's worker sent a message that could not be read");
       member.worker.postMessage({ type: "init", test: !!M.TEST });
     });
   }
 
   // one worker as a client of its own (a slot of BoltTask): its queue, its cancels, its buffers
-  static single(base: string, options: { force?: string; limit?: number } = {}): Promise<BoltWorker | null> {
-    return M.Workers.start(base, Object.assign({}, JOB, { force: options.force || "" })).then((made) => (made ? new BoltWorker([made], options.limit) : null));
+  static single(base: string, options: { force?: string; limit?: number; timers?: Pick<TaskTimers, "setTimeout" | "clearTimeout"> } = {}): Promise<BoltWorker | null> {
+    return M.Workers.start(base, Object.assign({}, JOB, { force: options.force || "" })).then((made) => (made ? new BoltWorker([made], options.limit, options.timers) : null));
   }
 
   static start(base: string, options: { workers?: number; force?: string } = {}): Promise<BoltWorker | null> {
@@ -169,7 +186,7 @@ export class BoltWorker {
       return Promise.reject(new Error("the bolt's worker is broken"));
     }
     return new Promise<WorkerShape | null>((resolve, reject) => {
-      const job: BoltJob = { id: this.nextId++, spec, generation: options.generation || 0, at: options.at === undefined ? Infinity : options.at, resolve, reject, member: null };
+      const job: BoltJob = { id: this.nextId++, spec, generation: options.generation || 0, at: options.at === undefined ? Infinity : options.at, resolve, reject, member: null, timer: null };
       this.jobs.set(job.id, job);
       let k = this.queue.length;
       while (k > 0 && this.queue[k - 1].at > job.at) {
@@ -200,6 +217,7 @@ export class BoltWorker {
       }
       job.member = member;
       member.inFlight++;
+      job.timer = this.timers.setTimeout(() => this.fail("the bolt's worker did not answer a make in 10 s"), MAKE_DEADLINE_MS);
       member.worker.postMessage({ type: "make", id: job.id, generation: job.generation, spec: job.spec });
     }
   }
@@ -232,14 +250,23 @@ export class BoltWorker {
       return;
     }
     this.jobs.delete(message.id);
+    this.timers.clearTimeout(job.timer);
     member.inFlight--;
     if (message.type === "shape") {
-      const shape: WorkerShape = M.BoltShape.fromFlat({ nums: message.nums });
-      shape.workerIndex = member.index;
-      shape.flash = message.flash || null;
-      shape.items = message.items || null;
-      shape.destroy = () => this.give(shape);
-      job.resolve(shape);
+      let shape: WorkerShape | null = null;
+      try {
+        shape = M.BoltShape.fromFlat({ nums: message.nums });
+      } catch (error) {
+        job.reject(error instanceof Error ? error : new Error(String(error)));
+      }
+      if (shape) {
+        const made = shape;
+        made.workerIndex = member.index;
+        made.flash = message.flash || null;
+        made.items = message.items || null;
+        made.destroy = () => this.give(made);
+        job.resolve(made);
+      }
     } else if (message.type === "cancelled") {
       job.resolve(null);
     } else {
@@ -256,10 +283,19 @@ export class BoltWorker {
     this.broken = true;
     this.why = why;
     for (const job of this.jobs.values()) {
+      this.timers.clearTimeout(job.timer);
       job.reject(new Error(why));
     }
     this.jobs.clear();
     this.queue.length = 0;
+    for (const member of this.members) {
+      member.inFlight = 0;
+    }
+    // (the stats asked and not answered: answered empty, since a lost worker never answers)
+    for (const done of this.asked.values()) {
+      done(EMPTY_STATS);
+    }
+    this.asked.clear();
     if (this.onFail) {
       this.onFail(why);
     }
@@ -288,6 +324,9 @@ export class BoltWorker {
   }
 
   stats(): Promise<BoltWorkerStats & { workers: BoltWorkerStats[] }> {
+    if (this.broken) {
+      return Promise.resolve(Object.assign({}, EMPTY_STATS, { workers: [] }));
+    }
     return Promise.all(this.members.map((member: BoltMember) => new Promise<BoltWorkerStats>((done) => {
       const id = this.nextId++;
       this.asked.set(id, done);
@@ -444,7 +483,7 @@ export class BoltTask extends ClientTask<BoltWorker> {
     const cores = (typeof navigator !== "undefined" && navigator.hardwareConcurrency) || 2;
     const slots = options.slots || Math.max(1, Math.min(2, cores - 2));
     const limit = Math.max(1, Math.ceil(IN_FLIGHT / slots));
-    super(Object.assign({}, options, { slots, makeWorker: options.makeWorker || ((_slot: number, force: string) => BoltWorker.single(options.base || "", { force, limit })) }));
+    super(Object.assign({}, options, { slots, makeWorker: options.makeWorker || ((_slot: number, force: string) => BoltWorker.single(options.base || "", { force, limit, timers: options.timers })) }));
     this.warmWanted = false;
   }
 

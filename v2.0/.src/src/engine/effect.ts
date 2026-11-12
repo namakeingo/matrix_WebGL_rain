@@ -34,6 +34,7 @@
 // Changelog:
 // 2026-11-04: TypeScript, a module of src/engine/ (was engine/effect.js).
 // 2026-11-06: quality(), setQuality(), qualityJobs() and QUALITY_UNIT (the quality contract, default full quality).
+// 2026-11-11: destroy() runs every remover and rethrows the first error after; apply() looks the setting up by own property only.
 import { M } from "./core";
 import type { RenderTarget, MultisampleTarget, UniformBlock, Quad, ProgramSources, Programs, InstanceAttribute, TargetOptions, MultisampleOptions, BlockName } from "./gl";
 import type { Camera } from "./camera";
@@ -185,7 +186,7 @@ export class Effect {
       table = (this.constructor as typeof Effect).properties();
       TABLES.set(this.constructor as typeof Effect, table);
     }
-    const set = table[key];
+    const set = Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
     if (set) {
       set(this, value);
     }
@@ -233,8 +234,20 @@ export class Effect {
   }
 
   destroy() {
+    let first: unknown;
+    let failed = false;
     for (const remove of this.owned.splice(0)) {
-      remove();
+      try {
+        remove();
+      } catch (error) {
+        if (!failed) {
+          failed = true;
+          first = error;
+        }
+      }
+    }
+    if (failed) {
+      throw first;
     }
   }
 }

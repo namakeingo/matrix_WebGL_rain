@@ -83,6 +83,9 @@
 //   characters (their items are made cut by view) and the mask's clears are as before.
 //
 // Changelog:
+// 2026-11-12: the foot of a strike (the lines' point at y = 0) rests on the water's live height at its place (uWaterWaves, waterWaves; shaders/bolt/foot.glsl, shaders/waves/lift.glsl), in the bands' and the characters' vertex shaders.
+// 2026-11-12: 3D Symbols (uSymbols3d, symbols3d): the characters' ink read at the relief's parallax uv (the depth offset only: no light), in the characters' fragment shader and the mask's.
+// 2026-11-12: the items are culled against the mirrored picture's larger frustum (itemsView).
 // 2026-11-02: a thin bright core in every line (BAND + CORE), BAND_PER_SIZE from the profile; the
 //   bands blended by MAX on the light, each piece's distance the ray's through the pixel's middle,
 //   its band round its ends across the view, REACH 0.5 + 4 GLOW_SPREAD (was 0.5 + 3: the glow cut
@@ -162,6 +165,7 @@ import type { ItemsOut, ItemsOptions, ItemsBuilt, ItemsLine, ItemsCounts } from 
 import type { MadeShape } from "../models/boltshape";
 import { QualityBolt } from "../models/quality/bolt";
 import { BoltList } from "../models/boltlist";
+import { ReflectionFrame } from "../models/reflectionframe";
 import type { BoltListInput, BoltListOutput, BoltListSlot } from "../models/boltlist";
 import type { JobTask } from "../platform/jobtask";
 import type { Strike } from "./lightning";
@@ -169,6 +173,9 @@ import type { EffectQuality, QualityJob, QualityShared } from "../models/quality
 import type { QualityStatics, QualityParams } from "../models/quality/jobs";
 import LIGHT_SOURCE from "../shaders/bolt/light.glsl";
 import PROFILE_SOURCE from "../shaders/bolt/profile.glsl";
+import FOOT_SOURCE from "../shaders/bolt/foot.glsl";
+import WAVE_LIFT_SOURCE from "../shaders/waves/lift.glsl";
+import WAVE_GRID_SOURCE from "../shaders/waves/grid.glsl";
 import BAND_VERTEX_SOURCE from "../shaders/bolt/band_vertex.glsl";
 import BAND_FRAGMENT_SOURCE from "../shaders/bolt/band_fragment.glsl";
 import NEAR_OUTPUT_SOURCE from "../shaders/bolt/near_output.glsl";
@@ -178,6 +185,8 @@ import GLYPH_MASK_FRAGMENT_SOURCE from "../shaders/bolt/glyph_mask_fragment.glsl
 import GLYPH_VERTEX_SOURCE from "../shaders/bolt/glyph_vertex.glsl";
 
 const ITEMS = M.BoltItems;
+// the view-projection the items are culled against (see itemsView)
+const ITEMS_VIEW = new Float32Array(16);
 // the items' layout and their light's constants (models/boltitems.ts: one place for them; the
 // bell's own and TINT: materials/bolt.ts)
 const SEGMENT_FLOATS = ITEMS.SEGMENT_FLOATS;
@@ -344,12 +353,18 @@ export class Bolt extends M.Effect {
   levels: Float32Array<ArrayBuffer>;
   slots: (Strike | null)[];
   characters: boolean;
+  // 3D Symbols: the characters' depth offset (the shaders' uSymbols3d)
+  symbols3d: boolean;
+  // whether the water shows waves (Collision plane and Ripples on): the foot of a strike is lifted by the wave under it only then (uWaterWaves)
+  waterWaves: boolean;
   atlas: GlyphAtlas;
   constructor(context: EffectContext) {
     super(context);
     const gl = this.gl;
     this.atlas = context.atlas;
     this.characters = true;
+    this.symbols3d = true;
+    this.waterWaves = true;
     this.slots = [];
     this.levels = new Float32Array(SLOTS * 3);
     this.viewScale = 1;
@@ -472,7 +487,7 @@ export class Bolt extends M.Effect {
   static QUALITY_UNIT = "pieces";
 
   static properties() {
-    return { p127_setting_CharactersLightning: (bolt: Bolt, v: boolean) => (bolt.characters = v) };
+    return { p102_setting_3DSymbols: (bolt: Bolt, v: boolean) => (bolt.symbols3d = v), p128_setting_CharactersLightning: (bolt: Bolt, v: boolean) => (bolt.characters = v) };
   }
 
   init(programs: Programs) {
@@ -691,12 +706,19 @@ export class Bolt extends M.Effect {
   // the options a strike's items are made with, in the bolt's worker beside its shape (Lightning
   // asks them through src/index.ts: the view now, a slot's room)
   itemsOptionsOf(strike: Strike): ItemsOptions {
-    return ITEMS.optionsFor(strike, this.camera, SLOT_SEGMENTS, SLOT_GLYPHS);
+    return ITEMS.optionsFor(strike, this.itemsView(), SLOT_SEGMENTS, SLOT_GLYPHS);
+  }
+
+  // the view the items are culled against: the camera's with its clip x and y widened to the mirrored picture's frustum (the items are drawn directly and mirrored: a superset of
+  // the direct view's)
+  itemsView(): { viewProjection: ArrayLike<number>; eyeHeight: number } {
+    const c = this.camera;
+    return c.mirrorFrame ? { viewProjection: ReflectionFrame.scaleViewProjection(c.viewProjection, c.mirrorFrame, ITEMS_VIEW), eyeHeight: c.eyeHeight } : c;
   }
 
   // the options a slot's strike's items are made with (the view now, the slot's room)
   optionsOf(k: number): ItemsOptions {
-    return ITEMS.optionsFor(this.slots[k]!, this.camera, Math.min(this.mostSegments, SLOT_SEGMENTS), Math.min(this.mostGlyphs, SLOT_GLYPHS));
+    return ITEMS.optionsFor(this.slots[k]!, this.itemsView(), Math.min(this.mostSegments, SLOT_SEGMENTS), Math.min(this.mostGlyphs, SLOT_GLYPHS));
   }
 
   // a slot's strike's items made on the main thread, at their full growth (or, the tests' cut, at
@@ -1078,6 +1100,7 @@ export class Bolt extends M.Effect {
     const characters = program === this.glyph || program === this.glyphMask;
     gl.uniform3fv(u.uColor, this.white);
     gl.uniform1f(u.uMirror, mirror ? -1 : 1);
+    gl.uniform1f(u.uWaterWaves, this.waterWaves ? 1 : 0);
     gl.uniform4fv(u.uMainLight, this.mainLight);
     gl.uniform4fv(u.uBranchLight, this.branchLight);
     gl.uniform4fv(u.uGrown, this.grown);
@@ -1085,6 +1108,7 @@ export class Bolt extends M.Effect {
       gl.uniform1fv(u.uGlyphEps, this.lod ? this.glyphEps : this.tailFull);
       gl.uniform1i(u.uGlyphs, this.atlas.count);
       gl.uniform1f(u.uHead, 0);
+      gl.uniform1i(u.uSymbols3d, this.symbols3d ? 1 : 0);
       gl.uniform4fv(u.uAge, this.age);
     } else {
       gl.uniform1i(u.uCovers, this.tinted ? 1 : 0);
@@ -1237,12 +1261,15 @@ const LIGHT_GLSL = LIGHT_SOURCE;
 // the bell's constants and its parts for a line of a size (pixels): its Gaussian's s^2, its
 // tail's spread, where the tail starts; g at r pixels from the line; and how far it reaches
 // (pixels)
+// the lift's GLSL (WaveLift): the waves' switch, the reach and the share over the floor, and the foot's rule
+const WAVE_LIFT_GLSL = fill(WAVE_LIFT_SOURCE, { "GRID_GLSL": WAVE_GRID_SOURCE, "WAVE_CALM": M.WaveLift.CALM.toFixed(6) });
+const FOOT_GLSL = FOOT_SOURCE;
 const PROFILE_GLSL = fill(PROFILE_SOURCE, { "BELL_SPREAD.toFixed(4)": BELL_SPREAD.toFixed(4), "BELL_PX.toFixed(4)": BELL_PX.toFixed(4), "BELL_LEAST.toFixed(4)": BELL_LEAST.toFixed(4), "BELL_END.toFixed(1)": BELL_END.toFixed(1) });
 
 // a piece's band: its ends (and size, radiance), the start of the piece before and the end of the
 // piece after (and kind, slot), read by gl_InstanceID; faces the camera round the piece, as wide
 // as its profile reaches
-Bolt.bandVertex = (glsl) => fill(BAND_VERTEX_SOURCE, { "M.Camera.GLSL": M.Camera.GLSL, "glsl.fog": glsl.fog, "M.GlyphAtlas.VERTEX_GLSL": M.GlyphAtlas.VERTEX_GLSL, "LIGHT_GLSL": LIGHT_GLSL, "PROFILE_GLSL": PROFILE_GLSL, "SEGMENTS_ACROSS": SEGMENTS_ACROSS, "SEGMENT_TEXELS": SEGMENT_TEXELS, "WIDEN_PX.toFixed(2)": WIDEN_PX.toFixed(2), "BAND_PER_SIZE.toFixed(6)": BAND_PER_SIZE.toFixed(6), "FOOTPRINT_FULL_PX.toFixed(1)": QualityBolt.FOOTPRINT_FULL_PX.toFixed(1), "QUALITY_LEVELS": QualityBolt.QUALITY_LEVELS, "TAIL_END_FLOOR.toFixed(1)": QualityBolt.TAIL_END_FLOOR.toFixed(1) });
+Bolt.bandVertex = (glsl) => fill(BAND_VERTEX_SOURCE, { "M.Camera.GLSL": M.Camera.GLSL, "WAVE_LIFT_GLSL": WAVE_LIFT_GLSL, "FOOT_GLSL": FOOT_GLSL, "glsl.fog": glsl.fog, "M.GlyphAtlas.VERTEX_GLSL": M.GlyphAtlas.VERTEX_GLSL, "LIGHT_GLSL": LIGHT_GLSL, "PROFILE_GLSL": PROFILE_GLSL, "SEGMENTS_ACROSS": SEGMENTS_ACROSS, "SEGMENT_TEXELS": SEGMENT_TEXELS, "WIDEN_PX.toFixed(2)": WIDEN_PX.toFixed(2), "BAND_PER_SIZE.toFixed(6)": BAND_PER_SIZE.toFixed(6), "FOOTPRINT_FULL_PX.toFixed(1)": QualityBolt.FOOTPRINT_FULL_PX.toFixed(1), "QUALITY_LEVELS": QualityBolt.QUALITY_LEVELS, "TAIL_END_FLOOR.toFixed(1)": QualityBolt.TAIL_END_FLOOR.toFixed(1) });
 
 // a band's shape: its profile by the distance of the ray through the pixel's middle to the piece,
 // times its level and the fog's transmittance; nothing under the water (the highest wave first).
@@ -1255,7 +1282,7 @@ Bolt.bandFragment = (glsl, mask) => fill(BAND_FRAGMENT_SOURCE, { "M.Camera.GLSL"
 // the lightning's light: the combined shape x the light it carries
 // (direct, or mirrored), white or TINT, under the characters' ink (uInked: 1 - the ink's
 // opacity); no distance (the reflection's second output: as far as can be)
-Bolt.lightFragment = (test) => fill(LIGHT_FRAGMENT_SOURCE, { "TEST_VIEWS": test ? "#define TEST_VIEWS" : "", "M.Camera.FAR_DISTANCE.toFixed(1)": M.Camera.FAR_DISTANCE.toFixed(1) });
+Bolt.lightFragment = (test) => fill(LIGHT_FRAGMENT_SOURCE, { "TEST_VIEWS": test ? "#define TEST_VIEWS" : "", "M.Camera.GLSL": M.Camera.GLSL });
 
 // what the line and its characters cover of the scene's picture behind them (blended ONE,
 // ONE_MINUS_SRC_ALPHA: L - c (L - S)): their opacity c = 1 - (1 - line) (1 - ink), and the
@@ -1265,7 +1292,7 @@ Bolt.coverFragment = (glsl) => fill(COVER_FRAGMENT_SOURCE, { "M.Camera.GLSL": M.
 
 // a character's ink into the mask: its opacity (its ink x min(1, its radiance / COVER_LIGHT); G
 // direct, A mirrored) and its nearness (R direct, G mirrored); no light; nothing under the water
-Bolt.glyphMaskFragment = (glsl) => fill(GLYPH_MASK_FRAGMENT_SOURCE, { "M.Camera.GLSL": M.Camera.GLSL, "glsl.waves": glsl.waves, "NEAR_SCALE.toFixed(1)": NEAR_SCALE.toFixed(1) });
+Bolt.glyphMaskFragment = (glsl) => fill(GLYPH_MASK_FRAGMENT_SOURCE, { "M.Camera.GLSL": M.Camera.GLSL, "glsl.waves": glsl.waves, "M.GlyphAtlas.RELIEF_GLSL": M.GlyphAtlas.RELIEF_GLSL, "NEAR_SCALE.toFixed(1)": NEAR_SCALE.toFixed(1) });
 
 // a character of Characters lightning: its place (its point, size, seed at rest, radiance for
 // full ink, kind and slot, the joint before the next place, the next place and its rate) read by
@@ -1274,7 +1301,7 @@ Bolt.glyphMaskFragment = (glsl) => fill(GLYPH_MASK_FRAGMENT_SOURCE, { "M.Camera.
 // back), its ink from
 // the inks' rows (none: blank, not drawn); a plane in the world facing along z, as a rain
 // character (the characters' fragment shader, or the mask's)
-Bolt.glyphVertex = (glsl) => fill(GLYPH_VERTEX_SOURCE, { "FOOTPRINT_FULL_PX.toFixed(1)": QualityBolt.FOOTPRINT_FULL_PX.toFixed(1), "QUALITY_LEVELS": QualityBolt.QUALITY_LEVELS, "M.Camera.GLSL": M.Camera.GLSL, "glsl.fog": glsl.fog, "M.GlyphAtlas.VERTEX_GLSL": M.GlyphAtlas.VERTEX_GLSL, "M.HASH_GLSL": M.HASH_GLSL, "LIGHT_GLSL": LIGHT_GLSL, "GLYPHS_ACROSS": GLYPHS_ACROSS, "GLYPH_TEXELS": GLYPH_TEXELS, "MOST_GLYPHS / GLYPHS_ACROSS": MOST_GLYPHS / GLYPHS_ACROSS, "GLYPHS_ACROSS * GLYPH_TEXELS": GLYPHS_ACROSS * GLYPH_TEXELS, "COVER_LIGHT.toFixed(4)": COVER_LIGHT.toFixed(4) });
+Bolt.glyphVertex = (glsl) => fill(GLYPH_VERTEX_SOURCE, { "FOOTPRINT_FULL_PX.toFixed(1)": QualityBolt.FOOTPRINT_FULL_PX.toFixed(1), "QUALITY_LEVELS": QualityBolt.QUALITY_LEVELS, "M.Camera.GLSL": M.Camera.GLSL, "WAVE_LIFT_GLSL": WAVE_LIFT_GLSL, "FOOT_GLSL": FOOT_GLSL, "glsl.fog": glsl.fog, "M.GlyphAtlas.VERTEX_GLSL": M.GlyphAtlas.VERTEX_GLSL, "M.HASH_GLSL": M.HASH_GLSL, "LIGHT_GLSL": LIGHT_GLSL, "GLYPHS_ACROSS": GLYPHS_ACROSS, "GLYPH_TEXELS": GLYPH_TEXELS, "MOST_GLYPHS / GLYPHS_ACROSS": MOST_GLYPHS / GLYPHS_ACROSS, "GLYPHS_ACROSS * GLYPH_TEXELS": GLYPHS_ACROSS * GLYPH_TEXELS, "COVER_LIGHT.toFixed(4)": COVER_LIGHT.toFixed(4) });
 
 Bolt.MOST_SEGMENTS = MOST_SEGMENTS;
 Bolt.MOST_GLYPHS = MOST_GLYPHS;

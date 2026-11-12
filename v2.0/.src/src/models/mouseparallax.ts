@@ -13,10 +13,13 @@
 // - limitsFor({ span, aspect, halfFov, near, highestPitch }): the yaw limit atan(span) - atan(tan(halfFov) x aspect) (the view's edge stays inside the world's width; not under 0), the
 //   pitch limit the yaw limit's (the same angle moves the picture by the same number of pixels along both axes: balanced) but not over highestPitch (the highest view the world's ceiling covers), the eye's x limit (span - tan(halfFov) x aspect) x near (the view's edge at the nearest distance stays
 //   inside the world's width; not under 0) and the eye's y limit the same, both at most MOST_EYE (1 m).
+// - reach(mode, amount, limits): the range a setting reaches, Amount x REACH x the mode's limits ({ yaw, pitch } in rotation, { eyeX, eyeY } in translation, the other mode's 0): what the spawn
+//   box (models/spawnbox.ts) extends the view by; step()'s movement and the limits are unchanged.
 //
 // Changelog:
 // 2026-11-09: new.
 // 2026-11-10: seed (a handover between a model and another).
+// 2026-11-12: reach (the range a setting reaches, for the spawn box).
 // 2026-11-10: the movement without the x 2 (Amount 1 reaches half of the limit: REACH); the pitch limit the yaw limit's (balanced rotation), not over the highest pitch.
 import { M } from "../engine/core";
 
@@ -87,6 +90,14 @@ export class MouseParallax {
     const yaw = Math.max(0, Math.atan(v.span) - Math.atan(half));
     const eye = Math.min(MOST_EYE, Math.max(0, (v.span - half) * v.near));
     return { yaw, pitch: Math.min(yaw, v.highestPitch), eyeX: eye, eyeY: eye };
+  }
+
+  // the range the setting reaches (the largest offset the cursor can give, either way) in the mode chosen: Amount x REACH x the mode's limits, the other mode's 0 (what the
+  // spawn box extends the view by: models/spawnbox.ts); the limits themselves and step()'s movement are unchanged
+  static reach(mode: string, amount: number, limits: ParallaxLimits): ParallaxLimits {
+    const s = Math.max(0, amount) * REACH;
+    const rotate = mode === "rotation";
+    return { yaw: rotate ? s * limits.yaw : 0, pitch: rotate ? s * limits.pitch : 0, eyeX: rotate ? 0 : s * limits.eyeX, eyeY: rotate ? 0 : s * limits.eyeY };
   }
 
   static farFrom(a: ParallaxOffsets, b: ParallaxOffsets): boolean {

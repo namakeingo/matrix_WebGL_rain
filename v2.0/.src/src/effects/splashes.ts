@@ -45,6 +45,11 @@
 // is read by the water). With lod false the floor is 0 and the draw is as without it.
 //
 // Changelog:
+// 2026-11-12: a splash starts at the water's live height at its launch place and lands there (uWaterWaves, waterWaves; shaders/waves/lift.glsl); placeAt takes the lift.
+// 2026-11-12: the glyphs' lights (the shade at the glyph and the strikes' light the fog gives, passed to the lit fragment shader: LIGHT_VERTEX_GLSL, uShade) and 3D Symbols (uSymbols3d, symbols3d).
+// 2026-11-11: the queued reset's flag (resetQueued) is cleared when the frame's payload is consumed, also when the tick or the task's answer fails (it stayed set).
+// 2026-11-11: update() takes no live splash while a queued reset is not yet applied (the span was made from the simulation's stale count).
+// 2026-11-11: advance with forking and no task applies the operations inline (it returned early and they were never applied); payload releases a held rain part when there is no rain.
 // 2026-11-10: the simulation (the arrays, the draws, the ring's CPU side, the falls, the steps moved on to) is models/splashsim.ts (M.SplashSim); this effect keeps the GL side
 //   and exposes the model's state as getters.
 // 2026-11-07: the listed draw instances only the ages whose light bound reaches the floor (directAges), and a quad under half a pixel
@@ -57,6 +62,8 @@
 import { M } from "../engine/core";
 import { fill } from "../engine/glsl";
 import VERTEX_SOURCE from "../shaders/splashes/vertex.glsl";
+import WAVE_LIFT_SOURCE from "../shaders/waves/lift.glsl";
+import WAVE_GRID_SOURCE from "../shaders/waves/grid.glsl";
 import { QualitySplashes } from "../models/quality/splashes";
 import { SplashSim } from "../models/splashsim";
 import { SplashTick } from "../models/splashtick";
@@ -133,7 +140,7 @@ const BLOCK = 256;
 export class Splashes extends M.Effect {
   static GRAVITY: number;
   static RING: number;
-  static placeAt: (rec: SplashRecord, step: number, from: number, to: number) => SplashStamp;
+  static placeAt: (rec: SplashRecord, step: number, from: number, to: number, lift?: number) => SplashStamp;
   static stampsOf: (clock: StepClock, t0: number, land: number, out?: Float64Array) => Float64Array;
   static vertex: (glsl: SharedGlsl) => string;
   describe!: (time: number) => SplashState[];
@@ -160,8 +167,17 @@ export class Splashes extends M.Effect {
   span: number;
   // the serials sent to the GPU so far
   sent: number;
+  // a reset queued for the tick and not yet applied (the simulation still holds the splashes it clears)
+  resetQueued: boolean;
   covered: boolean;
+  // 3D Symbols: the stamps' relief (the shader's uSymbols3d)
+  symbols3d: boolean;
+  // whether the water shows waves (Collision plane and Ripples on): a splash starts and lands at the wave's height under its launch place only then (uWaterWaves)
+  waterWaves: boolean;
   viewScale: number;
+  // (the tests' knobs of the glyphs' lit term: its gain, and a normal in place of the glyph's, [x, y, z, w] with w over 0)
+  litScale: number;
+  litNormal: Float32Array;
   head: number;
   clock: StepClock;
   seed: number;
@@ -205,8 +221,12 @@ export class Splashes extends M.Effect {
     this.head = M.GlyphAtlas.HEAD;
     // (the tests' scale of the characters' light: with M.TEST only)
     this.viewScale = 1;
+    this.litScale = 1;
+    this.litNormal = new Float32Array(4);
     // whether the bolt covers what lies behind it this frame (Characters lightning: set by src/index.ts)
     this.covered = false;
+    this.symbols3d = true;
+    this.waterWaves = true;
     this.slotList = new Uint32Array(2 * MOST);
     this.listCount = new Int32Array(2);
     this.listAges = new Int32Array(2);
@@ -218,6 +238,7 @@ export class Splashes extends M.Effect {
     this.qualityData = null;
     this.qualitySent = false;
     this.sent = 0;
+    this.resetQueued = false;
     // the ring's span drawn this frame (splashes), its first slot, and its instances (span x
     // trail)
     this.span = 0;
@@ -266,17 +287,18 @@ export class Splashes extends M.Effect {
   set onLand(v: (x: number, z: number, weight: number) => void) { this.impactCallback = v; this.sim.onLand = v; }
 
   static programs(glsl: SharedGlsl): ProgramSources {
-    return { splash: [Splashes.vertex(glsl), M.GlyphAtlas.fragment(glsl, M.TEST, true, true)] };
+    return { splash: [Splashes.vertex(glsl), M.GlyphAtlas.fragment(glsl, M.TEST, true, true, true)] };
   }
 
   static QUALITY_UNIT = "splashes";
 
   static properties() {
     return {
-      p105_setting_HeadBrightness: (splashes: Splashes, v: number) => (splashes.head = v / 100),
+      p102_setting_3DSymbols: (splashes: Splashes, v: boolean) => (splashes.symbols3d = v),
+      p106_setting_HeadBrightness: (splashes: Splashes, v: number) => (splashes.head = v / 100),
       // (Splash height, mm: the target height of a splash thrown straight up)
       p207_setting_SplashHeight: (splashes: Splashes, v: number) => (splashes.targetHeight = v / 1000),
-      p118_setting_TrailLength: (splashes: Splashes, v: number) => (splashes.trail = Math.max(1, Math.round(v * TRAIL_PER_LENGTH))),
+      p119_setting_TrailLength: (splashes: Splashes, v: number) => (splashes.trail = Math.max(1, Math.round(v * TRAIL_PER_LENGTH))),
       // (Debug mode's No splashes: no splash from a landing; its ring on the water is the rain's)
       p623_setting_DebugNoSplashes: (splashes: Splashes, v: boolean) => (splashes.noSplashes = v),
     };
@@ -296,6 +318,9 @@ export class Splashes extends M.Effect {
       uFogMirror: M.UNITS.fogMirror,
       uStrikeDirect: M.UNITS.strikeDirect,
       uStrikeMirror: M.UNITS.strikeMirror,
+      uShade: M.UNITS.shade,
+      // (the clouds' noise, declared by the medium GLSL the shade read is in: a sampler left on unit 0 beside another sampler type makes the draw fail)
+      uNoise: M.UNITS.noise,
       uWaves: M.UNITS.waves,
       uWaveMax: M.UNITS.waveMax,
       uBoltCover: M.UNITS.boltCover,
@@ -349,10 +374,14 @@ export class Splashes extends M.Effect {
 
   reset() {
     if (this.queueing()) {
-      SplashTick.reset(this.ops, this.room());
+      // (room first: it may replace this.ops with a bigger array, which the operation must be written to)
+      const at = this.room();
+      SplashTick.reset(this.ops, at);
       this.sent = this.sim.nextSerial;
+      this.resetQueued = true;
     } else {
       this.sim.reset();
+      this.resetQueued = false;
       // (the slots sent before stay in the ring, out of the span)
       this.sent = this.sim.nextSerial;
     }
@@ -364,7 +393,8 @@ export class Splashes extends M.Effect {
   // a drop landed (at its place, at a time, in its colour): 2 to 5 splashes of its size
   fromLanding(drop: SplashLanding, time: number, size: number) {
     if (this.queueing()) {
-      SplashTick.landing(this.ops, this.room(), drop.x, drop.z, drop.color, time, size);
+      const at = this.room();
+      SplashTick.landing(this.ops, at, drop.x, drop.z, drop.color, time, size);
     } else {
       this.sim.fromLanding(drop, time, size);
     }
@@ -373,7 +403,8 @@ export class Splashes extends M.Effect {
   // count splashes from a place of the water (x, z), at a time, in a colour (white if none)
   spawn(x: number, z: number, count: number, size: number, time: number, color?: Float32Array) {
     if (this.queueing()) {
-      SplashTick.spawn(this.ops, this.room(), x, z, count, size, time, color);
+      const at = this.room();
+      SplashTick.spawn(this.ops, at, x, z, count, size, time, color);
     } else {
       this.sim.spawn(x, z, count, size, time, color);
     }
@@ -401,6 +432,8 @@ export class Splashes extends M.Effect {
       payload.rain = this.part;
       payload.rainAt = this.rainAt;
       this.part = null;
+    } else if (this.part) {
+      this.part = null;
     }
     this.opsUsed = 0;
     return payload;
@@ -411,6 +444,7 @@ export class Splashes extends M.Effect {
     SplashTick.apply(this.sim, packet);
     if (packet.reset) {
       this.sent = packet.resetAt;
+      this.resetQueued = false;
     }
     if (this.rain) {
       this.rain.packetIn(packet);
@@ -427,22 +461,27 @@ export class Splashes extends M.Effect {
   advance(time: number) {
     // (a frame's lists are the quality's of that frame: gone as the simulation moves on to the next)
     this.listed = false;
-    if (this.forking) {
-      return;
-    }
     const task = this.task;
-    if (task) {
-      // (a worker alive that is not asked this frame would be out of step: set aside, handed the state again when a frame awaits it)
-      task.suspend();
-      // (through the task: a model restored from a checkpoint and replayed after a worker was lost is brought to the frame first)
-      task.event(this.payload(time), 1);
-      for (const p of task.advance(task.consumed + 1)) {
-        this.applyPacket(p.data);
-      }
+    if (this.forking && task) {
       return;
     }
-    this.tick.event(this.payload(time));
-    this.applyPacket(this.tick.run());
+    // (the payload taken below holds any queued reset: applied by the packet, or dropped with the payload when the tick fails: either way the flag that keeps update() off the stale count is done with)
+    try {
+      if (task) {
+        // (a worker alive that is not asked this frame would be out of step: set aside, handed the state again when a frame awaits it)
+        task.suspend();
+        // (through the task: a model restored from a checkpoint and replayed after a worker was lost is brought to the frame first)
+        task.event(this.payload(time), 1);
+        for (const p of task.advance(task.consumed + 1)) {
+          this.applyPacket(p.data);
+        }
+        return;
+      }
+      this.tick.event(this.payload(time));
+      this.applyPacket(this.tick.run());
+    } finally {
+      this.resetQueued = false;
+    }
   }
 
   // the frame's work asked of the task with the frame's exact payload, awaited BEFORE the quality job's parameters are made (they read the splashes: the wallpaper's forkFirst): the
@@ -453,11 +492,22 @@ export class Splashes extends M.Effect {
       return null;
     }
     task.event(this.payload(time), 1);
-    return task.advanceAsync(task.consumed + 1).then((packets) => {
-      for (const p of packets) {
-        this.applyPacket(p.data);
+    return task.advanceAsync(task.consumed + 1).then(
+      (packets) => {
+        try {
+          for (const p of packets) {
+            this.applyPacket(p.data);
+          }
+        } finally {
+          this.resetQueued = false;
+        }
+      },
+      (error: unknown) => {
+        // (the payload with a queued reset is dropped with the failed answer)
+        this.resetQueued = false;
+        throw error;
       }
-    });
+    );
   }
 
   // the ring's slots from..to (not wrapping) sent, by whole rows
@@ -487,7 +537,8 @@ export class Splashes extends M.Effect {
       gl.bindTexture(gl.TEXTURE_2D, null);
       this.sent = newest;
     }
-    const oldest = this.count > 0 ? this.serial[0] : newest;
+    // (a queued reset not yet applied: none is live)
+    const oldest = this.count > 0 && !this.resetQueued ? this.serial[0] : newest;
     this.span = newest - oldest;
     this.firstSlot = oldest % RING;
     this.liveCount = this.span * this.trail;
@@ -648,9 +699,13 @@ export class Splashes extends M.Effect {
     gl.uniform1f(u.uLodFloor, QualitySplashes.lodFloor(this.lod, mirror, M.TEST ? this.viewScale : 1));
     if (M.TEST) {
       gl.uniform1f(u.uViewScale, this.viewScale);
+      gl.uniform1f(u.uLitScale, this.litScale);
+      gl.uniform4fv(u.uLitNormal, this.litNormal);
     }
     gl.uniform1f(u.uMirror, mirror ? -1 : 1);
+    gl.uniform1f(u.uWaterWaves, this.waterWaves ? 1 : 0);
     gl.uniform1i(u.uCovered, this.covered ? 1 : 0);
+    gl.uniform1i(u.uSymbols3d, this.symbols3d ? 1 : 0);
     M.GlyphAtlas.setNearness(gl, u, mirror ? null : this.nearness);
     gl.activeTexture(gl.TEXTURE0 + M.UNITS.work);
     gl.bindTexture(gl.TEXTURE_2D, this.texture);
@@ -694,8 +749,8 @@ if (M.TEST) {
   // the vertex shader's rule for a stamp, in the script (float32 as the GPU): a splash's record
   // ({ x0, z0, vx, vy, vz, size, seed, first, count, offset, rate }) at an unsigned step, after
   // the last jump `from`, by the last step moved on to `to`: whether it is drawn, its place, size
-  // and glyph seed
-  Splashes.placeAt = (rec, step, from, to) => {
+  // and glyph seed. `lift` is the water's height at the launch place (the arc starts and lands there)
+  Splashes.placeAt = (rec, step, from, to, lift = 0) => {
     const f = Math.fround;
     const k = (step - rec.first) | 0;
     const shown = k >= 0 && k < rec.count && ((step - from) | 0) > 0 && ((to - step) | 0) >= 0;
@@ -704,7 +759,7 @@ if (M.TEST) {
     return {
       shown,
       x: f(f(rec.x0) + f(f(rec.vx) * t)),
-      y: Math.max(0, f(f(f(rec.vy) * t) - f(f(f(g * t) * t) / 2))),
+      y: f(f(lift) + Math.max(0, f(f(f(rec.vy) * t) - f(f(f(g * t) * t) / 2)))),
       z: f(f(rec.z0) + f(f(rec.vz) * t)),
       size: f(rec.size),
       glyph: (rec.seed + Math.imul(step, 977)) >>> 0,
@@ -715,6 +770,9 @@ if (M.TEST) {
 Splashes.GRAVITY = GRAVITY;
 Splashes.RING = RING;
 
-Splashes.vertex = (glsl) => fill(VERTEX_SOURCE, { "M.Camera.GLSL": M.Camera.GLSL, "glsl.fog": glsl.fog, "M.GlyphAtlas.VERTEX_GLSL": M.GlyphAtlas.VERTEX_GLSL, "M.HASH_GLSL": M.HASH_GLSL, "GRAVITY.toFixed(2)": GRAVITY.toFixed(2), "RING": RING, "PER_ROW": PER_ROW, "SPLASH_TEXELS": SPLASH_TEXELS });
+// the lift's GLSL (WaveLift): the waves' switch, the reach and the share over the floor
+const WAVE_LIFT_GLSL = fill(WAVE_LIFT_SOURCE, { "GRID_GLSL": WAVE_GRID_SOURCE, "WAVE_CALM": M.WaveLift.CALM.toFixed(6) });
+
+Splashes.vertex = (glsl) => fill(VERTEX_SOURCE, { "M.Camera.GLSL": M.Camera.GLSL, "WAVE_LIFT_GLSL": WAVE_LIFT_GLSL, "glsl.fog": glsl.fog, "glsl.medium": glsl.medium, "glsl.shade": glsl.shade, "M.GlyphAtlas.VERTEX_GLSL": M.GlyphAtlas.VERTEX_GLSL, "M.GlyphAtlas.LIGHT_VERTEX_GLSL": M.GlyphAtlas.LIGHT_VERTEX_GLSL, "M.HASH_GLSL": M.HASH_GLSL, "GRAVITY.toFixed(2)": GRAVITY.toFixed(2), "RING": RING, "PER_ROW": PER_ROW, "SPLASH_TEXELS": SPLASH_TEXELS });
 
 M.Splashes = Splashes;

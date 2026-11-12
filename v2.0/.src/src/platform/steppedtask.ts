@@ -20,7 +20,10 @@
 // The worker's side is serveStepped: the same model, a snapshot of each step kept (`keep` steps) for the rewinds.
 //
 // Changelog:
+// 2026-11-11: jump while a worker drives brings the inline model to the steps consumed, tells it, clears the checkpoints and hands the worker the new state (it kept the pre-jump checkpoints: a
+//   loss afterwards replayed the old position's timeline).
 // 2026-11-10: new.
+// 2026-11-11: rehand clears the packets buffered before it (a reply to a go in flight when suspend() set the worker aside was delivered as the new state's).
 import { M } from "../engine/core";
 import { serveTask } from "./servetask";
 import { Workers } from "./workers";
@@ -179,6 +182,8 @@ export class SteppedTask<P> extends ThreadedTask<StepModel<P>, StepHandle> {
   private rehand(worker: StepHandle): void {
     this.handed = true;
     this.handedAt = this.consumed;
+    // (the packets buffered before are the old state's: a reply to a go still in flight when the worker was set aside, computed without the inputs logged since)
+    this.buffer.length = 0;
     const epoch = ++this.epoch;
     worker.link.postMessage({ type: "init", epoch, snapshot: this.model.snapshot(), events: this.inputs.filter((e) => e.at > this.consumed) });
     worker.link.postMessage({ type: "go", epoch, to: this.consumed + this.lookahead });
@@ -473,13 +478,10 @@ export class SteppedTask<P> extends ThreadedTask<StepModel<P>, StepHandle> {
     const slots = this.liveSlots();
     const worker = slots.length ? this.workerOf(slots[0]!) : null;
     if (worker && this.driving) {
-      const at = this.consumed + 1;
-      this.inputs.push({ at, payload });
-      this.buffer.length = 0;
-      worker.link.postMessage({ type: "event", epoch: ++this.epoch, at, payload });
-      this.consumed = step;
-      worker.link.postMessage({ type: "go", epoch: this.epoch, to: this.consumed + this.lookahead });
-      return;
+      // (the inline model is behind the worker's: brought to the steps consumed from the last checkpoint, then told like a model no worker drives, and the worker handed the new state;
+      // the checkpoints of the old position are no base for a replay of the new one)
+      this.replay = true;
+      this.driving = false;
     }
     this.syncInline();
     this.model.event(payload);
@@ -489,6 +491,7 @@ export class SteppedTask<P> extends ThreadedTask<StepModel<P>, StepHandle> {
     if (this.handed && worker) {
       // (a worker handed the old state: handed the new)
       this.buffer.length = 0;
+      this.handedAt = this.consumed;
       worker.link.postMessage({ type: "init", epoch: ++this.epoch, snapshot: this.model.snapshot(), events: [] });
       worker.link.postMessage({ type: "go", epoch: this.epoch, to: this.consumed + this.lookahead });
     }

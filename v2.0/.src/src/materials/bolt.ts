@@ -1,6 +1,6 @@
 // The lightning's physical parameters: the light the strikes cast and the look of the lines
 // drawn (their profile across and their tint). Plain data: read by core.ts (M.BOLT),
-// models/boltitems.ts and effects/bolt.ts (on their classes as before: BoltItems.BELL_*,
+// models/boltitems.ts and effects/bolt.ts (on their classes as before:
 // Bolt.BELL_SPREAD, Bolt.TINT).
 //
 // Changelog:

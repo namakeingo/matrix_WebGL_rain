@@ -15,6 +15,7 @@
 //
 // Changelog:
 // 2026-11-10: new.
+// 2026-11-11: applyRain keeps the applied mean fall valid for the wheel's clock rate (RainWheel.meanFallRate).
 import { M } from "../engine/core";
 import type { RainWheel, RainWheelSnapshot, DropState, RainView } from "./rainwheel";
 import { SplashTick } from "./splashtick";
@@ -384,6 +385,7 @@ export class RainSimTick extends SplashTick {
       }
     }
     wheel.meanFallFor = out.meanFallForLayout ? wheel.layout : null;
+    wheel.meanFallRate = wheel.clock.rate;
   }
 
   snapshot(): RainSimSnapshot {

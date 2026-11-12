@@ -6,8 +6,12 @@ precision highp usampler2D;
 ${TEST_VIEWS}
 ${M.Camera.GLSL}
 ${glsl.fog}
+${glsl.medium}
+${glsl.shade}
 ${M.GlyphAtlas.VERTEX_GLSL}
+${M.GlyphAtlas.LIGHT_VERTEX_GLSL}
 ${M.HASH_GLSL}
+${WAVE_LIFT_GLSL}
 ${CELL_GLSL}
 uniform uint uStep;
 uniform float uMirror;
@@ -44,6 +48,9 @@ out float vLight;
 out float vHead;
 out vec3 vWorld;
 flat out vec3 vColor;
+// the baked shade at the glyph (sky, moon) and the strikes' light the air scatters towards the eye before it
+flat out vec2 vShade;
+out vec3 vStrike;
 const float WAVE_SCREEN = ${WAVE_SCREEN.toFixed(6)};
 float musicBin(int bin) {
   return uMusicLight[bin >> 2][bin & 3];
@@ -82,8 +89,15 @@ void main() {
   shown = shown && (uOnlyDrop < 0 || drop == uOnlyDrop) && (!uHeadOnly || age == 0);
 #endif
   float x = acrossOf(drop, c.fall, c.z);
+  // (the water's live height at the drop's place lifts the rows near it, the lift fading over the highest wave and one cell: the head lands on the crest and the trail bends over it;
+  // read only for a cell under that reach, never with the water off (uFloor) or the waves off or calm. The lift is added to the height over the floor before the mirror flip, so the
+  // reflection is the lifted drop's mirror image)
+  float reach = uFloor > 0.5 ? 0.0 : waveReach(CELL);
+  float lift = float(c.row) * CELL < reach ? waveHeight(vec2(x, c.z)) : 0.0;
+  float centre = (float(c.row) + 0.5) * CELL;
+  float middleY = (centre + lift * waveShare(centre, reach)) * uMirror + floorOf(c.z);
   // (on the screen at all: its middle; nothing else worked out for a character not drawn)
-  vec4 middle = cViewProj * vec4(x, (float(c.row) + 0.5) * CELL * uMirror + floorOf(c.z), -c.z, 1.0);
+  vec4 middle = cViewProj * vec4(x, middleY, -c.z, 1.0);
   shown = shown && glyphShown(middle);
   vUv = vec2(aCorner.x, 1.0 - aCorner.y);
   vHead = age == 0 ? 1.0 : 0.0;
@@ -92,6 +106,8 @@ void main() {
     vLight = 0.0;
     vWorld = vec3(0.0);
     vColor = vec3(0.0);
+    vShade = vec2(0.0);
+    vStrike = vec3(0.0);
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
     return;
   }
@@ -99,20 +115,29 @@ void main() {
   // each character changes now and then, at its own time
   uint epoch = (uStep + hash(cell) % 64u) / 48u;
   vGlyph = int(hash(cell ^ (epoch * 2654435761u)) % uint(uGlyphs));
-  vec3 world = vec3(x + (aCorner.x - 0.5) * CELL, (float(c.row) + aCorner.y) * CELL * uMirror + floorOf(c.z), -c.z);
+  float above = (float(c.row) + aCorner.y) * CELL;
+  vec3 world = vec3(x + (aCorner.x - 0.5) * CELL, (above + lift * waveShare(above, reach)) * uMirror + floorOf(c.z), -c.z);
   vec4 clip = cViewProj * vec4(world, 1.0);
   vWorld = world;
   vColor = fallColor(x / c.z / WAVE_SCREEN + 0.5, uWaveNow - float(c.since) * uWavePerStep) * musicLight(x / c.z);
   bool once = uFogOnce > 0.0 && c.z >= uFogOnce;
-  float light = (1.0 - float(age) / float(uTrail)) * (once ? glyphFog(vec3(x, (float(c.row) + 0.5) * CELL * uMirror + floorOf(c.z), -c.z), middle, uMirror < 0.0) : glyphFog(world, clip, uMirror < 0.0));
+  vec4 fog = once ? glyphFogStrike(vec3(x, middleY, -c.z), middle, uMirror < 0.0) : glyphFogStrike(world, clip, uMirror < 0.0);
+  float light = (1.0 - float(age) / float(uTrail)) * fog.a;
+  // (the cut is by the emission's light alone, as the CPU's trail model (QualityRain.Lod) has it: the reflected light of a cell it cuts is under that light's fraction, the light the
+  // glyph reflects per unit of albedo, of the cut, and the shade is read after it)
   if (age > 0 && light < uLightCut) {
     vGlyph = 0;
     vLight = 0.0;
     vWorld = vec3(0.0);
     vColor = vec3(0.0);
+    vShade = vec2(0.0);
+    vStrike = vec3(0.0);
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
     return;
   }
   vLight = light;
+  // (the true place: not the mirror image's, whose y is below the water; its middle)
+  vShade = glyphShade(vec3(x, (float(c.row) + 0.5) * CELL + floorOf(c.z), -c.z));
+  vStrike = fog.rgb;
   gl_Position = clip;
 }

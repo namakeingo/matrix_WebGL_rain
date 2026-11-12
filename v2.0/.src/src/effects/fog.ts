@@ -87,8 +87,12 @@
 //   `QualityFog.Lod`) the refresh period grows to 32 sweeps and more octaves are read as their mean (`uDrop`). With lod off none applies.
 //
 // Changelog:
+// 2026-11-12: planInput: no grid framebuffers (no float render targets) gives 0 draws instead of reading their length (the frame threw with the extensions missing).
+// 2026-11-12: readMargin: the volume's margin as the mirrored picture's pixels read it (the picture larger than the view).
 // 2026-11-10: the frame's plan (uniform block values, the view decisions, the shade draws owed, the slices' periods and runs of slices built) is models/fogplan.ts's pure function, run here or asked of its worker in Fog.fork.
 // 2026-11-07: level of detail by the slice's physical level (QualityFog.Lod): the refresh period (to 32 sweeps) and the octaves read as their mean (uDrop) by level.
+// 2026-11-12: the moon's disc: the shade bake's moon channel the mean over the penumbra kernel (medium.glsl: moonThrough; the tests' count: setMoonKernel), the sky box's
+//   skyIrradiance and the glyphs' glyphSkyMoonLight in Fog.GLSL, the disc's constants.
 // 2026-11-07: level of detail: the dense tail, the refresh by distance and the far octaves (Effect.lod).
 // 2026-11-06: the quality job "fog" (the slices are its units): slices past the water along a column's rays are held, not
 //   gathered; SLICES, SLICE_NEAR and FOG_FAR owned by models/quality/fog.ts.
@@ -103,7 +107,7 @@ import type { ShaderProgram, UniformBlock, Uniforms, Programs, ProgramSources } 
 import type { EffectContext, SharedGlsl } from "../engine/effect";
 import type { Capabilities } from "../engine/namespace";
 import { DENSITY_FULL, MAIN_DEFAULT, SECONDARY_DEFAULT, AIR, MULTIPLE, PHASE_G } from "../materials/fog";
-import { SKY, MOON, MOON_DIR } from "../materials/sky";
+import { SKY, MOON, MOON_DIR, MoonDisc } from "../materials/sky";
 import { QualityFog } from "../models/quality/fog";
 import { QualityFogShade } from "../models/quality/fogshade";
 import { QualityStrikeShade } from "../models/quality/strikeshade";
@@ -114,6 +118,8 @@ import type { QualityStatics, QualityParams } from "../models/quality/jobs";
 import type { FogQualityView } from "../models/quality/fog";
 import type { ParallaxOffsets } from "../models/mouseparallax";
 import { FogPlan } from "../models/fogplan";
+import { ReflectionFrame } from "../models/reflectionframe";
+import type { ReflectionFrameOf } from "../models/reflectionframe";
 import type { FogPlanInput, FogPlanOutput } from "../models/fogplan";
 import type { JobTask } from "../platform/jobtask";
 import SEED_FRAGMENT_SOURCE from "../shaders/fog/seed_fragment.glsl";
@@ -129,6 +135,7 @@ import GRID_FRAGMENT_SOURCE from "../shaders/fog/grid_fragment.glsl";
 import LAYER_OUTPUT_SOURCE from "../shaders/fog/layer_output.glsl";
 import LAYER_WRITE_SOURCE from "../shaders/fog/layer_write.glsl";
 import STRIKE_TERM_SOURCE from "../shaders/fog/strike_term.glsl";
+import MOON_CONSTANT_SOURCE from "../shaders/fog/moon_constant.glsl";
 import SHADE_FRAGMENT_SOURCE from "../shaders/fog/shade_fragment.glsl";
 import STRIKE_SHADE_FRAGMENT_SOURCE from "../shaders/fog/strike_shade_fragment.glsl";
 import VOLUME_FRAGMENT_SOURCE from "../shaders/fog/volume_fragment.glsl";
@@ -342,6 +349,8 @@ export class Fog extends M.Effect {
   light!: Froxels;
   refreshed: { shadeLayers: number; volumeSlices: number; volumeBuilt: number; sliceFrom: number; strikeSlots: number; };
   marched: boolean;
+  // the tests' count of the moon kernel's directions the GPU's bake takes (0: MoonDisc.KERNEL, as shipped)
+  moonKernel: number;
   warmed: boolean;
   stale: boolean;
   boxes: ViewBox[];
@@ -493,6 +502,7 @@ export class Fog extends M.Effect {
     this.warmed = false;
     // (the tests: every shadow marched; what the last frame refreshed)
     this.marched = false;
+    this.moonKernel = 0;
     this.refreshed = { shadeLayers: 0, volumeSlices: 0, volumeBuilt: 0, sliceFrom: 0, strikeSlots: 0 };
     if (this.caps.floats) {
       this.light = new Froxels(this, { direct: M.UNITS.fogDirect, mirror: M.UNITS.fogMirror, sum: M.UNITS.fogSum, sumMirror: M.UNITS.fogSumMirror });
@@ -954,6 +964,10 @@ export class Fog extends M.Effect {
   // the jobs the schedule posted this frame: for each draw, one message a layer to the workers (a layer is a few ms of a worker: no message holds one
   // for long), the slab filled as they come
   postShade(): void {
+    // (the tests' kernel is not the workers': the GPU bakes every draw)
+    if (this.moonKernel !== 0) {
+      return;
+    }
     const sched = this.shadeSched!;
     const pool = this.shadePool!;
     const sigma = this.sigma();
@@ -1094,6 +1108,19 @@ export class Fog extends M.Effect {
   // all of it refreshed in the next update
   refreshAll() {
     this.stale = true;
+  }
+
+  // (the tests: the kernel of the moon's penumbra the shade bake takes, 1 to MoonDisc.KERNEL_MAX, 0 for the shipped one; the whole grid baked again on the GPU)
+  setMoonKernel(n: number) {
+    this.moonKernel = M.TEST ? Math.min(Math.max(Math.floor(n), 0), MoonDisc.KERNEL_MAX) : 0;
+    this.refreshAll();
+  }
+
+  // the volume's margin (the uniform block's fVolume.w) for the pixels of the mirrored picture, which is larger than the view (models/reflectionframe.ts fogMargin), or the view's own
+  // with null; the block's other values are the frame's
+  readMargin(frame: ReflectionFrameOf | null) {
+    this.ubo.data[15] = frame ? ReflectionFrame.fogMargin(MARGIN, frame) : MARGIN;
+    this.ubo.upload();
   }
 
   // its values for this frame, and its pictures refreshed (after the camera's values)
@@ -1300,7 +1327,8 @@ export class Fog extends M.Effect {
       offsets: offsets(c),
       builtFor: offsets(this.builtFor),
       gap: REFRESH_GAP,
-      draws: this.shadeDraws.length,
+      // (the grids' framebuffers exist only with float pictures: none, the plan is not built)
+      draws: this.shadeDraws ? this.shadeDraws.length : 0,
       shadeRate: SHADE_RATE,
       shadeCredit: this.shadeCredit,
       shadePart: this.shadePart,
@@ -1404,6 +1432,8 @@ export class Fog extends M.Effect {
     gl.uniform1i(u.uLayers, this.layers);
     if (slot >= 0) {
       gl.uniform1i(u.uSlot, slot);
+    } else if (M.TEST) {
+      gl.uniform1i(u.uMoonKernel, this.moonKernel);
     }
     if (inView) {
       gl.enable(gl.SCISSOR_TEST);
@@ -1439,12 +1469,22 @@ Fog.FINISH_FRAGMENT = fill(FINISH_FRAGMENT_SOURCE, { "STRETCH.toFixed(1)": STRET
 
 // the uniform block, the light around (the sky's and the moon's, and the strikes' color), and
 // the volumes read at a place of the screen and a distance (after Camera.GLSL)
-Fog.GLSL = fill(FOG_SOURCE, { "FOG_FAR.toFixed(1)": FOG_FAR.toFixed(1), "AIR": AIR, 'SKY.join(", ")': SKY.join(", "), 'MOON.map((v) => v.toFixed(2)).join(", ")': MOON.map((v) => v.toFixed(2)).join(", "), 'MOON_DIR.map((v) => v.toFixed(2)).join(", ")': MOON_DIR.map((v) => v.toFixed(2)).join(", "), "SLICES.toFixed(1)": SLICES.toFixed(1), "SLICE_NEAR.toFixed(1)": SLICE_NEAR.toFixed(1), "Math.log(1 + FOG_FAR / SLICE_NEAR).toFixed(6)": Math.log(1 + FOG_FAR / SLICE_NEAR).toFixed(6), "STRIKE_SCALE.toFixed(1)": STRIKE_SCALE.toFixed(1), "SLOTS": SLOTS, "strikeTerms": Array.from({ length: SLOTS }, (v, k) => fill(STRIKE_TERM_SOURCE, { "s": "xyzw"[k], "k": k })).join("\n") });
+Fog.GLSL = fill(FOG_SOURCE, { "FOG_FAR.toFixed(1)": FOG_FAR.toFixed(1), "AIR": AIR, 'SKY.join(", ")': SKY.join(", "), 'MOON.map((v) => v.toFixed(2)).join(", ")': MOON.map((v) => v.toFixed(2)).join(", "), 'MOON_DIR.map((v) => v.toFixed(2)).join(", ")': MOON_DIR.map((v) => v.toFixed(2)).join(", "), "MOON_RADIUS.toFixed(6)": MoonDisc.RADIUS.toFixed(6), "MOON_SOLID_ANGLE.toExponential(6)": MoonDisc.SOLID_ANGLE.toExponential(6), "SLICES.toFixed(1)": SLICES.toFixed(1), "SLICE_NEAR.toFixed(1)": SLICE_NEAR.toFixed(1), "Math.log(1 + FOG_FAR / SLICE_NEAR).toFixed(6)": Math.log(1 + FOG_FAR / SLICE_NEAR).toFixed(6), "STRIKE_SCALE.toFixed(1)": STRIKE_SCALE.toFixed(1), "SLOTS": SLOTS, "strikeTerms": Array.from({ length: SLOTS }, (v, k) => fill(STRIKE_TERM_SOURCE, { "s": "xyzw"[k], "k": k })).join("\n") });
+
+// the moon kernel's directions as GLSL constants (MOON_K0 ...: MoonDisc.directions over the disc round MOON_DIR, nine decimals), the centre first
+function moonKernelConstants(): string {
+  const d = MoonDisc.directions(MOON_DIR, MoonDisc.RADIUS, MoonDisc.KERNEL_MAX);
+  const lines: string[] = [];
+  for (let k = 0; k < MoonDisc.KERNEL_MAX; k++) {
+    lines.push(fill(MOON_CONSTANT_SOURCE, { "k": k, "x": d[3 * k].toFixed(9), "y": d[3 * k + 1].toFixed(9), "z": d[3 * k + 2].toFixed(9) }));
+  }
+  return lines.join("\n");
+}
 
 // the medium: its density, what it lets through between two places, the shadow grid's places,
 // and the clouds' shadow of the sky and the moon marched. lod: log2 of the noise's texels at a
 // size of 1 m that a sample stands for (lodOf: of a length)
-Fog.MEDIUM_GLSL = fill(MEDIUM_SOURCE, { "MULTIPLE": MULTIPLE, "PHASE_G": PHASE_G, "SHADE_TOP.toFixed(1)": SHADE_TOP.toFixed(1), "SHADE_NEAR.toFixed(2)": SHADE_NEAR.toFixed(2), "Math.log(FOG_FAR / SHADE_NEAR).toFixed(6)": Math.log(FOG_FAR / SHADE_NEAR).toFixed(6), "SHADE_ACROSS": SHADE_ACROSS, "SHADE_UP": SHADE_UP, "SHADE_DEEP": SHADE_DEEP, "M.Camera.SPAN.toFixed(4)": M.Camera.SPAN.toFixed(4), "SLOTS": SLOTS, "NOISE.toFixed(1)": NOISE.toFixed(1) });
+Fog.MEDIUM_GLSL = fill(MEDIUM_SOURCE, { "MULTIPLE": MULTIPLE, "PHASE_G": PHASE_G, "SHADE_TOP.toFixed(1)": SHADE_TOP.toFixed(1), "SHADE_NEAR.toFixed(2)": SHADE_NEAR.toFixed(2), "Math.log(FOG_FAR / SHADE_NEAR).toFixed(6)": Math.log(FOG_FAR / SHADE_NEAR).toFixed(6), "SHADE_ACROSS": SHADE_ACROSS, "SHADE_UP": SHADE_UP, "SHADE_DEEP": SHADE_DEEP, "M.Camera.SPAN.toFixed(4)": M.Camera.SPAN.toFixed(4), "SLOTS": SLOTS, "NOISE.toFixed(1)": NOISE.toFixed(1), "MOON_KERNEL": MoonDisc.KERNEL, "MOON_KERNEL_MAX": MoonDisc.KERNEL_MAX, "moonKernelConstants": moonKernelConstants() });
 
 // the baked shadows read, and the clouds' light (after MEDIUM_GLSL). marched: the shadows
 // marched, not baked

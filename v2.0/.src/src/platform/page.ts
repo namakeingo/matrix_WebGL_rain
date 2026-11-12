@@ -219,8 +219,8 @@ export const startShell = (support: SupportReport, script: string, make: (platfo
     if (p.p627_setting_DebugSupport) {
       supportOn = !!p.p627_setting_DebugSupport.value;
     }
-    if (p.p108_setting_HDR) {
-      hdrOn = !!p.p108_setting_HDR.value;
+    if (p.p109_setting_HDR) {
+      hdrOn = !!p.p109_setting_HDR.value;
     }
     if (((debugOn && supportOn) || hdrOn) && !was) {
       const mine = ++probed;

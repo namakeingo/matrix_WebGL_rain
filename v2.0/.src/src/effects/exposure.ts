@@ -98,7 +98,7 @@ export class Exposure extends M.Effect {
   }
 
   static properties() {
-    return { p107_setting_Exposure: (exposure: Exposure, v: number) => (exposure.gain = Exposure.gain(v)) };
+    return { p108_setting_Exposure: (exposure: Exposure, v: number) => (exposure.gain = Exposure.gain(v)) };
   }
 
   static programs(glsl: SharedGlsl): ProgramSources {

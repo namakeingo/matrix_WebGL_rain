@@ -28,6 +28,7 @@
 //
 // Changelog:
 // 2026-11-04: TypeScript, a module of src/engine/ (was engine/guard.js).
+// 2026-11-11: size() throws an Error naming an unknown kind, in every mode (was undefined or a TypeError).
 import { M } from "./core";
 
 // a kind's sizes: at the start, the least, the most, and without timer queries
@@ -189,6 +190,9 @@ export class GpuGuard {
   // a pass's piece size of its kind ("band": rows, "chunk": drops, "slice": slices or layers,
   // "step": the waves' steps)
   size(name: string, kind: string): number {
+    if (!Object.prototype.hasOwnProperty.call(KINDS, kind)) {
+      throw new Error(`GpuGuard.size: unknown kind "${kind}"`);
+    }
     if (!this.adapt) {
       return this.fixed[kind];
     }

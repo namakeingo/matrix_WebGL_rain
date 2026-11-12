@@ -5,6 +5,9 @@ precision highp sampler3D;
 ${M.Camera.GLSL}
 ${glsl.fog}
 ${M.GlyphAtlas.VERTEX_GLSL}
+#define WAVE_LIFT_AT
+${WAVE_LIFT_GLSL}
+${FOOT_GLSL}
 ${LIGHT_GLSL}
 ${PROFILE_GLSL}
 uniform highp sampler2D uSegments;
@@ -57,6 +60,12 @@ void main() {
   vec4 prev = texel(i, 2);
   vec4 next = texel(i, 3);
   vec4 growth = texel(i, 4);
+  // (the foot on the water rests on the live wave at its place; no other point of the lines moves)
+  float foot = footLift(a.xyz, b.xyz, prev.xyz, next.xyz);
+  a.y = a.y == 0.0 ? foot : a.y;
+  b.y = b.y == 0.0 ? foot : b.y;
+  prev.y = prev.y == 0.0 ? foot : prev.y;
+  next.y = next.y == 0.0 ? foot : next.y;
   // (cut at the slot's growth: from its start to as far as it has grown, the piece after from
   // this one's end to its own grown end; nothing before its start is reached or once hidden)
   float grown = slotOf(uGrown, uSlot);

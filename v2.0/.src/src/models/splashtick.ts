@@ -11,6 +11,7 @@
 // part; the one at `rainAt` only, an older one is no more than an entry).
 //
 // Changelog:
+// 2026-11-11: run clears the queue in its finally (a payload that threw was applied again every tick).
 // 2026-11-10: new.
 // 2026-11-10: OP_RAIN and the rain's hook (a model built on this one, models/rainsimtick.ts, makes the rain's steps at the operation).
 import { M } from "../engine/core";
@@ -142,6 +143,19 @@ export class SplashTick implements StepModel<SplashPacket> {
     sim.onLand = (x, z, weight) => {
       impacts.push(x, z, weight);
     };
+    try {
+      return this.runQueue(impacts);
+    } finally {
+      // (the callback the simulation had, also when a payload could not be applied)
+      sim.onLand = was;
+      // (the payloads of a run that threw are dropped: applied again, the same one would throw every tick)
+      this.queue.length = 0;
+    }
+  }
+
+  // the queued payloads applied in order, and the packet of what they made (run's body: the simulation's landing callback is the collector meanwhile)
+  runQueue(impacts: number[]): SplashPacket {
+    const sim = this.sim;
     const firstNew = sim.nextSerial;
     let reset = false;
     let resetAt = -1;
@@ -187,7 +201,6 @@ export class SplashTick implements StepModel<SplashPacket> {
       }
     }
     this.queue.length = 0;
-    sim.onLand = was;
     if (this.local) {
       return { impacts: Float64Array.from(impacts), local: true, reset, resetAt, count: 0, nextSerial: 0, lastStep: 0, from: 0, serial: EMPTY_F, firstNew: 0, rows: EMPTY_U };
     }
