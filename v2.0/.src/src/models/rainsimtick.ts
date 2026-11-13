@@ -14,6 +14,7 @@
 // - snapshot()/restore() cover the splashes' tick and the wheel (after a restore everything is owed to the upload: the lives and the layout).
 //
 // Changelog:
+// 2026-11-12: the call "setMeets" (the water's heights table of the drops' landings, an ordered input of the wheel: models/rainwheel.ts).
 // 2026-11-10: new.
 // 2026-11-11: applyRain keeps the applied mean fall valid for the wheel's clock rate (RainWheel.meanFallRate).
 import { M } from "../engine/core";
@@ -121,7 +122,7 @@ export interface RainSimSnapshot extends SplashTickSnapshot {
 // the calls the wheel takes (RainCall.n); "set" is a field of the settings set, "color" a colour, "spawnByMusic" the music's scan with whether a layout is pending
 const CALLS = new Set([
   "adopt", "gateFirst", "rateChanged", "setWave", "setShares", "setMusicLight", "despawn", "wake", "gate", "retarget", "setLife", "dirty", "restart", "settle", "start", "finish", "fade",
-  "schedule", "resetTime", "installLayout",
+  "schedule", "resetTime", "installLayout", "setMeets",
 ]);
 
 const EMPTY_F = new Float64Array(0);
@@ -343,6 +344,7 @@ export class RainSimTick extends SplashTick {
       wheel.slots = swap.slots;
       wheel.nextInSlot = swap.nextInSlot;
       wheel.inWheel = swap.inWheel;
+      wheel.rebuildSlotOf();
     }
     wheel.lastStep = out.lastStep;
     wheel.time = out.time;

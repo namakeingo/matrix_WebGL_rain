@@ -81,7 +81,9 @@
 //   by column.
 //
 // Changelog:
-// 2026-11-12: the drops' last rows lift by the water's live height at their place (uWaterWaves, waterWaves; shaders/waves/lift.glsl, models/wavelift.ts), fading over the highest wave and one cell.
+// 2026-11-12: a drop meets the water by its life, never by moving: the gather pass (shaders/rain/gather_vertex.glsl, gatherMeets, pollMeets, setMeets) reads the water's rows at each drop's
+//   landing place back to the wheel (models/rainwheel.ts: setMeets), which ends the fall where the head meets the surface; the vertex shader draws the head's extension below the floor in a
+//   trough (uWaterWaves, waterWaves, waveSource); the lift of the last rows is gone.
 // 2026-11-12: the glyphs' lights (the shade at the glyph and the strikes' light the fog gives, passed to the lit fragment shader: LIGHT_VERTEX_GLSL, uShade) and 3D Symbols (uSymbols3d, symbols3d).
 // 2026-11-12: spawnNow is the box's top with React to music too (the live view's top moved with the parallax's offsets and laid the drops out again).
 // 2026-11-12: the spawn box (models/spawnbox.ts): the drops' x over its width at their distance (uSpawn in shaders/rain/cell.glsl, was distance x SPAN), their falls start from its top (spawnNow), setSpawnBox (its inputs, recorded wheel settings).
@@ -112,8 +114,10 @@ import WAVE_LIFT_SOURCE from "../shaders/waves/lift.glsl";
 import WAVE_GRID_SOURCE from "../shaders/waves/grid.glsl";
 import NEWEST_VERTEX_SOURCE from "../shaders/rain/newest_vertex.glsl";
 import NEWEST_FRAGMENT_SOURCE from "../shaders/rain/newest_fragment.glsl";
+import GATHER_VERTEX_SOURCE from "../shaders/rain/gather_vertex.glsl";
+import GATHER_FRAGMENT_SOURCE from "../shaders/rain/gather_fragment.glsl";
 import type { EffectContext, SharedGlsl } from "../engine/effect";
-import type { Programs, ProgramSources, ShaderProgram } from "../engine/gl";
+import type { Programs, ProgramSources, RenderTarget, ShaderProgram } from "../engine/gl";
 import type { StepClock } from "../engine/clock";
 import type { GlyphAtlas } from "../engine/glyphs";
 import type { RainLayout, RestartResult, SpawnPlane } from "../models/rainlayout";
@@ -158,6 +162,11 @@ const RAIN_SCALE = M.RainWheel.RAIN_SCALE;
 const STEP_RATE = 30;
 const SEED = RL.SEED;
 const IMPACT = 1;
+// the highest wave (m) from which the water's heights are gathered for the wheel (half a row: under it every surface is the floor's row), and under which they stop (a lower threshold: no flapping)
+const MEET_ON = 0.5 * CELL;
+const MEET_OFF = 0.35 * CELL;
+// a drop's bytes in the gather's picture (models/wavelift.ts)
+const MEET_STRIDE = M.WaveLift.STRIDE;
 // the width of a 16:9 view as a bearing (x / z): the colours' unit across the world
 // whether two spawn planes are the same (null: the world's ceiling)
 // (within MouseParallax.TOLERANCE: the view the mouse parallax moves does not lay the drops out again for a drift smaller than that)
@@ -202,6 +211,16 @@ export class Rain extends M.Effect {
   landings!: (step: number) => number[];
   program!: ShaderProgram;
   newest!: ShaderProgram;
+  // the water's heights for the wheel (models/rainwheel.ts: setMeets): the gather program, its picture (one texel a drop), the pixel pack buffer, the fence of the read in flight, the drops it
+  // covers, the bytes read, whether the wheel has a table now, and where the highest wave is read from (set by src/index.ts: Waves)
+  gatherProgram!: ShaderProgram;
+  gatherTarget: RenderTarget | null;
+  gatherBuffer: WebGLBuffer | null;
+  gatherFence: WebGLSync | null;
+  gatherCount: number;
+  gatherRead: Uint8Array;
+  gatherOn: boolean;
+  waveSource: { highest: number } | null;
   colorState: RainColors;
   // the landings wheel and the state of the drops (models/rainwheel.ts): the fields below declared without a value are the wheel's, read and set here
   wheel: RainWheel;
@@ -284,7 +303,7 @@ export class Rain extends M.Effect {
   declare wrongLandings: number;
   // the floor the drops fall to (models/floor.ts) as set
   floorKind: FloorKind;
-  // whether the water shows waves (Collision plane and Ripples on): the drops' last rows are lifted by the wave under them only then (uWaterWaves)
+  // whether the water shows waves (Collision plane and Ripples on): the water's heights are gathered for the wheel and the head's extension below the floor drawn only then (uWaterWaves)
   waterWaves: boolean;
   // React to music: the falls start from the top of the view (the spawn plane)
   tiltOn: boolean;
@@ -332,6 +351,8 @@ export class Rain extends M.Effect {
   static vertex: (glsl: SharedGlsl, test: boolean) => string;
   static newestVertex: (test: boolean) => string;
   static newestFragment: (test: boolean) => string;
+  static gatherVertex: () => string;
+  static gatherFragment: () => string;
   static SEED: number;
   static COUNT: number;
   static CELL: number;
@@ -355,6 +376,13 @@ export class Rain extends M.Effect {
     this.relay = false;
     this.floorKind = "water";
     this.waterWaves = true;
+    this.gatherTarget = null;
+    this.gatherBuffer = null;
+    this.gatherFence = null;
+    this.gatherCount = 0;
+    this.gatherRead = new Uint8Array(COUNT * MEET_STRIDE);
+    this.gatherOn = false;
+    this.waveSource = null;
     this.tiltOn = false;
     this.layoutSpawn = null;
     this.head = M.GlyphAtlas.HEAD;
@@ -408,6 +436,7 @@ export class Rain extends M.Effect {
     return {
       rain: [Rain.vertex(glsl, M.TEST), M.GlyphAtlas.fragment(glsl, M.TEST, true, true, true)],
       rainNewest: [Rain.newestVertex(M.TEST), Rain.newestFragment(M.TEST)],
+      rainMeet: [Rain.gatherVertex(), Rain.gatherFragment()],
     };
   }
 
@@ -441,8 +470,6 @@ export class Rain extends M.Effect {
       uDrops: M.UNITS.drops,
       uLife: M.UNITS.dropLife,
       uAtlas: M.UNITS.atlas,
-      uWaves: M.UNITS.waves,
-      uWaveMax: M.UNITS.waveMax,
       uFogDirect: M.UNITS.fogDirect,
       uFogMirror: M.UNITS.fogMirror,
       uStrikeDirect: M.UNITS.strikeDirect,
@@ -452,8 +479,19 @@ export class Rain extends M.Effect {
       uNoise: M.UNITS.noise,
       uBoltCover: M.UNITS.boltCover,
       uBoltNear: M.UNITS.boltNear,
+      uWaves: M.UNITS.waves,
+      uWaveMax: M.UNITS.waveMax,
     });
     [this.newest] = this.ownPrograms(programs, ["rainNewest"]);
+    [this.gatherProgram] = this.ownPrograms(programs, ["rainMeet"]);
+    this.gatherProgram.samplers({ uDrops: M.UNITS.drops, uLife: M.UNITS.dropLife, uWaves: M.UNITS.waves, uWaveMax: M.UNITS.waveMax });
+    const gl = this.gl;
+    this.own(this, (rain) => {
+      if (rain.gatherFence) {
+        gl.deleteSync(rain.gatherFence);
+        rain.gatherFence = null;
+      }
+    });
     // (an integer attribute's own current value: a draw without the list reads it, and a float one there would make the draw an error)
     this.gl.vertexAttribI4ui(M.ATTRIBUTES.aDrop, 0, 0, 0, 0);
     this.listBuffer = this.createBuffer();
@@ -1102,6 +1140,8 @@ export class Rain extends M.Effect {
     this.dropListed = false;
     this.applyLayout();
     this.time = time;
+    // (the water's heights read back, an ordered input of the wheel before this frame's steps)
+    this.pollMeets();
     // (a task runs the steps in its tick: the frame's part is given to it)
     const driver = this.driver;
     if (driver && driver.drives()) {
@@ -1241,6 +1281,89 @@ export class Rain extends M.Effect {
     c.wave = this.wave;
     c.width = this.waveWidth;
     c.now = now - Math.floor(now);
+    this.gatherMeets(time);
+  }
+
+  // ---- the water's heights for the wheel ----
+
+  // whether the wheel should have the water's heights: the water shows waves (Collision plane and Ripples on), the water is the floor, floats can be drawn into and the highest wave
+  // is half a row or more (a lower threshold to stop: the table is on while it holds)
+  meetsWanted(): boolean {
+    const waves = this.waveSource;
+    return !!waves && this.waterWaves && this.layoutFloor !== "screen" && !!this.gatherProgram && waves.highest >= (this.gatherOn ? MEET_OFF : MEET_ON);
+  }
+
+  // the table handed to the wheel (null: none), an ordered input recorded for the task that runs the wheel's steps (a copy: the read's array is reused) and applied to this wheel
+  setMeets(table: Uint8Array | null) {
+    const d = this.driver;
+    if (d && d.recording()) {
+      this.rec("setMeets", [table ? table.slice() : null], false);
+    }
+    this.wheel.setMeets(table);
+  }
+
+  // the heights read back, if its fence has passed (never waits), given to the wheel; the table taken away when the waves are gone
+  pollMeets() {
+    const gl = this.gl;
+    if (this.gatherFence) {
+      const status = gl.clientWaitSync(this.gatherFence, 0, 0);
+      if (status === gl.ALREADY_SIGNALED || status === gl.CONDITION_SATISFIED) {
+        gl.deleteSync(this.gatherFence);
+        this.gatherFence = null;
+        const bytes = this.gatherCount * MEET_STRIDE;
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.gatherBuffer);
+        gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, this.gatherRead, 0, bytes);
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+        if (this.meetsWanted()) {
+          this.setMeets(this.gatherRead.subarray(0, bytes));
+          this.gatherOn = true;
+        }
+      } else if (status === gl.WAIT_FAILED) {
+        gl.deleteSync(this.gatherFence);
+        this.gatherFence = null;
+      }
+    }
+    if (this.gatherOn && !this.meetsWanted()) {
+      this.gatherOn = false;
+      this.setMeets(null);
+    }
+  }
+
+  // the water's height at each drop's landing place asked for (models/wavelift.ts): one point a drop into a picture of a texel a drop (RGBA8), the picture's rows of the drops drawn into a
+  // pixel pack buffer, a fence after it; at most one read in flight, only while the heights are wanted. The waves read are the last frame's (their texture is bound by Waves.bind in the
+  // frame's update, after this one)
+  gatherMeets(time: number) {
+    if (this.gatherFence || !this.meetsWanted() || this.reach === 0 || !this.gatherProgram) {
+      return;
+    }
+    const gl = this.gl;
+    const rows = COUNT / DROPS_ACROSS;
+    if (!this.gatherTarget) {
+      const target = this.target({ format: gl.RGBA8 });
+      target.resize(DROPS_ACROSS, rows);
+      this.gatherTarget = target;
+      this.gatherBuffer = this.createBuffer();
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.gatherBuffer);
+      gl.bufferData(gl.PIXEL_PACK_BUFFER, COUNT * MEET_STRIDE, gl.STREAM_READ);
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+    }
+    const u = this.gatherProgram.use();
+    gl.uniform1ui(u.uStep, this.clock.stepAt(time) >>> 0);
+    gl.uniform1i(u.uRows, rows);
+    gl.uniform1f(u.uFloor, 0);
+    const box = this.wheel.box();
+    gl.uniform2f(u.uSpawn, box.slope, box.shift);
+    this.gatherTarget.bind();
+    gl.disable(gl.BLEND);
+    gl.bindVertexArray(null);
+    gl.drawArrays(gl.POINTS, 0, this.reach);
+    this.gatherCount = this.reach;
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.gatherBuffer);
+    gl.readPixels(0, 0, DROPS_ACROSS, Math.ceil(this.reach / DROPS_ACROSS), gl.RGBA, gl.UNSIGNED_BYTE, 0);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.gatherFence = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+    gl.flush();
   }
 
   // the newest characters of steps from..to (each drop's character at its head, one instance a
@@ -1401,14 +1524,17 @@ Rain.DISTANCE_SIZE = DISTANCE_SIZE;
 // a drop's cells: its layout (from uDrops) and its life (from uLife), and at a step the cell it
 // drew age steps ago (in this fall, or in the last one: its trail where it landed), whether its
 // fall shows, and its place across in a fall (new for every fall); after M.HASH_GLSL
-// the lift's GLSL (WaveLift): the waves' switch, the reach and the share over the floor
+// the waves' lean read (WaveLift): the waves' switch, the highest wave and the bilinear height
 const WAVE_LIFT_GLSL = fill(WAVE_LIFT_SOURCE, { "GRID_GLSL": WAVE_GRID_SOURCE, "WAVE_CALM": M.WaveLift.CALM.toFixed(6) });
 const CELL_GLSL = fill(CELL_SOURCE, { "CELL.toFixed(4)": CELL.toFixed(4), "SEED": SEED, "M.Camera.SPAN.toFixed(4)": M.Camera.SPAN.toFixed(4), "DROPS_ACROSS": DROPS_ACROSS });
 
 // (test: with the tests' uniforms, only one drop or only the heads drawn)
-Rain.vertex = (glsl, test) => fill(VERTEX_SOURCE, { "TEST_VIEWS": test ? "#define TEST_VIEWS" : "", "M.Camera.GLSL": M.Camera.GLSL, "WAVE_LIFT_GLSL": WAVE_LIFT_GLSL, "glsl.fog": glsl.fog, "glsl.medium": glsl.medium, "glsl.shade": glsl.shade, "M.GlyphAtlas.VERTEX_GLSL": M.GlyphAtlas.VERTEX_GLSL, "M.GlyphAtlas.LIGHT_VERTEX_GLSL": M.GlyphAtlas.LIGHT_VERTEX_GLSL, "M.HASH_GLSL": M.HASH_GLSL, "CELL_GLSL": CELL_GLSL, "WAVE_SCREEN.toFixed(6)": WAVE_SCREEN.toFixed(6), "COLOR_GLSL": COLOR_SOURCE });
+Rain.vertex = (glsl, test) => fill(VERTEX_SOURCE, { "TEST_VIEWS": test ? "#define TEST_VIEWS" : "", "M.Camera.GLSL": M.Camera.GLSL, "M.WaveLift.BIAS": M.WaveLift.BIAS, "glsl.fog": glsl.fog, "glsl.medium": glsl.medium, "glsl.shade": glsl.shade, "M.GlyphAtlas.VERTEX_GLSL": M.GlyphAtlas.VERTEX_GLSL, "M.GlyphAtlas.LIGHT_VERTEX_GLSL": M.GlyphAtlas.LIGHT_VERTEX_GLSL, "M.HASH_GLSL": M.HASH_GLSL, "CELL_GLSL": CELL_GLSL, "WAVE_SCREEN.toFixed(6)": WAVE_SCREEN.toFixed(6), "COLOR_GLSL": COLOR_SOURCE });
 // (the newest characters' shaders: drawNewest)
 Rain.newestVertex = (test) => fill(NEWEST_VERTEX_SOURCE, { "TEST_VIEWS": test ? "#define TEST_VIEWS" : "", "M.Camera.GLSL": M.Camera.GLSL, "M.HASH_GLSL": M.HASH_GLSL, "CELL_GLSL": CELL_GLSL, "WAVE_SCREEN.toFixed(6)": WAVE_SCREEN.toFixed(6), "COLOR_GLSL": COLOR_SOURCE });
 Rain.newestFragment = (test) => fill(NEWEST_FRAGMENT_SOURCE, { "TEST_VIEWS": test ? "#define TEST_VIEWS" : "" });
+// (the gather pass's shaders: the water's rows at each drop's landing place, gatherMeets)
+Rain.gatherVertex = () => fill(GATHER_VERTEX_SOURCE, { "M.Camera.GLSL": M.Camera.GLSL, "M.HASH_GLSL": M.HASH_GLSL, "WAVE_LIFT_GLSL": WAVE_LIFT_GLSL, "CELL_GLSL": CELL_GLSL, "M.WaveLift.CAP_ROWS": M.WaveLift.CAP_ROWS, "M.WaveLift.BIAS": M.WaveLift.BIAS });
+Rain.gatherFragment = () => GATHER_FRAGMENT_SOURCE;
 
 M.Rain = Rain;

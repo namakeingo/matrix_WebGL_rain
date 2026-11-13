@@ -7,6 +7,11 @@
 //   only, its colour in it); the next drop's fall is gated by the music's shares, and the drop scheduled again.
 // - Its drops: the arrays of the layout (distance, speed, phase and rows, 4 a drop), the lives (4 a drop: the first fall shown, the fall it ends before, a fall it shows again from; the
 //   dirty range of the drops changed since the effect's last upload), the drops wanted (targets), how many are falling (active) and drawn (reach: those ending still fade there).
+// - The water's height at the landings: a drop is never moved to meet the water, it is given more or fewer steps. The effect hands the wheel, as an ordered input (setMeets), a table of
+//   the surface's height in rows over the floor at each drop's landing place (the gather pass's picture read back: 4 bytes a drop, see models/wavelift.ts); with a table the wheel looks at
+//   a drop's landing from a lead before its nominal step (meetLead) and lands it when its head reaches the surface's row: step by step the first step whose rows fallen reach
+//   (fall + 1) rows - 1 - m (m the table's rows for that fall, capped at WaveLift.CAP_ROWS), a crest sooner, a trough later (the head below the floor: its landing reported in the fall
+//   that was falling, its place and head that fall's). Without a table (the water calm, Ripples off) every landing is at its nominal step, exactly as before.
 // - Its colour (Custom colors 1 to 4, or the rainbow; still, or as a wave): colorOf, the wave's phase at a step (setWave, phaseAt, fallPhase, stepsSince).
 // - React to music: the columns' shares of the falls (gate decides each fall as it begins), the scan that begins falls by column (spawnByMusic, wake, despawn), the credit and the times
 //   of the scans, the drops whose phase was changed (woken).
@@ -17,6 +22,9 @@
 //   (plain data, the typed arrays copied), event(payload) a live input (the view, the shares, the music's light, whether a layout is pending) applied before the next step.
 //
 // Changelog:
+// 2026-11-12: `pending` (the fall each drop in the wheel is waiting to land): runStep, rescheduleAll and the watch use it, never the layout's guess of the fall, so a table coming or going or a restart adopted never lands a fall twice or loses one.
+// 2026-11-12: adopt looks the landings at early again while a table is in force.
+// 2026-11-12: the water's heights (setMeets, meetOf, the watch window meetLead, rescheduleAll, slotOf): a landing ends where the head meets the surface, a crest earlier, a trough later.
 // 2026-11-10: new (the wheel and its state moved out of effects/rain.ts, behaviour unchanged).
 // 2026-11-10: installLayout (the layout's fields set together); `trace` (what a stepped tick changed that its packet carries: the phases the music's wakes changed, the drops woken, the
 // layout copied).
@@ -28,6 +36,7 @@ import type { StepClock } from "../engine/clock";
 import type { RestartResult } from "./rainlayout";
 import type { FloorKind } from "./floor";
 import type { SpawnBoxData } from "./spawnbox";
+import { WaveLift } from "./wavelift";
 
 // a drop at a step (RainWheel.dropAt): its head (rows from the top of its fall), rows, fall, whether it lands in this step and whether its fall shows, its place (x, z), its head's
 // height, its colour
@@ -68,6 +77,10 @@ export interface RainWheelSnapshot {
   colors: Float32Array[];
   // whether the mean fall's layout (meanFallFor) is the layout
   meanFallForLayout: boolean;
+  // the water's heights table (the first meetCount drops' bytes; null: none)
+  meets?: Uint8Array | null;
+  // the fall each drop in the wheel is waiting to land
+  pending?: Uint32Array;
 }
 
 // what a stepped run changes that is not in the lives (RainWheel.trace, kept by wake, adopt and the music's refresh of the layout): the phases changed (drop, phase pairs), the drops
@@ -92,6 +105,12 @@ const RL = M.RainLayout;
 const COUNT = RL.COUNT;
 const CELL = RL.CELL;
 const SEED = RL.SEED;
+// the most rows a landing is moved by the water's height, the table's bias, and its bytes a drop (models/wavelift.ts)
+const MEET_CAP = WaveLift.CAP_ROWS;
+const MEET_BIAS = WaveLift.BIAS;
+const MEET_STRIDE = WaveLift.STRIDE;
+// a fall shorter than this many rows is never moved (the head's row classes the landing waiting, see runStep: its landing must lie past half the fall's rows)
+const MEET_MIN_ROWS = 32;
 // no fall (a life's bound)
 const NONE = RL.NONE;
 // a font size's distance: DISTANCE_SIZE / size (m)
@@ -123,7 +142,7 @@ const waveScreen = (): number => {
 const SCALARS = [
   "time", "lastStep", "width", "height", "density", "fontMin", "fontMax", "trail", "steady", "custom", "wave", "waveSpeed", "waveWidth", "wavePhase", "waveStep", "wavePerStep",
   "tiltResponsiveness", "layoutFloor", "layoutPitch", "layoutEye", "layoutDirty", "layoutPending", "dirtyFirst", "dirtyLast", "active", "reach", "wanted", "inView", "wokenCount", "fillPart",
-  "fillFor", "musicCredit", "meanFall", "musicAt", "staticAt", "wrongLandings", "appliedSeq", "boxPitch", "boxEyeHeight", "boxYaw", "boxPitchReach", "boxReachX", "boxReachY",
+  "fillFor", "musicCredit", "meanFall", "musicAt", "staticAt", "wrongLandings", "appliedSeq", "boxPitch", "boxEyeHeight", "boxYaw", "boxPitchReach", "boxReachX", "boxReachY", "meetCount",
 ] as const;
 
 export class RainWheel {
@@ -195,6 +214,12 @@ export class RainWheel {
   shares: Float32Array | null;
   // the drops' light emittance across the window (128 bins; null: none)
   musicLight: Float32Array | null;
+  // the water's heights (setMeets): the table's bytes (4 a drop) and the drops it covers (0: none, every landing at its nominal step), and the slot each drop in the wheel is in
+  meets: Uint8Array;
+  meetCount: number;
+  slotOf: Int32Array;
+  // the fall each drop in the wheel is waiting to land (its landing is scheduled, or looked at each step): the fall a landing then reports, and the next one's after it
+  pending: Uint32Array;
   // the drops whose phase was changed to begin a fall now, and how many
   woken: Uint8Array;
   wokenCount: number;
@@ -276,6 +301,10 @@ export class RainWheel {
     this.inWheel = new Uint8Array(COUNT);
     this.shares = null;
     this.musicLight = null;
+    this.meets = new Uint8Array(COUNT * MEET_STRIDE);
+    this.meetCount = 0;
+    this.slotOf = new Int32Array(COUNT);
+    this.pending = new Uint32Array(COUNT);
     this.woken = new Uint8Array(COUNT);
     this.wokenCount = 0;
     this.fillPart = 1;
@@ -351,6 +380,13 @@ export class RainWheel {
     this.slots = r.slots;
     this.nextInSlot = r.nextInSlot;
     this.inWheel = r.inWheel;
+    this.rebuildSlotOf();
+    this.resetPending();
+    this.packMeets(0);
+    // (a restart schedules each landing at its nominal step: with a table in force they are looked at early again)
+    if (this.meetCount > 0) {
+      this.rescheduleAll();
+    }
     this.active = r.active;
     this.reach = r.reach;
     this.dirtyFirst = 0;
@@ -690,8 +726,8 @@ export class RainWheel {
   // fall shown from there
   wake(i: number, step: number, phase: number, cycle: number, mask: number) {
     if (this.inWheel[i]) {
-      // (out of the slot its landing was in)
-      const old = this.nextLanding(i, step) & mask;
+      // (out of the slot it is in: its landing's nominal one, or earlier while the water's height has it looked at, or the next step while its landing waits)
+      const old = this.slotOf[i]!;
       let at = this.slots[old]!;
       if (at === i) {
         this.slots[old] = this.nextInSlot[i]!;
@@ -718,7 +754,7 @@ export class RainWheel {
       }
     }
     this.setLife(i, cycle, NONE, NONE);
-    this.schedule(i, this.nextLanding(i, step));
+    this.scheduleAfter(i, step);
   }
 
   // drop i's fall `next` begins when the fall before landed: shown or not by the share of the column it falls in (a hash of the drop and the fall under the share),
@@ -860,7 +896,7 @@ export class RainWheel {
       this.setLife(i, first, NONE, NONE);
     }
     if (!this.inWheel[i]) {
-      this.schedule(i, this.nextLanding(i, step));
+      this.scheduleAfter(i, step);
     }
   }
 
@@ -924,11 +960,127 @@ export class RainWheel {
     return RL.nextLanding(this.layout!, i, after);
   }
 
-  schedule(i: number, step: number) {
+  // drop i placed in the wheel at a step, waiting to land its fall `fall`
+  place(i: number, step: number, fall: number) {
     const slot = step & (this.slots.length - 1);
     this.nextInSlot[i] = this.slots[slot];
     this.slots[slot] = i;
+    this.slotOf[i] = slot;
+    this.pending[i] = fall;
     this.inWheel[i] = 1;
+  }
+
+  // drop i placed at its landing's step (the fall it lands is the one finishing then)
+  schedule(i: number, step: number) {
+    this.place(i, step, this.layout ? this.falls(i, Math.max(0, step - 1)) : 0);
+  }
+
+  // the fall every drop in the wheel is waiting to land, from the layout at the last step: the one whose landing is the next after it (a restart's nominal landings)
+  resetPending() {
+    if (!this.layout) {
+      return;
+    }
+    for (let i = 0; i < COUNT; i++) {
+      if (this.inWheel[i]) {
+        this.pending[i] = this.falls(i, this.lastStep);
+      }
+    }
+  }
+
+  // ---- the water's heights ----
+
+  // the table of the surface's rows at the drops' landing places (null: none: the water is calm, flat or off): 4 bytes a drop, the rows of the fall now + BIAS, the rows of the fall before
+  // + BIAS and the fall's low byte (the gather pass's picture, models/wavelift.ts); copied. With a table the landings are looked at early (meetLead): the drops in the wheel are placed
+  // again when the table comes or goes
+  setMeets(table: Uint8Array | null) {
+    const was = this.meetCount > 0;
+    const n = table ? Math.min(Math.floor(table.length / MEET_STRIDE), COUNT) : 0;
+    if (table && n > 0) {
+      this.meets.set(table.length === n * MEET_STRIDE ? table : table.subarray(0, n * MEET_STRIDE));
+    }
+    const before = this.meetCount;
+    this.meetCount = n;
+    this.packMeets(before);
+    if (was !== n > 0) {
+      this.rescheduleAll();
+    }
+  }
+
+  // the table's three bytes of each drop (and bit 24: there is a table) in the fourth word of its life, which the rain's vertex shader reads with the life it already fetches (the head's
+  // extension below the floor in a trough needs the surface's rows under the fall that ended); the words of the drops a former, longer table covered cleared; the lives to upload
+  packMeets(before: number) {
+    const life = this.life;
+    const table = this.meets;
+    const n = this.meetCount;
+    for (let i = 0; i < n; i++) {
+      life[i * 4 + 3] = table[i * MEET_STRIDE]! + table[i * MEET_STRIDE + 1]! * 256 + table[i * MEET_STRIDE + 2]! * 65536 + 16777216;
+    }
+    for (let i = n; i < before; i++) {
+      life[i * 4 + 3] = 0;
+    }
+    const most = Math.max(n, before);
+    if (most > 0) {
+      this.dirty(0);
+      this.dirty(most - 1);
+    }
+  }
+
+  // the surface's rows over the floor at drop i's landing place for its fall `fall`, from the table: the fall the table was read for or the one before it; 0 with no table, another fall, a drop
+  // the table does not cover, or a fall too short to shift; capped
+  meetOf(i: number, fall: number): number {
+    if (i >= this.meetCount || fall < 0 || this.layout![i * 4 + 3]! < MEET_MIN_ROWS) {
+      return 0;
+    }
+    const table = this.meets;
+    const at = i * MEET_STRIDE;
+    const read = table[at + 2]!;
+    let byte = -1;
+    if (read === (fall & 255)) {
+      byte = table[at]!;
+    } else if (read === ((fall + 1) & 255)) {
+      byte = table[at + 1]!;
+    }
+    return byte < 0 ? 0 : Math.max(-MEET_CAP, Math.min(MEET_CAP, byte - MEET_BIAS));
+  }
+
+  // the steps before its nominal landing a drop's landing is looked at (with a table): the head's way to a surface MEET_CAP rows up, in steps, and one more; 0 without a table or for a fall
+  // too short to shift
+  meetLead(i: number): number {
+    const data = this.layout!;
+    return this.meetCount > 0 && data[i * 4 + 3]! >= MEET_MIN_ROWS ? Math.ceil((MEET_CAP * 16) / data[i * 4 + 1]!) + 1 : 0;
+  }
+
+  // drop i's next landing after a step placed in the wheel: at its nominal step, or earlier by the lead with a table (never before the step after)
+  scheduleAfter(i: number, after: number) {
+    this.place(i, Math.max(after + 1, this.nextLanding(i, after) - this.meetLead(i)), this.falls(i, after));
+  }
+
+  // every drop in the wheel placed again (the table came or went): each at its waiting landing's nominal step less the lead (a landing already due, the next step)
+  rescheduleAll() {
+    const data = this.layout;
+    if (!data) {
+      return;
+    }
+    this.slots.fill(-1);
+    const step = this.lastStep;
+    for (let i = 0; i < COUNT; i++) {
+      if (!this.inWheel[i]) {
+        continue;
+      }
+      // (the landing each drop waits for, wherever it is now: placed at its nominal step less the lead, or the next step if that is past; never another fall's)
+      const fall = this.pending[i]!;
+      this.place(i, Math.max(step + 1, RL.landingOf(data, i, fall, 0) - this.meetLead(i)), fall);
+    }
+  }
+
+  // the slot of every drop in the wheel, from the slots' lists (the arrays given by a restart or a restore)
+  rebuildSlotOf() {
+    let left = COUNT + this.slots.length;
+    for (let slot = 0; slot < this.slots.length; slot++) {
+      for (let i = this.slots[slot]!; i >= 0 && left-- > 0; i = this.nextInSlot[i]!) {
+        this.slotOf[i] = slot;
+      }
+    }
   }
 
   // drop i at a step: its head (rows from the top of its fall), rows, fall, place (x, z), its head's height, whether it lands in this step (its head reaches its lowest row) and
@@ -965,25 +1117,47 @@ export class RainWheel {
   }
 
   // step s: the landings of the drops scheduled in it (each shown fall reported, its next fall gated, the drop scheduled again), then the drops that ended and faded let go. lastStep is
-  // not moved (the caller's: a frame's steps are run with the last step of the frame before, as the effect's swaps of the layout take place at their steps)
+  // not moved (the caller's: a frame's steps are run with the last step of the frame before, as the effect's swaps of the layout take place at their steps).
+  // With a table of the water's heights a drop in a slot is only looked at: it lands in this step if its rows fallen have reached its fall's last row less the surface's rows m (the head
+  // meets the surface), else it is looked at again in the next step; the fall it is the landing of is the fall under way or, just past its wrap, the one before (pendingFall), and a
+  // landing past the wrap is reported in that fall, the head below the floor
   runStep(s: number) {
     const mask = this.slots.length - 1;
-    let i = this.slots[s & mask];
+    let i = this.slots[s & mask]!;
     this.slots[s & mask] = -1;
+    const watching = this.meetCount > 0;
+    const data = this.layout!;
     while (i >= 0) {
-      const next = this.nextInSlot[i];
+      const next = this.nextInSlot[i]!;
       this.inWheel[i] = 0;
+      const fall = this.pending[i]!;
+      const rows = data[i * 4 + 3]!;
+      const total = this.total(i, s);
+      if (total < (fall + 1) * rows - 1 - (watching ? this.meetOf(i, fall) : 0)) {
+        this.place(i, s + 1, fall);
+        i = next;
+        continue;
+      }
       const d = this.dropAt(i, s, this.landing);
-      if (M.TEST && !d.landed) {
+      if (fall !== d.cycle) {
+        d.cycle = fall;
+        d.head = total - fall * rows;
+        d.headY = (rows - 1 - d.head) * CELL + this.floorAt(data[i * 4]!);
+        d.x = this.x(i, fall, data[i * 4]!);
+        d.shown = this.shows(i, fall);
+        d.landed = true;
+      } else if (watching) {
+        d.landed = true;
+      } else if (M.TEST && !d.landed) {
         this.wrongLandings++;
       }
       if (d.shown) {
         this.colorOf(i, d, s, d.color);
         this.onLand(d, this.clock.timeOf(s));
       }
-      this.gate(i, d.cycle + 1);
-      if (this.showsAfter(i, d.cycle)) {
-        this.schedule(i, this.nextLanding(i, s));
+      this.gate(i, fall + 1);
+      if (this.showsAfter(i, fall)) {
+        this.place(i, Math.max(s + 1, RL.landingOf(data, i, fall + 1, 0) - this.meetLead(i)), fall + 1);
       }
       i = next;
     }
@@ -1059,6 +1233,8 @@ export class RainWheel {
       musicLight: this.musicLight ? this.musicLight.slice() : null,
       colors: this.colors.map((c) => c.slice()),
       meanFallForLayout: !!this.layout && this.meanFallFor === this.layout,
+      meets: this.meetCount > 0 ? this.meets.slice(0, this.meetCount * MEET_STRIDE) : null,
+      pending: this.pending.slice(),
     };
   }
 
@@ -1084,6 +1260,17 @@ export class RainWheel {
     this.colors = s.colors.map((c) => c.slice());
     this.meanFallFor = s.meanFallForLayout ? this.layout : null;
     this.meanFallRate = this.clock.rate;
+    if (s.meets && this.meetCount > 0) {
+      this.meets.set(s.meets);
+    } else {
+      this.meetCount = 0;
+    }
+    this.rebuildSlotOf();
+    if (s.pending) {
+      this.pending = s.pending.slice();
+    } else {
+      this.resetPending();
+    }
   }
 }
 

@@ -81,18 +81,18 @@ vec3 moonDirection(int i) {
   if (i == 3) return MOON_K3;
   return MOON_K4;
 }
-// how much of the moon's light gets to p through the clouds: the mean over the kernel's directions of the light through 8 m of them (the count a value at
-// run time, the constant most checked inside, the heavy march called from one place)
-float moonThrough(vec3 p, float lod) {
-  int n = uMoonKernel > 0 ? uMoonKernel : MOON_KERNEL;
-  float sum = 0.0;
-  for (int i = 0; i < n; i++) {
-    if (i >= MOON_KERNEL_MAX) break;
-    sum += lightThrough(p, moonDirection(i), lod);
-  }
-  return sum / float(min(n, MOON_KERNEL_MAX));
-}
-// what gets to p from the sky (x) and the moon (y) through the clouds, marched
+// what gets to p from the sky (x) and the moon (y) through the clouds, marched. The moon's: the mean over the
+// kernel's directions of the light through 8 m of them (the count a value at run time, the constant most checked
+// inside); the sky's is the same march with the direction up (i = -1), so the heavy march is called from one place
 vec2 skyShadeMarched(vec3 p, float lod) {
-  return vec2(lightThrough(p, vec3(0.0, 1.0, 0.0), lod), moonThrough(p, lod));
+  int n = uMoonKernel > 0 ? uMoonKernel : MOON_KERNEL;
+  float sky = 0.0;
+  float sum = 0.0;
+  for (int i = -1; i < n; i++) {
+    if (i >= MOON_KERNEL_MAX) break;
+    float light = lightThrough(p, i < 0 ? vec3(0.0, 1.0, 0.0) : moonDirection(i), lod);
+    if (i < 0) sky = light;
+    else sum += light;
+  }
+  return vec2(sky, sum / float(min(n, MOON_KERNEL_MAX)));
 }

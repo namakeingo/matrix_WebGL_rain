@@ -87,11 +87,12 @@
 //   `QualityFog.Lod`) the refresh period grows to 32 sweeps and more octaves are read as their mean (`uDrop`). With lod off none applies.
 //
 // Changelog:
+// 2026-11-12: compile time: skyShadeMarched one march loop for the sky and the moon (i = -1 the sky), moonThrough folded into it; gather one density call site (densityFar's `far` flag, false = density).
 // 2026-11-12: planInput: no grid framebuffers (no float render targets) gives 0 draws instead of reading their length (the frame threw with the extensions missing).
 // 2026-11-12: readMargin: the volume's margin as the mirrored picture's pixels read it (the picture larger than the view).
 // 2026-11-10: the frame's plan (uniform block values, the view decisions, the shade draws owed, the slices' periods and runs of slices built) is models/fogplan.ts's pure function, run here or asked of its worker in Fog.fork.
 // 2026-11-07: level of detail by the slice's physical level (QualityFog.Lod): the refresh period (to 32 sweeps) and the octaves read as their mean (uDrop) by level.
-// 2026-11-12: the moon's disc: the shade bake's moon channel the mean over the penumbra kernel (medium.glsl: moonThrough; the tests' count: setMoonKernel), the sky box's
+// 2026-11-12: the moon's disc: the shade bake's moon channel the mean over the penumbra kernel (medium.glsl: skyShadeMarched; the tests' count: setMoonKernel), the sky box's
 //   skyIrradiance and the glyphs' glyphSkyMoonLight in Fog.GLSL, the disc's constants.
 // 2026-11-07: level of detail: the dense tail, the refresh by distance and the far octaves (Effect.lod).
 // 2026-11-06: the quality job "fog" (the slices are its units): slices past the water along a column's rays are held, not

@@ -11,9 +11,10 @@ ${glsl.shade}
 ${M.GlyphAtlas.VERTEX_GLSL}
 ${M.GlyphAtlas.LIGHT_VERTEX_GLSL}
 ${M.HASH_GLSL}
-${WAVE_LIFT_GLSL}
 ${CELL_GLSL}
 uniform uint uStep;
+// 1 when the water shows waves (the Collision plane and Ripples on)
+uniform float uWaterWaves;
 uniform float uMirror;
 // a trail's cell (not the head) whose light is under this is not drawn (0: all drawn)
 uniform float uLightCut;
@@ -84,18 +85,34 @@ void main() {
   int cells = uListed ? int(aDrop >> 20) : 0;
   bool inTrail = cells == 0 || age < cells;
   Cell c = cellOf(drop, uStep, age);
+  // (a drop is never moved to meet the water: its fall ENDS where its head meets the surface, which the wheel decides. Where the water under the fall that has just ended is at least a
+  // row lower than the floor (a trough), the head goes on along the same path and speed, below the floor, until it meets the surface: for the first `uTrail` steps after the wrap, the
+  // cells of that fall at the ages the head has already passed (their rows under 0) replace the new fall's cells at those ages, which are above the spawn plane then; the rows under
+  // the surface are not drawn. The surface's rows come from the drop's life word, which the wheel fills from the gather pass's read-back: no wave read here)
+  if (uWaterWaves > 0.5 && uFloor < 0.5 && age <= int(c.head) && int(c.head) < uTrail && (c.meet >> 24) != 0u) {
+    uint read = (c.meet >> 16) & 255u;
+    uint was = c.fall - 1u;
+    int surface = 0;
+    if (read == (was & 255u)) {
+      surface = int(c.meet & 255u) - ${M.WaveLift.BIAS};
+    } else if (read == (c.fall & 255u)) {
+      surface = int((c.meet >> 8) & 255u) - ${M.WaveLift.BIAS};
+    }
+    if (surface < 0) {
+      c.fall = was;
+      c.row = uint(age - int(c.head) - 1);
+      c.since = c.sinceBefore;
+      c.drawn = c.drawnBefore && int(c.row) >= surface;
+    }
+  }
   bool shown = c.drawn && inTrail;
 #ifdef TEST_VIEWS
   shown = shown && (uOnlyDrop < 0 || drop == uOnlyDrop) && (!uHeadOnly || age == 0);
 #endif
   float x = acrossOf(drop, c.fall, c.z);
-  // (the water's live height at the drop's place lifts the rows near it, the lift fading over the highest wave and one cell: the head lands on the crest and the trail bends over it;
-  // read only for a cell under that reach, never with the water off (uFloor) or the waves off or calm. The lift is added to the height over the floor before the mirror flip, so the
-  // reflection is the lifted drop's mirror image)
-  float reach = uFloor > 0.5 ? 0.0 : waveReach(CELL);
-  float lift = float(c.row) * CELL < reach ? waveHeight(vec2(x, c.z)) : 0.0;
-  float centre = (float(c.row) + 0.5) * CELL;
-  float middleY = (centre + lift * waveShare(centre, reach)) * uMirror + floorOf(c.z);
+  float row = float(int(c.row));
+  float centre = (row + 0.5) * CELL;
+  float middleY = centre * uMirror + floorOf(c.z);
   // (on the screen at all: its middle; nothing else worked out for a character not drawn)
   vec4 middle = cViewProj * vec4(x, middleY, -c.z, 1.0);
   shown = shown && glyphShown(middle);
@@ -115,13 +132,14 @@ void main() {
   // each character changes now and then, at its own time
   uint epoch = (uStep + hash(cell) % 64u) / 48u;
   vGlyph = int(hash(cell ^ (epoch * 2654435761u)) % uint(uGlyphs));
-  float above = (float(c.row) + aCorner.y) * CELL;
-  vec3 world = vec3(x + (aCorner.x - 0.5) * CELL, (above + lift * waveShare(above, reach)) * uMirror + floorOf(c.z), -c.z);
+  float above = (row + aCorner.y) * CELL;
+  vec3 world = vec3(x + (aCorner.x - 0.5) * CELL, above * uMirror + floorOf(c.z), -c.z);
   vec4 clip = cViewProj * vec4(world, 1.0);
   vWorld = world;
   vColor = fallColor(x / c.z / WAVE_SCREEN + 0.5, uWaveNow - float(c.since) * uWavePerStep) * musicLight(x / c.z);
   bool once = uFogOnce > 0.0 && c.z >= uFogOnce;
-  vec4 fog = once ? glyphFogStrike(vec3(x, middleY, -c.z), middle, uMirror < 0.0) : glyphFogStrike(world, clip, uMirror < 0.0);
+  // (one call, its place and distance chosen first: the fog's code is in the program once)
+  vec4 fog = glyphFogStrike(once ? vec3(x, middleY, -c.z) : world, once ? middle : clip, uMirror < 0.0);
   float light = (1.0 - float(age) / float(uTrail)) * fog.a;
   // (the cut is by the emission's light alone, as the CPU's trail model (QualityRain.Lod) has it: the reflected light of a cell it cuts is under that light's fraction, the light the
   // glyph reflects per unit of albedo, of the cut, and the shade is read after it)
@@ -137,7 +155,7 @@ void main() {
   }
   vLight = light;
   // (the true place: not the mirror image's, whose y is below the water; its middle)
-  vShade = glyphShade(vec3(x, (float(c.row) + 0.5) * CELL + floorOf(c.z), -c.z));
+  vShade = glyphShade(vec3(x, centre + floorOf(c.z), -c.z));
   vStrike = fog.rgb;
   gl_Position = clip;
 }

@@ -1489,6 +1489,7 @@ export class Wallpaper implements WallpaperControl {
     // is the rain's own when it steps itself)
     this.rain.collides = () => !!this.waterState.splashes;
     this.rain.driver = this.splashes;
+    this.rain.waveSource = this.waves;
     this.splashes.rain = this.rain;
     this.splashes.tick.wheel = this.rain.wheel;
     // (the strikes' feet and tops are drawn across the rain's spawn box; the box's inputs given before the first layout)

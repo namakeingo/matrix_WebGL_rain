@@ -1,6 +1,6 @@
-// Where a vertex meets the water it meets the waves' live height (models/wavelift.ts is the script's twin). A lean read of the waves for the vertex stage (the fragment stage's full text,
+// Where a splash starts and a bolt's foot stands, and where the rain's head ends its fall in a trough, the vertex shaders meet the waves' live height (models/wavelift.ts is the script's twin). A lean read of the waves for the vertex stage (the fragment stage's full text,
 // waves.glsl, carries the water's normal and the blocks too, and a vertex program pays for each function it compiles): the same block, samplers and bilinear height, ONE read of four cells
-// with the cells clamped to the grid (off the grid the waves have died out: the edge cells are damped to nothing), the highest wave, the switch and the lift's rule.
+// with the cells clamped to the grid (off the grid the waves have died out: the edge cells are damped to nothing), the highest wave, the switch and the splashes' and the bolt's reach.
 ${GRID_GLSL}
 uniform highp sampler2D uWaves;
 uniform highp sampler2D uWaveMax;
@@ -23,7 +23,8 @@ float waveHeight(vec2 xz) {
   ivec2 hi = clamp(ivec2(floor(g)) + 1, ivec2(0), last);
   return mix(mix(texelFetch(uWaves, lo, 0).r, texelFetch(uWaves, ivec2(hi.x, lo.y), 0).r, f.x), mix(texelFetch(uWaves, ivec2(lo.x, hi.y), 0).r, texelFetch(uWaves, hi, 0).r, f.x), f.y);
 }
-// the metres over the floor a vertex is lifted over (the highest wave and one cell); 0 when there is nothing to lift by: one read of the highest wave
+#ifdef WAVE_LIFT_AT
+// the metres over the floor a splash's start or a bolt's foot is lifted over (the highest wave and one cell); 0 when there is nothing to lift by: one read of the highest wave
 float waveReach(float cell) {
   if (uWaterWaves < 0.5) {
     return 0.0;
@@ -31,11 +32,6 @@ float waveReach(float cell) {
   float top = highestWave();
   return top < WAVE_CALM ? 0.0 : top + cell;
 }
-// the share of the wave a vertex `above` metres over the floor is lifted by: 1 at the floor, 0 at the reach, linear
-float waveShare(float above, float reach) {
-  return reach > 0.0 ? clamp(1.0 - above / reach, 0.0, 1.0) : 0.0;
-}
-#ifdef WAVE_LIFT_AT
 // the wave's height at a place of the water (x, distance); 0 when the waves are off or calm
 float waveLiftAt(vec2 xz) {
   return waveReach(0.0) > 0.0 ? waveHeight(xz) : 0.0;

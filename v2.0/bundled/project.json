@@ -1,6 +1,6 @@
 {
 	"contentrating" : "Everyone",
-	"description" : "Matrix-style digital rain as a real 3D scene, drawn with WebGL 2.0: a camera above water, drops of characters falling at their real distances, their trails fading where they were drawn, splashes flying in 3D, the water's waves simulated in the world and its surface mirroring the scene by them, fog as a medium of 3D clouds, and lightning as a light in it. A clock and a message can be shown, formed by the rain that freezes inside their letters.\n\n[h1]Support[/h1]\nIf you can, please sponsor me at https://github.com/sponsors/namakeingo \n\n[h1]Customizable elements:[/h1]\n[h3]Rain[/h3]\n[list]\n    [*]Characters: the symbols the rain is made of, typed in; 3D Symbols, which gives each character a relief (a depth offset and a normal, 1/5 of the character's size) that moves with the view and takes the light\n    [*]Size and density: the nearest and furthest distances of the drops (Font size Min and Max) and how many drops are in view, spread evenly over each square metre of the world; from a clean screen the rain comes in at its settled rate\n    [*]Speed and trails: how fast the drops fall and how long their trails last\n    [*]Colors: four custom colors in a gradient across the world, or a rainbow; the color wave moving them across the world (its speed and width); high contrast text, so the clock's and the message's characters keep the colors they froze in or take the color the rain has around them\n    [*]Head brightness: how bright the drops' heads shine (their extra light, the same at any distance)\n    [*]Bloom: a camera's bloom of the light the drops, splashes and bolt give, spread at four sizes, with no light added or taken away\n    [*]Exposure: how bright the camera's picture is, all the light together (the bloom's too) before the tone map, a stop for every 25 steps of the slider\n    [*]HDR: shows the picture in real HDR on a display with HDR enabled (needs Post-processing Ultra (Display HDR) in Wallpaper Engine's settings), with highlights such as the lightning rising above SDR white; the same picture as before where HDR is not available\n    [*]Lightning: on or off, the average time between strikes, how long each strike plays (the leaders meet a quarter of the way in, then its light fades and flickers), how brightly its bolt shines (it blooms) and, on its own, how brightly its flash lights the fog and the water, the flash's hue from violet to white, its bolt in 3D, branching on the way down from the clouds and up from the water, as a glowing line with soft edges or as rain characters running along a half-transparent line, and how much more often strikes land closer to the front (none at 0)\n[/list]\n[h3]Physics[/h3]\n[list]\n    [*]Sky and moon: how bright their light is, one slider for both, and the color of each (the sky seen, and the fog and the water they light)\n    [*]Water: the collision plane (splashes and ripples) and the reflection plane (the mirror image of the rain, the fog and the lightning; the water keeps reflecting the sky and the moon) each on or off, the water's color, how high the splashes fly and how strong the reflection is\n    [*]Ripples: on or off, intensity, darkening, lightening, speed and duration of the rings spreading on the water\n    [*]Fog: on or off, its two colors and how dense it is\n[/list]\n[h3]Music[/h3]\n[list]\n    [*]React to music: on or off, how sensitive the scene is to what Wallpaper Engine's audio carries, how much light the music adds and how quickly the rain responds\n    [*]Lightning and music: how easily the music triggers strikes and, in the advanced tuning, how much the peak's loudness and suddenness, the tempo, the music's brightness and the song's energy each count\n    [*]Idle animation: what the scene does when the music is silent, and after how many seconds\n[/list]\n[h3]Clock[/h3]\n[list]\n    [*]Clock: shown or hidden, 24h or 12h, formed by the characters of the rain that freeze inside its digits, laid over the scene\n    [*]Size and position: absolute, or relative to the screen\n[/list]\n[h3]Message[/h3]\n[list]\n    [*]Message: shown or hidden, custom text formed by the frozen rain like the clock, shown with the clock or on its own\n    [*]Size and position: absolute, or relative to the screen\n[/list]\n[h3]Miscellaneous[/h3]\n[list]\n    [*]OLED pixel shift: every 10 seconds the whole scene moves a pixel left or right, and the clock and the message a pixel in any direction, never further from where they started than the setting, against burn-in\n    [*]Frame cap: how many times a second the scene is drawn (24 for the film look)\n    [*]Mouse parallax: on or off, whether the eye turns or moves with the mouse, how far, and how slowly it follows\n    [*]Debug mode: the support readout (what was found of WebGL 2.0 and WebGPU, and where the renderer runs, on a panel drawn by WebGPU); a performance readout (frames a second, the script's and the GPU's time a frame, dropped and missed frames and stalls); a music readout (what Wallpaper Engine's audio carries: its loudness, bass, mid, treble and peak) and simulated music to feed it; an OLED readout (how far the scene, the clock and the message have moved, and the most they may); a view of each pixel's real distance from the camera; the lightning's flash and the splashes switched off; Freeze (nothing drawn or moved, for measuring); a steady start; a strike now at a distance; the quality mode (optimized, or no optimization)\n[/list]",
+	"description" : "Matrix-style digital rain as a real 3D scene, drawn with WebGL 2.0: a camera above water, drops of characters falling at their real distances, their trails fading where they were drawn, splashes flying in 3D, the water's waves simulated in the world and its surface mirroring the scene by them, fog as a medium of 3D clouds, and lightning as a light in it. A clock and a message can be shown, formed by the rain that freezes inside their letters.\n\n[h1]Support[/h1]\nIf you can, please sponsor me at https://github.com/sponsors/namakeingo \n\n[h1]Customizable elements:[/h1]\n[b]Settings Mode[/b]: Simplified shows the main settings of each section, Advanced shows all of them.\n[h3]Rain[/h3]\n[list]\n    [*][b]Simplified[/b]\n    [list]\n        [*][b]Characters[/b]: the symbols the rain is made of, typed in\n        [*][b]Size and density[/b]: the nearest distance of the drops (Font size Max) and how many drops are in view, spread evenly over each square metre of the world; from a clean screen the rain comes in at its settled rate\n        [*][b]Speed and trails[/b]: how fast the drops fall and how long their trails last\n        [*][b]Colors[/b]: four custom colors in a gradient across the world, or a rainbow; the color wave moving them across the world\n        [*][b]Lightning[/b]: on or off and the average time between strikes\n    [/list]\n    [*][b]Advanced[/b]\n    [list]\n        [*][b]Characters[/b]: 3D Symbols, which gives each character a relief (a depth offset and a normal, 1/5 of the character's size) that moves with the view and takes the light\n        [*][b]Size[/b]: the furthest distance of the drops (Font size Min)\n        [*][b]Head brightness[/b]: how bright the drops' heads shine (their extra light, the same at any distance)\n        [*][b]Bloom[/b]: a camera's bloom of the light the drops, splashes and bolt give, spread at four sizes, with no light added or taken away\n        [*][b]Exposure[/b]: how bright the camera's picture is, all the light together (the bloom's too) before the tone map, a stop for every 25 steps of the slider\n        [*][b]HDR[/b]: shows the picture in real HDR on a display with HDR enabled (needs Post-processing Ultra (Display HDR) in Wallpaper Engine's settings), with highlights such as the lightning rising above SDR white; the same picture as before where HDR is not available\n        [*][b]Colors[/b]: the color wave's speed and width; high contrast text, so the clock's and the message's characters keep the colors they froze in or take the color the rain has around them\n        [*][b]Lightning[/b]: how long each strike plays (the leaders meet a quarter of the way in, then its light fades and flickers), how brightly its bolt shines (it blooms) and, on its own, how brightly its flash lights the fog and the water, the flash's hue from violet to white, its bolt in 3D, branching on the way down from the clouds and up from the water, as a glowing line with soft edges or as rain characters running along a half-transparent line, and how much more often strikes land closer to the front (none at 0)\n    [/list]\n[/list]\n[h3]Physics[/h3]\n[list]\n    [*][b]Simplified[/b]\n    [list]\n        [*][b]Water[/b]: the collision plane (splashes and ripples) and the reflection plane (the mirror image of the rain, the fog and the lightning; the water keeps reflecting the sky and the moon), each on or off\n        [*][b]Ripples[/b]: on or off and the intensity of the rings spreading on the water\n        [*][b]Fog[/b]: on or off and its two colors\n    [/list]\n    [*][b]Advanced[/b]\n    [list]\n        [*][b]Sky and moon[/b]: how bright their light is, one slider for both, and the color of each (the sky seen, and the fog and the water they light)\n        [*][b]Water[/b]: the water's color, how high the splashes fly and how strong the reflection is\n        [*][b]Ripples[/b]: darkening, lightening, speed and duration of the rings\n        [*][b]Fog[/b]: how dense it is\n    [/list]\n[/list]\n[h3]Music[/h3]\n[list]\n    [*][b]Simplified[/b]\n    [list]\n        [*][b]React to music[/b]: on or off and how sensitive the scene is to what Wallpaper Engine's audio carries\n        [*][b]Lightning and music[/b]: how easily the music triggers strikes\n        [*][b]Idle animation[/b]: what the scene does when the music is silent, and after how many seconds\n    [/list]\n    [*][b]Advanced[/b]\n    [list]\n        [*][b]React to music[/b]: how much light the music adds and how quickly the rain responds\n        [*][b]Lightning and music[/b]: the advanced tuning, how much the peak's loudness and suddenness, the tempo, the music's brightness and the song's energy each count\n    [/list]\n[/list]\n[h3]Clock[/h3]\n[list]\n    [*][b]Clock[/b]: shown or hidden, 24h or 12h, formed by the characters of the rain that freeze inside its digits, laid over the scene\n    [*][b]Size and position[/b]: absolute, or relative to the screen\n[/list]\n[h3]Message[/h3]\n[list]\n    [*][b]Message[/b]: shown or hidden, custom text formed by the frozen rain like the clock, shown with the clock or on its own\n    [*][b]Size and position[/b]: absolute, or relative to the screen\n[/list]\n[h3]Miscellaneous[/h3]\n[list]\n    [*][b]Simplified[/b]\n    [list]\n        [*][b]OLED pixel shift[/b]: every 10 seconds the whole scene moves a pixel left or right, and the clock and the message a pixel in any direction, never further from where they started than the setting, against burn-in\n        [*][b]Frame cap[/b]: how many times a second the scene is drawn (24 for the film look)\n        [*][b]Mouse parallax[/b]: on or off and how far the view follows the mouse\n    [/list]\n    [*][b]Advanced[/b]\n    [list]\n        [*][b]Mouse parallax[/b]: whether the eye turns or moves with the mouse, and how slowly it follows\n        [*][b]Debug mode[/b]: the support readout (what was found of WebGL 2.0 and WebGPU, and where the renderer runs, on a panel drawn by WebGPU); a performance readout (frames a second, the script's and the GPU's time a frame, dropped and missed frames and stalls); a music readout (what Wallpaper Engine's audio carries: its loudness, bass, mid, treble and peak) and simulated music to feed it; an OLED readout (how far the scene, the clock and the message have moved, and the most they may); a view of each pixel's real distance from the camera; the lightning's flash and the splashes switched off; Freeze (nothing drawn or moved, for measuring); a steady start; a strike now at a distance; the quality mode (optimized, or no optimization)\n    [/list]\n[/list]",
 	"file" : "index.html",
 	"general" : 
 	{
@@ -8,6 +8,8 @@
 		{
 			"de-de" : 
 			{
+				"ui_000_setting_SettingsMode" : "Einstellungsmodus",
+				"ui_001_spacer_SettingsMode" : "<small>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</small><hr>",
 				"ui_100_label_Rain" : "<small>Regen-Einstellungen ein-/ausblenden&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</small><hr>",
 				"ui_101_setting_Symbols" : "Symbole",
 				"ui_102_setting_3DSymbols" : "3D-Symbole",
@@ -126,6 +128,8 @@
 			},
 			"en-us" : 
 			{
+				"ui_000_setting_SettingsMode" : "Settings Mode",
+				"ui_001_spacer_SettingsMode" : "<small>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</small><hr>",
 				"ui_100_label_Rain" : "<small>Show/Hide Rain Settings&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</small><hr>",
 				"ui_101_setting_Symbols" : "Symbols",
 				"ui_102_setting_3DSymbols" : "3D Symbols",
@@ -245,10 +249,36 @@
 		},
 		"properties" : 
 		{
-			"p100_label_Rain" : 
+			"p000_setting_SettingsMode" : 
 			{
 				"index" : 0,
+				"options" : 
+				[
+					{
+						"label" : "Simplified",
+						"value" : "simple"
+					},
+					{
+						"label" : "Advanced",
+						"value" : "advanced"
+					}
+				],
 				"order" : 100,
+				"text" : "ui_000_setting_SettingsMode",
+				"type" : "combo",
+				"value" : "simple"
+			},
+			"p001_spacer_SettingsMode" : 
+			{
+				"index" : 1,
+				"order" : 101,
+				"text" : "ui_001_spacer_SettingsMode",
+				"type" : "text"
+			},
+			"p100_label_Rain" : 
+			{
+				"index" : 2,
+				"order" : 102,
 				"text" : "ui_100_label_Rain",
 				"type" : "bool",
 				"value" : false
@@ -256,29 +286,29 @@
 			"p101_setting_Symbols" : 
 			{
 				"condition" : "p100_label_Rain.value",
-				"index" : 1,
-				"order" : 101,
+				"index" : 3,
+				"order" : 103,
 				"text" : "ui_101_setting_Symbols",
 				"type" : "textinput",
 				"value" : "日 ﾊ ﾐ ﾋ ｰ ｳ ｼ ﾅ ﾓ ﾆ ｻ ﾜ ﾂ ｵ ﾘ ｱ ﾎ ﾃ ﾏ ｹ ﾒ ｴ ｶ ｷ ﾑ ﾕ ﾗ ｾ ﾈ ｽ ﾀ ﾇ 0 1 2 3 4 5 7 8 9 : ・ . \" = * + - < > ¦｜╌ ( ← . Z ç ﾘ ｸ M A T R I X - N A M A K E I N G O"
 			},
 			"p102_setting_3DSymbols" : 
 			{
-				"condition" : "p100_label_Rain.value",
-				"index" : 2,
-				"order" : 102,
+				"condition" : "p100_label_Rain.value && p000_setting_SettingsMode.value == 'advanced'",
+				"index" : 4,
+				"order" : 104,
 				"text" : "ui_102_setting_3DSymbols",
 				"type" : "bool",
 				"value" : true
 			},
 			"p103_setting_FontSizeMin" : 
 			{
-				"condition" : "p100_label_Rain.value",
+				"condition" : "p100_label_Rain.value && p000_setting_SettingsMode.value == 'advanced'",
 				"editable" : false,
-				"index" : 3,
+				"index" : 5,
 				"max" : 100,
 				"min" : 1,
-				"order" : 103,
+				"order" : 105,
 				"text" : "ui_103_setting_FontSizeMin",
 				"type" : "slider",
 				"value" : 1
@@ -287,10 +317,10 @@
 			{
 				"condition" : "p100_label_Rain.value",
 				"editable" : false,
-				"index" : 4,
+				"index" : 6,
 				"max" : 100,
 				"min" : 5,
-				"order" : 104,
+				"order" : 106,
 				"text" : "ui_104_setting_FontSizeMax",
 				"type" : "slider",
 				"value" : 20
@@ -299,55 +329,55 @@
 			{
 				"condition" : "p100_label_Rain.value",
 				"editable" : false,
-				"index" : 5,
+				"index" : 7,
 				"max" : 10,
 				"min" : 1,
-				"order" : 105,
+				"order" : 107,
 				"text" : "ui_105_setting_RainDensity",
 				"type" : "slider",
 				"value" : 6
 			},
 			"p106_setting_HeadBrightness" : 
 			{
-				"condition" : "p100_label_Rain.value",
+				"condition" : "p100_label_Rain.value && p000_setting_SettingsMode.value == 'advanced'",
 				"editable" : false,
-				"index" : 6,
+				"index" : 8,
 				"max" : 100,
 				"min" : 0,
-				"order" : 106,
+				"order" : 108,
 				"text" : "ui_106_setting_HeadBrightness",
 				"type" : "slider",
 				"value" : 75
 			},
 			"p107_setting_Bloom" : 
 			{
-				"condition" : "p100_label_Rain.value",
+				"condition" : "p100_label_Rain.value && p000_setting_SettingsMode.value == 'advanced'",
 				"editable" : false,
-				"index" : 7,
+				"index" : 9,
 				"max" : 100,
 				"min" : 0,
-				"order" : 107,
+				"order" : 109,
 				"text" : "ui_107_setting_Bloom",
 				"type" : "slider",
 				"value" : 50
 			},
 			"p108_setting_Exposure" : 
 			{
-				"condition" : "p100_label_Rain.value",
+				"condition" : "p100_label_Rain.value && p000_setting_SettingsMode.value == 'advanced'",
 				"editable" : false,
-				"index" : 8,
+				"index" : 10,
 				"max" : 100,
 				"min" : 0,
-				"order" : 108,
+				"order" : 110,
 				"text" : "ui_108_setting_Exposure",
 				"type" : "slider",
 				"value" : 70
 			},
 			"p109_setting_HDR" : 
 			{
-				"condition" : "p100_label_Rain.value",
-				"index" : 9,
-				"order" : 109,
+				"condition" : "p100_label_Rain.value && p000_setting_SettingsMode.value == 'advanced'",
+				"index" : 11,
+				"order" : 111,
 				"text" : "ui_109_setting_HDR",
 				"type" : "bool",
 				"value" : true
@@ -355,8 +385,8 @@
 			"p110_setting_CustomColors" : 
 			{
 				"condition" : "p100_label_Rain.value",
-				"index" : 10,
-				"order" : 110,
+				"index" : 12,
+				"order" : 112,
 				"text" : "ui_110_setting_CustomColors",
 				"type" : "bool",
 				"value" : true
@@ -364,8 +394,8 @@
 			"p111_setting_Color1" : 
 			{
 				"condition" : "p100_label_Rain.value && p110_setting_CustomColors.value",
-				"index" : 11,
-				"order" : 111,
+				"index" : 13,
+				"order" : 113,
 				"text" : "ui_111_setting_Color1",
 				"type" : "color",
 				"value" : "0.62745098039215686274509803921569 0.37254901960784313725490196078431 1"
@@ -373,8 +403,8 @@
 			"p112_setting_Color2" : 
 			{
 				"condition" : "p100_label_Rain.value && p110_setting_CustomColors.value",
-				"index" : 12,
-				"order" : 112,
+				"index" : 14,
+				"order" : 114,
 				"text" : "ui_112_setting_Color2",
 				"type" : "color",
 				"value" : "0.57254901960784313725490196078431 1 0.69019607843137254901960784313725"
@@ -382,8 +412,8 @@
 			"p113_setting_Color3" : 
 			{
 				"condition" : "p100_label_Rain.value && p110_setting_CustomColors.value",
-				"index" : 13,
-				"order" : 113,
+				"index" : 15,
+				"order" : 115,
 				"text" : "ui_113_setting_Color3",
 				"type" : "color",
 				"value" : "0.47450980392156862745098039215686 0.94117647058823529411764705882353 1"
@@ -391,8 +421,8 @@
 			"p114_setting_Color4" : 
 			{
 				"condition" : "p100_label_Rain.value && p110_setting_CustomColors.value",
-				"index" : 14,
-				"order" : 114,
+				"index" : 16,
+				"order" : 116,
 				"text" : "ui_114_setting_Color4",
 				"type" : "color",
 				"value" : "0.62745098039215686274509803921569 0.37254901960784313725490196078431 1"
@@ -400,41 +430,41 @@
 			"p115_setting_ColorWave" : 
 			{
 				"condition" : "p100_label_Rain.value",
-				"index" : 15,
-				"order" : 115,
+				"index" : 17,
+				"order" : 117,
 				"text" : "ui_115_setting_ColorWave",
 				"type" : "bool",
 				"value" : true
 			},
 			"p116_setting_WaveSpeed" : 
 			{
-				"condition" : "p100_label_Rain.value && p115_setting_ColorWave.value",
+				"condition" : "p100_label_Rain.value && p115_setting_ColorWave.value && p000_setting_SettingsMode.value == 'advanced'",
 				"editable" : false,
-				"index" : 16,
+				"index" : 18,
 				"max" : 100,
 				"min" : 1,
-				"order" : 116,
+				"order" : 118,
 				"text" : "ui_116_setting_WaveSpeed",
 				"type" : "slider",
 				"value" : 10
 			},
 			"p117_setting_WaveWidth" : 
 			{
-				"condition" : "p100_label_Rain.value && p115_setting_ColorWave.value",
+				"condition" : "p100_label_Rain.value && p115_setting_ColorWave.value && p000_setting_SettingsMode.value == 'advanced'",
 				"editable" : false,
-				"index" : 17,
+				"index" : 19,
 				"max" : 400,
 				"min" : 10,
-				"order" : 117,
+				"order" : 119,
 				"text" : "ui_117_setting_WaveWidth",
 				"type" : "slider",
 				"value" : 150
 			},
 			"p118_setting_HighContrastText" : 
 			{
-				"condition" : "p100_label_Rain.value && p115_setting_ColorWave.value && (p501_setting_ShowMessage.value || p401_setting_ShowClock.value)",
-				"index" : 18,
-				"order" : 118,
+				"condition" : "p100_label_Rain.value && p115_setting_ColorWave.value && p000_setting_SettingsMode.value == 'advanced' && (p501_setting_ShowMessage.value || p401_setting_ShowClock.value)",
+				"index" : 20,
+				"order" : 120,
 				"text" : "ui_118_setting_HighContrastText",
 				"type" : "bool",
 				"value" : true
@@ -443,10 +473,10 @@
 			{
 				"condition" : "p100_label_Rain.value",
 				"editable" : false,
-				"index" : 19,
+				"index" : 21,
 				"max" : 100,
 				"min" : 1,
-				"order" : 119,
+				"order" : 121,
 				"text" : "ui_119_setting_TrailLength",
 				"type" : "slider",
 				"value" : 15
@@ -455,10 +485,10 @@
 			{
 				"condition" : "p100_label_Rain.value",
 				"editable" : false,
-				"index" : 20,
+				"index" : 22,
 				"max" : 99,
 				"min" : 0,
-				"order" : 120,
+				"order" : 122,
 				"text" : "ui_120_setting_Speed",
 				"type" : "slider",
 				"value" : 75
@@ -466,68 +496,68 @@
 			"p121_setting_Lightning" : 
 			{
 				"condition" : "p100_label_Rain.value",
-				"index" : 21,
-				"order" : 121,
+				"index" : 23,
+				"order" : 123,
 				"text" : "ui_121_setting_Lightning",
 				"type" : "bool",
 				"value" : true
 			},
 			"p122_setting_LightningPlayTimeMin" : 
 			{
-				"condition" : "p100_label_Rain.value && p121_setting_Lightning.value",
+				"condition" : "p100_label_Rain.value && p121_setting_Lightning.value && p000_setting_SettingsMode.value == 'advanced'",
 				"editable" : false,
-				"index" : 22,
+				"index" : 24,
 				"max" : 5000,
 				"min" : 100,
-				"order" : 122,
+				"order" : 124,
 				"text" : "ui_122_setting_LightningPlayTimeMin",
 				"type" : "slider",
 				"value" : 250
 			},
 			"p123_setting_LightningPlayTimeMax" : 
 			{
-				"condition" : "p100_label_Rain.value && p121_setting_Lightning.value",
+				"condition" : "p100_label_Rain.value && p121_setting_Lightning.value && p000_setting_SettingsMode.value == 'advanced'",
 				"editable" : false,
-				"index" : 23,
+				"index" : 25,
 				"max" : 5000,
 				"min" : 100,
-				"order" : 123,
+				"order" : 125,
 				"text" : "ui_123_setting_LightningPlayTimeMax",
 				"type" : "slider",
 				"value" : 500
 			},
 			"p124_setting_LightningBrightness" : 
 			{
-				"condition" : "p100_label_Rain.value && p121_setting_Lightning.value",
+				"condition" : "p100_label_Rain.value && p121_setting_Lightning.value && p000_setting_SettingsMode.value == 'advanced'",
 				"editable" : false,
-				"index" : 24,
+				"index" : 26,
 				"max" : 100,
 				"min" : 1,
-				"order" : 124,
+				"order" : 126,
 				"text" : "ui_124_setting_LightningBrightness",
 				"type" : "slider",
 				"value" : 50
 			},
 			"p125_setting_LightningFlashBrightness" : 
 			{
-				"condition" : "p100_label_Rain.value && p121_setting_Lightning.value",
+				"condition" : "p100_label_Rain.value && p121_setting_Lightning.value && p000_setting_SettingsMode.value == 'advanced'",
 				"editable" : false,
-				"index" : 25,
+				"index" : 27,
 				"max" : 100,
 				"min" : 1,
-				"order" : 125,
+				"order" : 127,
 				"text" : "ui_125_setting_LightningFlashBrightness",
 				"type" : "slider",
 				"value" : 50
 			},
 			"p126_setting_LightningFlashHue" : 
 			{
-				"condition" : "p100_label_Rain.value && p121_setting_Lightning.value",
+				"condition" : "p100_label_Rain.value && p121_setting_Lightning.value && p000_setting_SettingsMode.value == 'advanced'",
 				"editable" : false,
-				"index" : 26,
+				"index" : 28,
 				"max" : 99,
 				"min" : 75,
-				"order" : 126,
+				"order" : 128,
 				"text" : "ui_126_setting_LightningFlashHue",
 				"type" : "slider",
 				"value" : 80
@@ -536,31 +566,31 @@
 			{
 				"condition" : "p100_label_Rain.value && p121_setting_Lightning.value",
 				"editable" : false,
-				"index" : 27,
+				"index" : 29,
 				"max" : 120,
 				"min" : 1,
-				"order" : 127,
+				"order" : 129,
 				"text" : "ui_127_setting_LightningFrequency",
 				"type" : "slider",
 				"value" : 20
 			},
 			"p128_setting_CharactersLightning" : 
 			{
-				"condition" : "p100_label_Rain.value && p121_setting_Lightning.value",
-				"index" : 28,
-				"order" : 128,
+				"condition" : "p100_label_Rain.value && p121_setting_Lightning.value && p000_setting_SettingsMode.value == 'advanced'",
+				"index" : 30,
+				"order" : 130,
 				"text" : "ui_128_setting_CharactersLightning",
 				"type" : "bool",
 				"value" : true
 			},
 			"p129_setting_LightningFrontBias" : 
 			{
-				"condition" : "p100_label_Rain.value && p121_setting_Lightning.value",
+				"condition" : "p100_label_Rain.value && p121_setting_Lightning.value && p000_setting_SettingsMode.value == 'advanced'",
 				"editable" : false,
-				"index" : 29,
+				"index" : 31,
 				"max" : 100,
 				"min" : 0,
-				"order" : 129,
+				"order" : 131,
 				"text" : "ui_129_setting_LightningFrontBias",
 				"type" : "slider",
 				"value" : 25
@@ -568,45 +598,45 @@
 			"p130_spacer_Rain" : 
 			{
 				"condition" : "p100_label_Rain.value",
-				"index" : 30,
-				"order" : 130,
+				"index" : 32,
+				"order" : 132,
 				"text" : "ui_130_spacer_Rain",
 				"type" : "text"
 			},
 			"p200_label_Physics" : 
 			{
-				"index" : 31,
-				"order" : 131,
+				"index" : 33,
+				"order" : 133,
 				"text" : "ui_200_label_Physics",
 				"type" : "bool",
 				"value" : false
 			},
 			"p201_setting_SkyMoonBrightness" : 
 			{
-				"condition" : "p200_label_Physics.value",
+				"condition" : "p200_label_Physics.value && p000_setting_SettingsMode.value == 'advanced'",
 				"editable" : false,
-				"index" : 32,
+				"index" : 34,
 				"max" : 100,
 				"min" : 0,
-				"order" : 132,
+				"order" : 134,
 				"text" : "ui_201_setting_SkyMoonBrightness",
 				"type" : "slider",
 				"value" : 5
 			},
 			"p202_setting_SkyTone" : 
 			{
-				"condition" : "p200_label_Physics.value",
-				"index" : 33,
-				"order" : 133,
+				"condition" : "p200_label_Physics.value && p000_setting_SettingsMode.value == 'advanced'",
+				"index" : 35,
+				"order" : 135,
 				"text" : "ui_202_setting_SkyTone",
 				"type" : "color",
 				"value" : "0.050980392156862744 0.043137254901960784 0.08627450980392157"
 			},
 			"p203_setting_MoonTone" : 
 			{
-				"condition" : "p200_label_Physics.value",
-				"index" : 34,
-				"order" : 134,
+				"condition" : "p200_label_Physics.value && p000_setting_SettingsMode.value == 'advanced'",
+				"index" : 36,
+				"order" : 136,
 				"text" : "ui_203_setting_MoonTone",
 				"type" : "color",
 				"value" : "0.5843137254901961 0.6 0.6352941176470588"
@@ -614,8 +644,8 @@
 			"p204_setting_CollisionPlane" : 
 			{
 				"condition" : "p200_label_Physics.value",
-				"index" : 35,
-				"order" : 135,
+				"index" : 37,
+				"order" : 137,
 				"text" : "ui_204_setting_CollisionPlane",
 				"type" : "bool",
 				"value" : true
@@ -623,41 +653,41 @@
 			"p205_setting_ReflectionPlane" : 
 			{
 				"condition" : "p200_label_Physics.value",
-				"index" : 36,
-				"order" : 136,
+				"index" : 38,
+				"order" : 138,
 				"text" : "ui_205_setting_ReflectionPlane",
 				"type" : "bool",
 				"value" : true
 			},
 			"p206_setting_PlaneTone" : 
 			{
-				"condition" : "p200_label_Physics.value && (p204_setting_CollisionPlane.value || p205_setting_ReflectionPlane.value)",
-				"index" : 37,
-				"order" : 137,
+				"condition" : "p200_label_Physics.value && p000_setting_SettingsMode.value == 'advanced' && (p204_setting_CollisionPlane.value || p205_setting_ReflectionPlane.value)",
+				"index" : 39,
+				"order" : 139,
 				"text" : "ui_206_setting_PlaneTone",
 				"type" : "color",
 				"value" : "1 1 1"
 			},
 			"p207_setting_SplashHeight" : 
 			{
-				"condition" : "p200_label_Physics.value && p204_setting_CollisionPlane.value",
+				"condition" : "p200_label_Physics.value && p000_setting_SettingsMode.value == 'advanced' && p204_setting_CollisionPlane.value",
 				"editable" : false,
-				"index" : 38,
+				"index" : 40,
 				"max" : 500,
 				"min" : 10,
-				"order" : 138,
+				"order" : 140,
 				"text" : "ui_207_setting_SplashHeight",
 				"type" : "slider",
 				"value" : 150
 			},
 			"p208_setting_ReflectionStrength" : 
 			{
-				"condition" : "p200_label_Physics.value && p205_setting_ReflectionPlane.value",
+				"condition" : "p200_label_Physics.value && p205_setting_ReflectionPlane.value && p000_setting_SettingsMode.value == 'advanced'",
 				"editable" : false,
-				"index" : 39,
+				"index" : 41,
 				"max" : 200,
 				"min" : 1,
-				"order" : 139,
+				"order" : 141,
 				"text" : "ui_208_setting_ReflectionStrength",
 				"type" : "slider",
 				"value" : 100
@@ -665,8 +695,8 @@
 			"p209_setting_Ripples" : 
 			{
 				"condition" : "p200_label_Physics.value && p204_setting_CollisionPlane.value",
-				"index" : 40,
-				"order" : 140,
+				"index" : 42,
+				"order" : 142,
 				"text" : "ui_209_setting_Ripples",
 				"type" : "bool",
 				"value" : true
@@ -675,58 +705,58 @@
 			{
 				"condition" : "p200_label_Physics.value && p204_setting_CollisionPlane.value && p209_setting_Ripples.value",
 				"editable" : false,
-				"index" : 41,
+				"index" : 43,
 				"max" : 200,
 				"min" : 1,
-				"order" : 141,
+				"order" : 143,
 				"text" : "ui_210_setting_RippleIntensity",
 				"type" : "slider",
 				"value" : 100
 			},
 			"p211_setting_RippleShadows" : 
 			{
-				"condition" : "p200_label_Physics.value && p204_setting_CollisionPlane.value && p209_setting_Ripples.value",
+				"condition" : "p200_label_Physics.value && p204_setting_CollisionPlane.value && p209_setting_Ripples.value && p000_setting_SettingsMode.value == 'advanced'",
 				"editable" : false,
-				"index" : 42,
+				"index" : 44,
 				"max" : 100,
 				"min" : 0,
-				"order" : 142,
+				"order" : 144,
 				"text" : "ui_211_setting_RippleShadows",
 				"type" : "slider",
 				"value" : 50
 			},
 			"p212_setting_RippleHighlights" : 
 			{
-				"condition" : "p200_label_Physics.value && p204_setting_CollisionPlane.value && p209_setting_Ripples.value",
+				"condition" : "p200_label_Physics.value && p204_setting_CollisionPlane.value && p209_setting_Ripples.value && p000_setting_SettingsMode.value == 'advanced'",
 				"editable" : false,
-				"index" : 43,
+				"index" : 45,
 				"max" : 100,
 				"min" : 0,
-				"order" : 143,
+				"order" : 145,
 				"text" : "ui_212_setting_RippleHighlights",
 				"type" : "slider",
 				"value" : 50
 			},
 			"p213_setting_RippleSpeed" : 
 			{
-				"condition" : "p200_label_Physics.value && p204_setting_CollisionPlane.value && p209_setting_Ripples.value",
+				"condition" : "p200_label_Physics.value && p204_setting_CollisionPlane.value && p209_setting_Ripples.value && p000_setting_SettingsMode.value == 'advanced'",
 				"editable" : false,
-				"index" : 44,
+				"index" : 46,
 				"max" : 300,
 				"min" : 10,
-				"order" : 144,
+				"order" : 146,
 				"text" : "ui_213_setting_RippleSpeed",
 				"type" : "slider",
 				"value" : 100
 			},
 			"p214_setting_RippleDuration" : 
 			{
-				"condition" : "p200_label_Physics.value && p204_setting_CollisionPlane.value && p209_setting_Ripples.value",
+				"condition" : "p200_label_Physics.value && p204_setting_CollisionPlane.value && p209_setting_Ripples.value && p000_setting_SettingsMode.value == 'advanced'",
 				"editable" : false,
-				"index" : 45,
+				"index" : 47,
 				"max" : 120,
 				"min" : 1,
-				"order" : 145,
+				"order" : 147,
 				"text" : "ui_214_setting_RippleDuration",
 				"type" : "slider",
 				"value" : 60
@@ -734,8 +764,8 @@
 			"p215_setting_DistanceFog" : 
 			{
 				"condition" : "p200_label_Physics.value && (p204_setting_CollisionPlane.value || p205_setting_ReflectionPlane.value)",
-				"index" : 46,
-				"order" : 146,
+				"index" : 48,
+				"order" : 148,
 				"text" : "ui_215_setting_DistanceFog",
 				"type" : "bool",
 				"value" : true
@@ -743,8 +773,8 @@
 			"p216_setting_FogColorMain" : 
 			{
 				"condition" : "p200_label_Physics.value && (p204_setting_CollisionPlane.value || p205_setting_ReflectionPlane.value) && p215_setting_DistanceFog.value",
-				"index" : 47,
-				"order" : 147,
+				"index" : 49,
+				"order" : 149,
 				"text" : "ui_216_setting_FogColorMain",
 				"type" : "color",
 				"value" : "0.8470588235294118 0.7450980392156863 1"
@@ -752,20 +782,20 @@
 			"p217_setting_FogColorSecondary" : 
 			{
 				"condition" : "p200_label_Physics.value && (p204_setting_CollisionPlane.value || p205_setting_ReflectionPlane.value) && p215_setting_DistanceFog.value",
-				"index" : 48,
-				"order" : 148,
+				"index" : 50,
+				"order" : 150,
 				"text" : "ui_217_setting_FogColorSecondary",
 				"type" : "color",
 				"value" : "0.3333333333333333 1 0.5137254901960784"
 			},
 			"p218_setting_FogIntensity" : 
 			{
-				"condition" : "p200_label_Physics.value && (p204_setting_CollisionPlane.value || p205_setting_ReflectionPlane.value) && p215_setting_DistanceFog.value",
+				"condition" : "p200_label_Physics.value && p000_setting_SettingsMode.value == 'advanced' && (p204_setting_CollisionPlane.value || p205_setting_ReflectionPlane.value) && p215_setting_DistanceFog.value",
 				"editable" : false,
-				"index" : 49,
+				"index" : 51,
 				"max" : 100,
 				"min" : 1,
-				"order" : 149,
+				"order" : 151,
 				"text" : "ui_218_setting_FogIntensity",
 				"type" : "slider",
 				"value" : 40
@@ -773,15 +803,15 @@
 			"p219_spacer_Physics" : 
 			{
 				"condition" : "p200_label_Physics.value",
-				"index" : 50,
-				"order" : 150,
+				"index" : 52,
+				"order" : 152,
 				"text" : "ui_219_spacer_Physics",
 				"type" : "text"
 			},
 			"p300_label_Music" : 
 			{
-				"index" : 51,
-				"order" : 151,
+				"index" : 53,
+				"order" : 153,
 				"text" : "ui_300_label_Music",
 				"type" : "bool",
 				"value" : false
@@ -789,8 +819,8 @@
 			"p301_setting_ReactToMusic" : 
 			{
 				"condition" : "p300_label_Music.value",
-				"index" : 52,
-				"order" : 152,
+				"index" : 54,
+				"order" : 154,
 				"text" : "ui_301_setting_ReactToMusic",
 				"type" : "bool",
 				"value" : false
@@ -799,34 +829,34 @@
 			{
 				"condition" : "p300_label_Music.value && p301_setting_ReactToMusic.value",
 				"editable" : false,
-				"index" : 53,
+				"index" : 55,
 				"max" : 100,
 				"min" : 1,
-				"order" : 153,
+				"order" : 155,
 				"text" : "ui_302_setting_MusicSensitivity",
 				"type" : "slider",
 				"value" : 50
 			},
 			"p303_setting_MusicLightIntensity" : 
 			{
-				"condition" : "p300_label_Music.value && p301_setting_ReactToMusic.value",
+				"condition" : "p300_label_Music.value && p301_setting_ReactToMusic.value && p000_setting_SettingsMode.value == 'advanced'",
 				"editable" : false,
-				"index" : 54,
+				"index" : 56,
 				"max" : 100,
 				"min" : 0,
-				"order" : 154,
+				"order" : 156,
 				"text" : "ui_303_setting_MusicLightIntensity",
 				"type" : "slider",
 				"value" : 50
 			},
 			"p304_setting_MusicRainResponsiveness" : 
 			{
-				"condition" : "p300_label_Music.value && p301_setting_ReactToMusic.value",
+				"condition" : "p300_label_Music.value && p301_setting_ReactToMusic.value && p000_setting_SettingsMode.value == 'advanced'",
 				"editable" : false,
-				"index" : 55,
+				"index" : 57,
 				"max" : 20,
 				"min" : 1,
-				"order" : 155,
+				"order" : 157,
 				"text" : "ui_304_setting_MusicRainResponsiveness",
 				"type" : "slider",
 				"value" : 2
@@ -835,79 +865,79 @@
 			{
 				"condition" : "p300_label_Music.value && p301_setting_ReactToMusic.value && p121_setting_Lightning.value",
 				"editable" : false,
-				"index" : 56,
+				"index" : 58,
 				"max" : 100,
 				"min" : 0,
-				"order" : 156,
+				"order" : 158,
 				"text" : "ui_305_setting_MusicSensitivityLightning",
 				"type" : "slider",
 				"value" : 30
 			},
 			"p306_setting_AdvancedLightningTuning" : 
 			{
-				"condition" : "p300_label_Music.value && p301_setting_ReactToMusic.value && p121_setting_Lightning.value",
-				"index" : 57,
-				"order" : 157,
+				"condition" : "p300_label_Music.value && p301_setting_ReactToMusic.value && p121_setting_Lightning.value && p000_setting_SettingsMode.value == 'advanced'",
+				"index" : 59,
+				"order" : 159,
 				"text" : "ui_306_setting_AdvancedLightningTuning",
 				"type" : "bool",
 				"value" : false
 			},
 			"p307_setting_MusicStrengthLightning" : 
 			{
-				"condition" : "p300_label_Music.value && p301_setting_ReactToMusic.value && p121_setting_Lightning.value && p306_setting_AdvancedLightningTuning.value",
+				"condition" : "p300_label_Music.value && p301_setting_ReactToMusic.value && p121_setting_Lightning.value && p306_setting_AdvancedLightningTuning.value && p000_setting_SettingsMode.value == 'advanced'",
 				"editable" : false,
-				"index" : 58,
+				"index" : 60,
 				"max" : 100,
 				"min" : 0,
-				"order" : 158,
+				"order" : 160,
 				"text" : "ui_307_setting_MusicStrengthLightning",
 				"type" : "slider",
 				"value" : 30
 			},
 			"p308_setting_MusicSuddennessLightning" : 
 			{
-				"condition" : "p300_label_Music.value && p301_setting_ReactToMusic.value && p121_setting_Lightning.value && p306_setting_AdvancedLightningTuning.value",
+				"condition" : "p300_label_Music.value && p301_setting_ReactToMusic.value && p121_setting_Lightning.value && p306_setting_AdvancedLightningTuning.value && p000_setting_SettingsMode.value == 'advanced'",
 				"editable" : false,
-				"index" : 59,
+				"index" : 61,
 				"max" : 100,
 				"min" : 0,
-				"order" : 159,
+				"order" : 161,
 				"text" : "ui_308_setting_MusicSuddennessLightning",
 				"type" : "slider",
 				"value" : 70
 			},
 			"p309_setting_MusicTempoLightning" : 
 			{
-				"condition" : "p300_label_Music.value && p301_setting_ReactToMusic.value && p121_setting_Lightning.value && p306_setting_AdvancedLightningTuning.value",
+				"condition" : "p300_label_Music.value && p301_setting_ReactToMusic.value && p121_setting_Lightning.value && p306_setting_AdvancedLightningTuning.value && p000_setting_SettingsMode.value == 'advanced'",
 				"editable" : false,
-				"index" : 60,
+				"index" : 62,
 				"max" : 100,
 				"min" : 0,
-				"order" : 160,
+				"order" : 162,
 				"text" : "ui_309_setting_MusicTempoLightning",
 				"type" : "slider",
 				"value" : 50
 			},
 			"p310_setting_MusicTimbreLightning" : 
 			{
-				"condition" : "p300_label_Music.value && p301_setting_ReactToMusic.value && p121_setting_Lightning.value && p306_setting_AdvancedLightningTuning.value",
+				"condition" : "p300_label_Music.value && p301_setting_ReactToMusic.value && p121_setting_Lightning.value && p306_setting_AdvancedLightningTuning.value && p000_setting_SettingsMode.value == 'advanced'",
 				"editable" : false,
-				"index" : 61,
+				"index" : 63,
 				"max" : 100,
 				"min" : 0,
-				"order" : 161,
+				"order" : 163,
 				"text" : "ui_310_setting_MusicTimbreLightning",
 				"type" : "slider",
 				"value" : 50
 			},
 			"p311_setting_MusicTrendLightning" : 
 			{
-				"condition" : "p300_label_Music.value && p301_setting_ReactToMusic.value && p121_setting_Lightning.value && p306_setting_AdvancedLightningTuning.value",
+				"condition" : "p300_label_Music.value && p301_setting_ReactToMusic.value && p121_setting_Lightning.value && p306_setting_AdvancedLightningTuning.value && p000_setting_SettingsMode.value == 'advanced'",
 				"editable" : false,
-				"index" : 62,
+				"index" : 64,
 				"max" : 100,
 				"min" : 0,
-				"order" : 162,
+				"order" : 164,
 				"text" : "ui_311_setting_MusicTrendLightning",
 				"type" : "slider",
 				"value" : 50
@@ -915,8 +945,8 @@
 			"p312_setting_MusicIdleAnimation" : 
 			{
 				"condition" : "p300_label_Music.value && p301_setting_ReactToMusic.value",
-				"index" : 63,
-				"order" : 163,
+				"index" : 65,
+				"order" : 165,
 				"text" : "ui_312_setting_MusicIdleAnimation",
 				"type" : "bool",
 				"value" : false
@@ -924,10 +954,10 @@
 			"p313_setting_MusicIdleTimeout" : 
 			{
 				"condition" : "p300_label_Music.value && (p301_setting_ReactToMusic.value && p312_setting_MusicIdleAnimation.value)",
-				"index" : 64,
+				"index" : 66,
 				"max" : 30,
 				"min" : 1,
-				"order" : 164,
+				"order" : 166,
 				"text" : "ui_313_setting_MusicIdleTimeout",
 				"type" : "slider",
 				"value" : 3
@@ -935,15 +965,15 @@
 			"p314_spacer_Music" : 
 			{
 				"condition" : "p300_label_Music.value",
-				"index" : 65,
-				"order" : 165,
+				"index" : 67,
+				"order" : 167,
 				"text" : "ui_314_spacer_Music",
 				"type" : "text"
 			},
 			"p400_label_Clock" : 
 			{
-				"index" : 66,
-				"order" : 166,
+				"index" : 68,
+				"order" : 168,
 				"text" : "ui_400_label_Clock",
 				"type" : "bool",
 				"value" : false
@@ -951,8 +981,8 @@
 			"p401_setting_ShowClock" : 
 			{
 				"condition" : "p400_label_Clock.value",
-				"index" : 67,
-				"order" : 167,
+				"index" : 69,
+				"order" : 169,
 				"text" : "ui_401_setting_ShowClock",
 				"type" : "bool",
 				"value" : true
@@ -960,8 +990,8 @@
 			"p402_setting_ClockRelativeSize" : 
 			{
 				"condition" : "p400_label_Clock.value && p401_setting_ShowClock.value",
-				"index" : 68,
-				"order" : 168,
+				"index" : 70,
+				"order" : 170,
 				"text" : "ui_402_setting_ClockRelativeSize",
 				"type" : "bool",
 				"value" : true
@@ -970,10 +1000,10 @@
 			{
 				"condition" : "p400_label_Clock.value && p401_setting_ShowClock.value && !p402_setting_ClockRelativeSize.value",
 				"editable" : false,
-				"index" : 69,
+				"index" : 71,
 				"max" : 50,
 				"min" : 1,
-				"order" : 169,
+				"order" : 171,
 				"text" : "ui_403_setting_ClockSize",
 				"type" : "slider",
 				"value" : 8
@@ -982,10 +1012,10 @@
 			{
 				"condition" : "p400_label_Clock.value && p401_setting_ShowClock.value && p402_setting_ClockRelativeSize.value",
 				"editable" : false,
-				"index" : 70,
+				"index" : 72,
 				"max" : 100,
 				"min" : 0,
-				"order" : 170,
+				"order" : 172,
 				"text" : "ui_404_setting_ClockRelativeSizePercent",
 				"type" : "slider",
 				"value" : 75
@@ -993,8 +1023,8 @@
 			"p405_setting_ClockRelativePosition" : 
 			{
 				"condition" : "p400_label_Clock.value && p401_setting_ShowClock.value",
-				"index" : 71,
-				"order" : 171,
+				"index" : 73,
+				"order" : 173,
 				"text" : "ui_405_setting_ClockRelativePosition",
 				"type" : "bool",
 				"value" : true
@@ -1003,10 +1033,10 @@
 			{
 				"condition" : "p400_label_Clock.value && p401_setting_ShowClock.value && p405_setting_ClockRelativePosition.value",
 				"editable" : true,
-				"index" : 72,
+				"index" : 74,
 				"max" : 100,
 				"min" : 0,
-				"order" : 172,
+				"order" : 174,
 				"text" : "ui_406_setting_ClockRelativePositionX",
 				"type" : "slider",
 				"value" : 50
@@ -1015,10 +1045,10 @@
 			{
 				"condition" : "p400_label_Clock.value && p401_setting_ShowClock.value && p405_setting_ClockRelativePosition.value",
 				"editable" : true,
-				"index" : 73,
+				"index" : 75,
 				"max" : 100,
 				"min" : 0,
-				"order" : 173,
+				"order" : 175,
 				"text" : "ui_407_setting_ClockRelativePositionY",
 				"type" : "slider",
 				"value" : 25
@@ -1027,10 +1057,10 @@
 			{
 				"condition" : "p400_label_Clock.value && p401_setting_ShowClock.value && !p405_setting_ClockRelativePosition.value",
 				"editable" : true,
-				"index" : 74,
+				"index" : 76,
 				"max" : 500,
 				"min" : 0,
-				"order" : 174,
+				"order" : 176,
 				"text" : "ui_408_setting_ClockPositionX",
 				"type" : "slider",
 				"value" : 14
@@ -1039,10 +1069,10 @@
 			{
 				"condition" : "p400_label_Clock.value && p401_setting_ShowClock.value && !p405_setting_ClockRelativePosition.value",
 				"editable" : true,
-				"index" : 75,
+				"index" : 77,
 				"max" : 200,
 				"min" : 0,
-				"order" : 175,
+				"order" : 177,
 				"text" : "ui_409_setting_ClockPositionY",
 				"type" : "slider",
 				"value" : 14
@@ -1050,8 +1080,8 @@
 			"p410_setting_Clock12h" : 
 			{
 				"condition" : "p400_label_Clock.value && p401_setting_ShowClock.value",
-				"index" : 76,
-				"order" : 176,
+				"index" : 78,
+				"order" : 178,
 				"text" : "ui_410_setting_Clock12h",
 				"type" : "bool",
 				"value" : false
@@ -1059,15 +1089,15 @@
 			"p411_spacer_Clock" : 
 			{
 				"condition" : "p400_label_Clock.value",
-				"index" : 77,
-				"order" : 177,
+				"index" : 79,
+				"order" : 179,
 				"text" : "ui_411_spacer_Clock",
 				"type" : "text"
 			},
 			"p500_label_Message" : 
 			{
-				"index" : 78,
-				"order" : 178,
+				"index" : 80,
+				"order" : 180,
 				"text" : "ui_500_label_Message",
 				"type" : "bool",
 				"value" : false
@@ -1075,8 +1105,8 @@
 			"p501_setting_ShowMessage" : 
 			{
 				"condition" : "p500_label_Message.value",
-				"index" : 79,
-				"order" : 179,
+				"index" : 81,
+				"order" : 181,
 				"text" : "ui_501_setting_ShowMessage",
 				"type" : "bool",
 				"value" : false
@@ -1084,8 +1114,8 @@
 			"p502_setting_MessageText" : 
 			{
 				"condition" : "p500_label_Message.value && p501_setting_ShowMessage.value",
-				"index" : 80,
-				"order" : 180,
+				"index" : 82,
+				"order" : 182,
 				"text" : "ui_502_setting_MessageText",
 				"type" : "textinput",
 				"value" : "MATRIX"
@@ -1093,8 +1123,8 @@
 			"p503_setting_MessageRelativeSize" : 
 			{
 				"condition" : "p500_label_Message.value && p501_setting_ShowMessage.value",
-				"index" : 81,
-				"order" : 181,
+				"index" : 83,
+				"order" : 183,
 				"text" : "ui_503_setting_MessageRelativeSize",
 				"type" : "bool",
 				"value" : true
@@ -1103,10 +1133,10 @@
 			{
 				"condition" : "p500_label_Message.value && p501_setting_ShowMessage.value && !p503_setting_MessageRelativeSize.value",
 				"editable" : false,
-				"index" : 82,
+				"index" : 84,
 				"max" : 50,
 				"min" : 1,
-				"order" : 182,
+				"order" : 184,
 				"text" : "ui_504_setting_MessageSize",
 				"type" : "slider",
 				"value" : 8
@@ -1115,10 +1145,10 @@
 			{
 				"condition" : "p500_label_Message.value && p501_setting_ShowMessage.value && p503_setting_MessageRelativeSize.value",
 				"editable" : false,
-				"index" : 83,
+				"index" : 85,
 				"max" : 100,
 				"min" : 0,
-				"order" : 183,
+				"order" : 185,
 				"text" : "ui_505_setting_MessageRelativeSizePercent",
 				"type" : "slider",
 				"value" : 90
@@ -1126,8 +1156,8 @@
 			"p506_setting_MessageRelativePosition" : 
 			{
 				"condition" : "p500_label_Message.value && p501_setting_ShowMessage.value",
-				"index" : 84,
-				"order" : 184,
+				"index" : 86,
+				"order" : 186,
 				"text" : "ui_506_setting_MessageRelativePosition",
 				"type" : "bool",
 				"value" : true
@@ -1136,10 +1166,10 @@
 			{
 				"condition" : "p500_label_Message.value && p501_setting_ShowMessage.value && p506_setting_MessageRelativePosition.value",
 				"editable" : true,
-				"index" : 85,
+				"index" : 87,
 				"max" : 100,
 				"min" : 0,
-				"order" : 185,
+				"order" : 187,
 				"text" : "ui_507_setting_MessageRelativePositionX",
 				"type" : "slider",
 				"value" : 50
@@ -1148,10 +1178,10 @@
 			{
 				"condition" : "p500_label_Message.value && p501_setting_ShowMessage.value && p506_setting_MessageRelativePosition.value",
 				"editable" : true,
-				"index" : 86,
+				"index" : 88,
 				"max" : 100,
 				"min" : 0,
-				"order" : 186,
+				"order" : 188,
 				"text" : "ui_508_setting_MessageRelativePositionY",
 				"type" : "slider",
 				"value" : 80
@@ -1160,10 +1190,10 @@
 			{
 				"condition" : "p500_label_Message.value && p501_setting_ShowMessage.value && !p506_setting_MessageRelativePosition.value",
 				"editable" : true,
-				"index" : 87,
+				"index" : 89,
 				"max" : 500,
 				"min" : 0,
-				"order" : 187,
+				"order" : 189,
 				"text" : "ui_509_setting_MessagePositionX",
 				"type" : "slider",
 				"value" : 30
@@ -1172,10 +1202,10 @@
 			{
 				"condition" : "p500_label_Message.value && p501_setting_ShowMessage.value && !p506_setting_MessageRelativePosition.value",
 				"editable" : true,
-				"index" : 88,
+				"index" : 90,
 				"max" : 200,
 				"min" : 0,
-				"order" : 188,
+				"order" : 190,
 				"text" : "ui_510_setting_MessagePositionY",
 				"type" : "slider",
 				"value" : 30
@@ -1183,15 +1213,15 @@
 			"p511_spacer_Message" : 
 			{
 				"condition" : "p500_label_Message.value",
-				"index" : 89,
-				"order" : 189,
+				"index" : 91,
+				"order" : 191,
 				"text" : "ui_511_spacer_Message",
 				"type" : "text"
 			},
 			"p600_label_Miscellaneous" : 
 			{
-				"index" : 90,
-				"order" : 190,
+				"index" : 92,
+				"order" : 192,
 				"text" : "ui_600_label_Miscellaneous",
 				"type" : "bool",
 				"value" : false
@@ -1200,10 +1230,10 @@
 			{
 				"condition" : "p600_label_Miscellaneous.value",
 				"editable" : true,
-				"index" : 91,
+				"index" : 93,
 				"max" : 50,
 				"min" : 0,
-				"order" : 191,
+				"order" : 193,
 				"text" : "ui_612_setting_OledPixelShift",
 				"type" : "slider",
 				"value" : 20
@@ -1212,10 +1242,10 @@
 			{
 				"condition" : "p600_label_Miscellaneous.value",
 				"editable" : true,
-				"index" : 92,
+				"index" : 94,
 				"max" : 120,
 				"min" : 10,
-				"order" : 192,
+				"order" : 194,
 				"text" : "ui_613_setting_FrameCap",
 				"type" : "slider",
 				"value" : 24
@@ -1223,33 +1253,33 @@
 			"p614_label_FrameCapNote" : 
 			{
 				"condition" : "p600_label_Miscellaneous.value",
-				"index" : 93,
-				"order" : 193,
+				"index" : 95,
+				"order" : 195,
 				"text" : "ui_614_label_FrameCapNote",
 				"type" : "text"
 			},
 			"p615_setting_DebugMode" : 
 			{
-				"condition" : "p600_label_Miscellaneous.value",
-				"index" : 94,
-				"order" : 194,
+				"condition" : "p600_label_Miscellaneous.value && p000_setting_SettingsMode.value == 'advanced'",
+				"index" : 96,
+				"order" : 196,
 				"text" : "ui_615_setting_DebugMode",
 				"type" : "bool",
 				"value" : false
 			},
 			"p616_setting_DebugMusicReadout" : 
 			{
-				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value",
-				"index" : 95,
-				"order" : 195,
+				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value && p000_setting_SettingsMode.value == 'advanced'",
+				"index" : 97,
+				"order" : 197,
 				"text" : "ui_616_setting_DebugMusicReadout",
 				"type" : "bool",
 				"value" : false
 			},
 			"p617_setting_DebugMusicSource" : 
 			{
-				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value",
-				"index" : 96,
+				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value && p000_setting_SettingsMode.value == 'advanced'",
+				"index" : 98,
 				"options" : 
 				[
 					{
@@ -1321,28 +1351,28 @@
 						"value" : "loudest"
 					}
 				],
-				"order" : 196,
+				"order" : 198,
 				"text" : "ui_617_setting_DebugMusicSource",
 				"type" : "combo",
 				"value" : "real"
 			},
 			"p618_setting_DebugStrikeNow" : 
 			{
-				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value && p121_setting_Lightning.value",
-				"index" : 97,
-				"order" : 197,
+				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value && p121_setting_Lightning.value && p000_setting_SettingsMode.value == 'advanced'",
+				"index" : 99,
+				"order" : 199,
 				"text" : "ui_618_setting_DebugStrikeNow",
 				"type" : "bool",
 				"value" : false
 			},
 			"p619_setting_DebugStrikeDistance" : 
 			{
-				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value && p121_setting_Lightning.value",
+				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value && p121_setting_Lightning.value && p000_setting_SettingsMode.value == 'advanced'",
 				"editable" : false,
-				"index" : 98,
+				"index" : 100,
 				"max" : 40,
 				"min" : 2.5,
-				"order" : 198,
+				"order" : 200,
 				"precision" : 2,
 				"step" : 0.1,
 				"text" : "ui_619_setting_DebugStrikeDistance",
@@ -1351,80 +1381,80 @@
 			},
 			"p620_setting_DebugPerformance" : 
 			{
-				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value",
-				"index" : 99,
-				"order" : 199,
+				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value && p000_setting_SettingsMode.value == 'advanced'",
+				"index" : 101,
+				"order" : 201,
 				"text" : "ui_620_setting_DebugPerformance",
 				"type" : "bool",
 				"value" : false
 			},
 			"p621_setting_DebugNearness" : 
 			{
-				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value",
-				"index" : 100,
-				"order" : 200,
+				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value && p000_setting_SettingsMode.value == 'advanced'",
+				"index" : 102,
+				"order" : 202,
 				"text" : "ui_621_setting_DebugNearness",
 				"type" : "bool",
 				"value" : false
 			},
 			"p622_setting_DebugNoFlash" : 
 			{
-				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value && p121_setting_Lightning.value",
-				"index" : 101,
-				"order" : 201,
+				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value && p121_setting_Lightning.value && p000_setting_SettingsMode.value == 'advanced'",
+				"index" : 103,
+				"order" : 203,
 				"text" : "ui_622_setting_DebugNoFlash",
 				"type" : "bool",
 				"value" : false
 			},
 			"p623_setting_DebugNoSplashes" : 
 			{
-				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value && p204_setting_CollisionPlane.value",
-				"index" : 102,
-				"order" : 202,
+				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value && p204_setting_CollisionPlane.value && p000_setting_SettingsMode.value == 'advanced'",
+				"index" : 104,
+				"order" : 204,
 				"text" : "ui_623_setting_DebugNoSplashes",
 				"type" : "bool",
 				"value" : false
 			},
 			"p624_setting_DebugFreeze" : 
 			{
-				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value",
-				"index" : 103,
-				"order" : 203,
+				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value && p000_setting_SettingsMode.value == 'advanced'",
+				"index" : 105,
+				"order" : 205,
 				"text" : "ui_624_setting_DebugFreeze",
 				"type" : "bool",
 				"value" : false
 			},
 			"p625_setting_DebugOledReadout" : 
 			{
-				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value",
-				"index" : 104,
-				"order" : 204,
+				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value && p000_setting_SettingsMode.value == 'advanced'",
+				"index" : 106,
+				"order" : 206,
 				"text" : "ui_625_setting_DebugOledReadout",
 				"type" : "bool",
 				"value" : false
 			},
 			"p626_setting_DebugSteadyStart" : 
 			{
-				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value",
-				"index" : 105,
-				"order" : 205,
+				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value && p000_setting_SettingsMode.value == 'advanced'",
+				"index" : 107,
+				"order" : 207,
 				"text" : "ui_626_setting_DebugSteadyStart",
 				"type" : "bool",
 				"value" : false
 			},
 			"p627_setting_DebugSupport" : 
 			{
-				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value",
-				"index" : 106,
-				"order" : 206,
+				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value && p000_setting_SettingsMode.value == 'advanced'",
+				"index" : 108,
+				"order" : 208,
 				"text" : "ui_627_setting_DebugSupport",
 				"type" : "bool",
 				"value" : false
 			},
 			"p628_setting_DebugQualityMode" : 
 			{
-				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value",
-				"index" : 107,
+				"condition" : "p600_label_Miscellaneous.value && p615_setting_DebugMode.value && p000_setting_SettingsMode.value == 'advanced'",
+				"index" : 109,
 				"options" : 
 				[
 					{
@@ -1436,7 +1466,7 @@
 						"value" : "optimized"
 					}
 				],
-				"order" : 207,
+				"order" : 209,
 				"text" : "ui_628_setting_DebugQualityMode",
 				"type" : "combo",
 				"value" : "optimized"
@@ -1444,16 +1474,16 @@
 			"p629_setting_MouseParallax" : 
 			{
 				"condition" : "p600_label_Miscellaneous.value",
-				"index" : 108,
-				"order" : 208,
+				"index" : 110,
+				"order" : 210,
 				"text" : "ui_629_setting_MouseParallax",
 				"type" : "bool",
 				"value" : true
 			},
 			"p630_setting_MouseParallaxMode" : 
 			{
-				"condition" : "p600_label_Miscellaneous.value && p629_setting_MouseParallax.value",
-				"index" : 109,
+				"condition" : "p600_label_Miscellaneous.value && p629_setting_MouseParallax.value && p000_setting_SettingsMode.value == 'advanced'",
+				"index" : 111,
 				"options" : 
 				[
 					{
@@ -1465,7 +1495,7 @@
 						"value" : "translation"
 					}
 				],
-				"order" : 209,
+				"order" : 211,
 				"text" : "ui_630_setting_MouseParallaxMode",
 				"type" : "combo",
 				"value" : "translation"
@@ -1474,10 +1504,10 @@
 			{
 				"condition" : "p600_label_Miscellaneous.value && p629_setting_MouseParallax.value",
 				"fraction" : true,
-				"index" : 110,
+				"index" : 112,
 				"max" : 1,
 				"min" : 0,
-				"order" : 210,
+				"order" : 212,
 				"precision" : 3,
 				"step" : 0.05,
 				"text" : "ui_631_setting_MouseParallaxAmount",
@@ -1486,12 +1516,12 @@
 			},
 			"p632_setting_MouseParallaxDelay" : 
 			{
-				"condition" : "p600_label_Miscellaneous.value && p629_setting_MouseParallax.value",
+				"condition" : "p600_label_Miscellaneous.value && p629_setting_MouseParallax.value && p000_setting_SettingsMode.value == 'advanced'",
 				"fraction" : true,
-				"index" : 111,
+				"index" : 113,
 				"max" : 1,
 				"min" : 0,
-				"order" : 211,
+				"order" : 213,
 				"precision" : 2,
 				"step" : 0.1,
 				"text" : "ui_632_setting_MouseParallaxDelay",
@@ -1500,22 +1530,22 @@
 			},
 			"p700_spacer_Support" : 
 			{
-				"index" : 112,
-				"order" : 212,
+				"index" : 114,
+				"order" : 214,
 				"text" : "ui_700_spacer_Support",
 				"type" : "text"
 			},
 			"p701_label_SupportNote" : 
 			{
-				"index" : 113,
-				"order" : 213,
+				"index" : 115,
+				"order" : 215,
 				"text" : "ui_701_label_SupportNote",
 				"type" : "text"
 			},
 			"p702_label_SupportQr" : 
 			{
-				"index" : 114,
-				"order" : 214,
+				"index" : 116,
+				"order" : 216,
 				"text" : "ui_702_label_SupportQr",
 				"type" : "text"
 			},
@@ -1536,7 +1566,7 @@
 	"tags" : [ "Abstract" ],
 	"title" : "Matrix 3D Rain WebGL 2.0",
 	"type" : "web",
-	"version" : 4,
+	"version" : 5,
 	"visibility" : "public",
 	"workshopid" : "3837678671",
 	"workshopurl" : "steam://url/CommunityFilePage/3837678671"

@@ -84,6 +84,7 @@
 //   strikes planned after it: the AHEAD already planned keep their place.
 //
 // Changelog:
+// 2026-11-12: compile time: emitterLight's walk and its drain of the stack are one loop (one set of node reads and one emitterAdd); strikeUnit's marched view only with TEST_VIEWS.
 // 2026-11-12: the strikes' ends over the spawn box (models/spawnbox.ts, boxOf): the foot (the plan's) and the top across its width at their distances, kept when an end is within the view, both drawn again (at most MOST_REDRAWS) from the strike's own generator when both are outside; the leaders' meeting at the foot as drawn; TOP_INSIDE removed.
 // 2026-11-11: Debug's spare strike draws from a generator of its own (spareRng), so the plan's stream is the same with and without a bolt worker.
 // 2026-11-11: a music peak and a strike asked while Lightning is off are cleared (advance and the Lightning handler), not kept for when it is switched on.

@@ -173,14 +173,6 @@ vec3 rippleGain(vec3 still, vec3 ripple) {
   return max(ripple + delta * k, 0.0);
 }
 
-// the sky past still water seen through the fog's mirrored volume along the ray through a place
-// of the screen (pixels; within the volume's margin); the strikes' share of its light also in
-// strike
-vec3 mirroredSky(vec2 at, out vec3 strike) {
-  vec4 fog = fogAt(at, FOG_FAR, true, strike);
-  return SKY * fog.a + fog.rgb;
-}
-
 // the mirrored picture's light at a place of the screen (pixels) over the beam a water pixel's
 // reflection covers there: major its longer side (a vector, pixels), minor its shorter (at least 1).
 // Over a pixel or less (a flat mirror), the texel itself. Wider: the mean light over the beam, as
@@ -214,19 +206,37 @@ vec3 mirroredAt(vec2 at, vec2 major, float minor, out vec3 emitted, out vec3 sce
   bool inside = all(greaterThanEqual(at, -uMirrorMargin)) && all(lessThan(at, cScreen.xy + uMirrorMargin));
   bool onScreen = all(greaterThanEqual(at, vec2(0.0))) && all(lessThan(at, cScreen.xy));
   if (inside) glyphs = glyphsOver(at, major, minor);
-  vec3 strike;
-  vec3 sky = mirroredSky(clamp(at, -edge, cScreen.xy + edge), strike);
+  // (the bolt's cover over this place: its opacity c and the nearness of what covers it)
+  float c = 0.0;
+  float near = 0.0;
   if (uCovered && onScreen) {
     vec4 cover = texelFetch(uBoltCover, ivec2(at), 0);
     vec4 sums = texelFetch(uBoltNear, ivec2(at), 0);
-    float near = sums.a > 0.0 ? sums.g / sums.a : 0.0;
-    float c = 1.0 - (1.0 - min(cover.b, LINE_COVER)) * (1.0 - cover.a);
-    if (c > 0.0 && near > 0.0) {
-      vec3 frontStrike;
-      vec4 front = fogAt(at, NEAR_SCALE / near, true, frontStrike);
-      sky -= c * (sky - front.rgb);
-      strike -= c * (strike - frontStrike);
+    near = sums.a > 0.0 ? sums.g / sums.a : 0.0;
+    c = 1.0 - (1.0 - min(cover.b, LINE_COVER)) * (1.0 - cover.a);
+  }
+  bool covered = c > 0.0 && near > 0.0;
+  // the mirrored fog read once in a loop (so its code is in the program once): iteration 0 the sky's, with the strikes' share of its light; iteration 1, only where the
+  // bolt covers, the fog in front of what covers it
+  vec3 sky = vec3(0.0);
+  vec3 strike = vec3(0.0);
+  vec3 front = vec3(0.0);
+  vec3 frontStrike = vec3(0.0);
+  for (int i = 0; i < 2; i++) {
+    if (i == 1 && !covered) break;
+    vec3 share;
+    vec4 fog = fogAt(i == 0 ? clamp(at, -edge, cScreen.xy + edge) : at, i == 0 ? FOG_FAR : NEAR_SCALE / near, true, share);
+    if (i == 0) {
+      sky = SKY * fog.a + fog.rgb;
+      strike = share;
+    } else {
+      front = fog.rgb;
+      frontStrike = share;
     }
+  }
+  if (covered) {
+    sky -= c * (sky - front);
+    strike -= c * (strike - frontStrike);
   }
   emitted = glyphs + strike;
   scene = glyphs;
@@ -240,13 +250,14 @@ vec3 mirroredAt(vec2 at, vec2 major, float minor, out vec3 emitted, out vec3 sce
 // pixel across and down), taken far away (the directions projected from the eye at GLOSS_REF: on
 // flat water exactly the pixel's own step, one pixel) and, as the beam widens only along the way
 // it travels (L from the surface to the ink, or GLOSS_NOMINAL where the point read found none),
-// its excess over that step scaled by L / (L + the eye's distance to the surface)
-vec3 reflectedAt(vec3 s, float hit, vec3 r, vec3 n, ivec2 pixel, float lod, bool gloss, vec3 drx, vec3 dry, out vec3 emitted, out vec3 scene) {
+// its excess over that step scaled by L / (L + the eye's distance to the surface). ownShaded: the water's own light for the normal n (waterOwnShaded of the sky shade
+// at s: what a ray reflected downwards shows), computed once by the caller
+vec3 reflectedAt(vec3 s, float hit, vec3 r, vec3 n, ivec2 pixel, float lod, bool gloss, vec3 drx, vec3 dry, vec3 ownShaded, out vec3 emitted, out vec3 scene) {
   emitted = vec3(0.0);
   scene = vec3(0.0);
   if (uTestReflection == 1) return vec3(1.0);
   if (uTestReflection >= 3 && r.y < 0.0) return vec3(0.0);
-  if (r.y < 0.0) return waterOwn(s, n, lod);
+  if (r.y < 0.0) return ownShaded;
   vec2 at = vec2(pixel) + 0.5;
   float ink = FOG_FAR;
   for (int k = 0; k < 2; k++) {
@@ -316,14 +327,15 @@ bool behindWaves(vec3 s, vec3 l, float len, int stride) {
   int steps = min(int(span / 2.0) + 2, BLOCK_STEPS);
   // (the level's stride: fewer coarse steps, never under 2, or the whole when there are no more)
   if (stride > 1) steps = max(min(2, steps), (steps + stride - 1) / stride);
-  float top0 = blockTop(vec2(s.x, -s.z));
-  for (int j = 1; j <= steps; j++) {
-    float t0 = reach * float(j - 1) / float(steps);
+  // (one loop whose pass 0 only reads the first block's top, so the block read's code is in the program once)
+  float top0 = 0.0;
+  for (int j = 0; j <= steps; j++) {
+    float t0 = reach * float(max(j - 1, 0)) / float(steps);
     float t1 = reach * float(j) / float(steps);
     vec3 p1 = s + t1 * l;
     float top1 = blockTop(vec2(p1.x, -p1.z));
     float low = s.y + min(t0, t1) * l.y - abs(t1 - t0) * max(-l.y, 0.0);
-    if (low - SHADOW_BIAS < max(top0, top1)) {
+    if (j > 0 && low - SHADOW_BIAS < max(top0, top1)) {
       for (int k = 1; k <= 4; k++) {
         vec3 p = s + mix(t0, t1, float(k) / 4.0) * l;
         if (p.y < waveHeight(vec2(p.x, -p.z)) - SHADOW_BIAS) return true;
@@ -418,7 +430,17 @@ void main() {
   // flat tolerance, the level and the cut need its transmittance)
   vec3 strike = vec3(0.0);
   vec4 fog = vec4(0.0, 0.0, 0.0, 1.0);
-  if (water) fog = fogAt(gl_FragCoord.xy, hit, false, strike);
+  // (one read for both cases, so the fog's code is in the program once here: the water's pixel and the hit distance, or, with the water off below the
+  // horizon, the pixel the mirrored ray crosses and the far distance)
+  float end = FOG_FAR;
+  if (water) end = hit;
+  vec2 fogPixel = gl_FragCoord.xy;
+  if (!water && uWaterOff && d.y < 0.0) {
+    vec4 up = cViewProj * vec4(cEye.xyz + vec3(d.x, -d.y, d.z), 1.0);
+    vec2 margin = cScreen.xy * fVolume.w;
+    if (up.w > 0.0) fogPixel = clamp((up.xy / up.w * 0.5 + 0.5) * cScreen.xy, -margin, cScreen.xy + margin);
+  }
+  fog = fogAt(fogPixel, end, false, strike);
   float transmittance = water ? fog.a : 1.0;
 #ifdef TEST_VIEWS
   bool sceneView = uMode == MODE_SCENE;
@@ -444,10 +466,8 @@ void main() {
   }
   vec3 color = unseen ? vec3(0.0) : SKY;
   vec3 reflected = vec3(0.0);
-  float end = FOG_FAR;
   if (water && !unseen) {
     vec3 s = cEye.xyz + hit * d;
-    end = hit;
     float lod = lodOf(hit / cEye.w);
 #ifdef TEST_VIEWS
     if (uMode == MODE_WATERDISTANCE) {
@@ -477,11 +497,12 @@ void main() {
       vec3 nn = pass == 0 ? n : vec3(0.0, 1.0, 0.0);
       vec3 em;
       vec3 scn;
-      vec3 mir = reflectedAt(s, hit, reflect(d, nn), nn, pixel, lod, pass == 0 && !isFlat, drx, dry, em, scn);
+      vec3 ownShaded = waterOwnShaded(shade, nn);
+      vec3 mir = reflectedAt(s, hit, reflect(d, nn), nn, pixel, lod, pass == 0 && !isFlat, drx, dry, ownShaded, em, scn);
       vec3 litPass = pass == 0 ? lit : litStill;
       // (the Fresnel reflectance of the water: the Reflection strength does not scale it, the water keeps its full look)
       float fPass = min(${WATER_F0} + ${1 - WATER_F0} * pow(1.0 - max(dot(-d, nn), 0.0), 5.0), 1.0);
-      vec3 ownPass = uNoWaterLight ? vec3(0.0) : waterOwnShaded(shade, nn) + litPass * uTone;
+      vec3 ownPass = uNoWaterLight ? vec3(0.0) : ownShaded + litPass * uTone;
       vec3 colorPass = ownPass * (1.0 - fPass) + mir * fPass;
       // (the emitters' light in it: the strikes' it reflects diffusely, and the strikes' share of its mirror; the mirrored scene's is
       // added with it after the gain)
@@ -528,17 +549,7 @@ void main() {
     return;
   }
 #endif
-  // (the water off: below the horizon the fog along the ray mirrored upwards, read at the pixel that ray crosses; the water's own pixels
-  // have their fog already)
-  if (!water) {
-    vec2 fogPixel = gl_FragCoord.xy;
-    if (uWaterOff && d.y < 0.0) {
-      vec4 up = cViewProj * vec4(cEye.xyz + vec3(d.x, -d.y, d.z), 1.0);
-      vec2 margin = cScreen.xy * fVolume.w;
-      if (up.w > 0.0) fogPixel = clamp((up.xy / up.w * 0.5 + 0.5) * cScreen.xy, -margin, cScreen.xy + margin);
-    }
-    fog = fogAt(fogPixel, end, false, strike);
-  }
+  // (the fog of the pixels that are not water was read above, with the water-off mirrored ray's pixel)
   outColor = vec4(color * fog.a + fog.rgb, 1.0);
 #ifdef TEST_VIEWS
   if (uMode == MODE_SKY) outColor.rgb *= uViewScale;

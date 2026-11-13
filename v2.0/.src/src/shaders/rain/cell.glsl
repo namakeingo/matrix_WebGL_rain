@@ -19,6 +19,14 @@ struct Cell {
   bool drawn;
   // the rows it has fallen in its fall
   uint since;
+  // the drop's head: the rows it has fallen in the fall under way; and, for the cell of the fall before at the same age (the head's extension below the floor: the fall that has just
+  // ended goes on while the water under it is lower, its rows then under 0), the steps it has been falling
+  uint head;
+  uint sinceBefore;
+  bool drawnBefore;
+  // the drop's fourth life word: the water's rows at its landings as the wheel packs them (RainWheel.packMeets): the rows of the fall the table was read for + 8, of the fall before + 8, that
+  // fall's low byte, and bit 24 set when there is a table
+  uint meet;
 };
 Cell cellOf(int drop, uint step, int age) {
   ivec2 texel = ivec2(drop % DROPS_ACROSS, drop / DROPS_ACROSS);
@@ -34,6 +42,8 @@ Cell cellOf(int drop, uint step, int age) {
   c.drawn = true;
   uint at;
   c.since = head;
+  c.head = head;
+  c.meet = life.w;
   if (int(head) >= age) {
     at = head - uint(age);
   } else {
@@ -43,6 +53,8 @@ Cell cellOf(int drop, uint step, int age) {
     c.since = rows + head;
   }
   c.row = rows - 1u - at;
+  uint was = cycle - 1u;
+  c.drawnBefore = cycle > 0u && ((was >= life.x && was < life.y) || was >= life.z);
   c.drawn = c.drawn && ((c.fall >= life.x && c.fall < life.y) || c.fall >= life.z);
   // (as steps since its fall began, in small numbers only: Rain.stepsSince)
   int speed = int(d.y);
@@ -50,6 +62,8 @@ Cell cellOf(int drop, uint step, int age) {
   int num = 16 * ((r * speed) / 16) - 16 * int(c.since);
   int up = num >= 0 ? (num + speed - 1) / speed : -((-num) / speed);
   c.since = uint(r - up);
+  int numBefore = 16 * ((r * speed) / 16) - 16 * int(rows + head);
+  c.sinceBefore = uint(r - (numBefore >= 0 ? (numBefore + speed - 1) / speed : -((-numBefore) / speed)));
   return c;
 }
 // the spawn box's sides (models/spawnbox.ts, SpawnBox.halfWidth): x = the half width over z, y = the metres added; the box is inside the world's width (SPAN)

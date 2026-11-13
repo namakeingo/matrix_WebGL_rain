@@ -20,9 +20,12 @@
 // - A drop's fall in 32-bit integers (total, falls, landed, nextLanding): the rows fallen at a step
 //   (step / 16) x speed + (step % 16) x speed / 16 + phase, exactly step x speed / 16, as the
 //   shader.
+// - landingOf(data, i, fall, m): the first step in which drop i's fall `fall` has fallen to its last row less m rows (m = 0: the fall's landing, nextLanding's; m > 0: its head meets a
+//   surface m rows over the floor, earlier; m < 0: the surface is below the floor, later): the drop's path is the same, only the step its fall is taken to end in moves.
 // - compare(a, b): how many values of two arrays differ, and the first.
 //
 // Changelog:
+// 2026-11-12: landingOf (the step a fall ends in when its head meets the water m rows over or under the floor).
 // 2026-11-12: the spawn plane the rain gives is the spawn box's top (comment only; the layout's arithmetic is unchanged).
 // 2026-11-05: the floor (the water's, or the bottom of the screen's): layout, restartOf, headY.
 // 2026-11-04: TypeScript, a module of src/models/ (was engine/rainlayout.js).
@@ -172,6 +175,23 @@ const nextLanding = (data: ArrayLike<number>, i: number, after: number): number 
   return step;
 };
 
+// the first step in which drop i's fall `fall` has fallen to row m (rows over the floor: the head's row is rows - 1 - rowsFallen): total reaches (fall + 1) rows - 1 - m, and total is exactly
+// floor(step x speed / 16) + phase, so the step is ceil(16 (need - phase) / speed), looked at both ways for the float arithmetic
+const landingOf = (data: ArrayLike<number>, i: number, fall: number, m = 0): number => {
+  const speed = data[i * 4 + 1];
+  const rows = data[i * 4 + 3];
+  const phase = data[i * 4 + 2];
+  const need = (fall + 1) * rows - 1 - m;
+  let step = Math.max(0, Math.ceil(((need - phase) * 16) / speed));
+  while (total(data, i, step) < need) {
+    step++;
+  }
+  while (step > 0 && total(data, i, step - 1) >= need) {
+    step--;
+  }
+  return step;
+};
+
 // the first of drop i's falls whose head comes down past the top of the view (the view's top at
 // a distance: eyeHeight + distance x tan(top), top its angle above the horizon) from a step on:
 // the fall now if its head is above the view, else the next
@@ -239,6 +259,6 @@ const compare = (a: ArrayLike<number>, b: ArrayLike<number>): CompareResult => {
   return { wrong, first, a: first >= 0 ? (a[first] ?? 0) : 0, b: first >= 0 ? (b[first] ?? 0) : 0 };
 };
 
-export const RainLayout = { COUNT, CELL, SEED, SLOWEST, NONE, distanceAt, hashes, layout, restartOf, total, headY, falls, landed, nextLanding, firstFrom, compare };
+export const RainLayout = { COUNT, CELL, SEED, SLOWEST, NONE, distanceAt, hashes, layout, restartOf, total, headY, falls, landed, nextLanding, landingOf, firstFrom, compare };
 
 M.RainLayout = RainLayout;
