@@ -13,6 +13,7 @@ import type { WaterTone } from "../models/watertone";
 import type { RippleSpeed } from "../models/ripplespeed";
 import type { WaveSteps } from "../models/wavesteps";
 import type { WaveLift } from "../models/wavelift";
+import type { WaveHit } from "../models/wavehit";
 import type { WaveMax } from "../models/quality/wavemax";
 import type { WaveFuse } from "../models/quality/wavefuse";
 import type { QualityTasks } from "../models/quality/tasks";
@@ -170,6 +171,7 @@ export interface Matrix3DNamespace {
   RippleSpeed: typeof RippleSpeed;
   WaveSteps: typeof WaveSteps;
   WaveLift: typeof WaveLift;
+  WaveHit: typeof WaveHit;
   WaveMax: typeof WaveMax;
   WaveFuse: typeof WaveFuse;
   QualityTasks: typeof QualityTasks;

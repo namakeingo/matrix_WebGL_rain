@@ -31,6 +31,7 @@
 // platform/renderlink.ts.
 //
 // Changelog:
+// 2026-11-13: the water gets the waves as its wave hit's source (waveSource).
 // 2026-11-12: Support.workers and Support.sceneWorker are set to "" when the first attempt of the bolt's or the scene's worker fails or is refused (no Worker), so the readout says "Workers: no".
 // 2026-11-12: the drops, the splashes and the strikes' feet rest on the waves' live height where the waves are stepped (applyWaterState gives them waterWaves; the quality units' margin is the highest wave read back).
 // 2026-11-12: the mirrored picture larger than the view (Reflection.MARGIN): the fog read through its pixels in drawMirrored, the water's margin, the quality inputs' mirrored frustum.
@@ -56,6 +57,7 @@ import "./models/watertone";
 import "./models/ripplespeed";
 import "./models/wavesteps";
 import "./models/wavelift";
+import "./models/wavehit";
 import "./models/quality/tasks";
 import "./models/quality/jobs";
 import "./models/quality/unit";
@@ -1497,6 +1499,7 @@ export class Wallpaper implements WallpaperControl {
     this.followSpawnBox();
     this.reflection = new M.Reflection(context);
     this.water = new M.Water(context);
+    this.water.waveSource = this.waves;
     this.applyWaterState();
     this.text = new M.Text(context);
     this.text.layoutTask = this.textLayoutTask;

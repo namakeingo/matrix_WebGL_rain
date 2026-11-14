@@ -47,6 +47,8 @@ uniform bool uNoWaveShadow;
 uniform bool uNoStrikeWater;
 uniform bool uNoFilteredNormal;
 uniform bool uNoGlossyRead;
+// the wave hit's march with its gates open (every pixel, every block)
+uniform bool uForceWaveHit;
 #else
 const int uMode = MODE_SCENE;
 const bool uNoWaterLight = false;
@@ -55,7 +57,10 @@ const bool uNoWaveShadow = false;
 const bool uNoStrikeWater = false;
 const bool uNoFilteredNormal = false;
 const bool uNoGlossyRead = false;
+const bool uForceWaveHit = false;
 #endif
+// the global gate of the wave hit's march (waveHitOn: effects/water.ts): 0 off, the water as it is without the march
+uniform int uWaveHit;
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec4 outReflected;
 const int SHADOW_MOST = 256;
@@ -250,9 +255,9 @@ vec3 mirroredAt(vec2 at, vec2 major, float minor, out vec3 emitted, out vec3 sce
 // pixel across and down), taken far away (the directions projected from the eye at GLOSS_REF: on
 // flat water exactly the pixel's own step, one pixel) and, as the beam widens only along the way
 // it travels (L from the surface to the ink, or GLOSS_NOMINAL where the point read found none),
-// its excess over that step scaled by L / (L + the eye's distance to the surface). ownShaded: the water's own light for the normal n (waterOwnShaded of the sky shade
+// its excess over that step scaled by L / (L + the eye's distance to the surface). hitM: the distance from the mirrored eye to s (the base the ink's distance is taken from: hit on the plane y = 0, over a crest its own), ownShaded: the water's own light for the normal n (waterOwnShaded of the sky shade
 // at s: what a ray reflected downwards shows), computed once by the caller
-vec3 reflectedAt(vec3 s, float hit, vec3 r, vec3 n, ivec2 pixel, float lod, bool gloss, vec3 drx, vec3 dry, vec3 ownShaded, out vec3 emitted, out vec3 scene) {
+vec3 reflectedAt(vec3 s, float hit, float hitM, vec3 r, vec3 n, ivec2 pixel, float lod, bool gloss, vec3 drx, vec3 dry, vec3 ownShaded, out vec3 emitted, out vec3 scene) {
   emitted = vec3(0.0);
   scene = vec3(0.0);
   if (uTestReflection == 1) return vec3(1.0);
@@ -268,7 +273,7 @@ vec3 reflectedAt(vec3 s, float hit, vec3 r, vec3 n, ivec2 pixel, float lod, bool
 #else
     ink = FOG_FAR;
 #endif
-    vec3 q = s + max(ink - hit, 0.01) * r;
+    vec3 q = s + max(ink - hitM, 0.01) * r;
     q.y = -q.y;
     vec4 c = cViewProj * vec4(q, 1.0);
     if (c.w <= 0.0) break;
@@ -291,7 +296,7 @@ vec3 reflectedAt(vec3 s, float hit, vec3 r, vec3 n, ivec2 pixel, float lod, bool
     vec4 cx = cViewProj * vec4(cEye.xyz + vec3(rx.x, -rx.y, rx.z) * GLOSS_REF, 1.0);
     vec4 cy = cViewProj * vec4(cEye.xyz + vec3(ry.x, -ry.y, ry.z) * GLOSS_REF, 1.0);
     if (c0.w > 0.0 && cx.w > 0.0 && cy.w > 0.0) {
-      float travel = ink < FOG_FAR ? max(ink - hit, 0.05) : GLOSS_NOMINAL;
+      float travel = ink < FOG_FAR ? max(ink - hitM, 0.05) : GLOSS_NOMINAL;
       float k = travel / (travel + hit);
       vec2 p0 = c0.xy / c0.w * 0.5 * cScreen.xy;
       vec2 stepX = vec2(1.0, 0.0) + k * ((cx.xy / cx.w * 0.5 * cScreen.xy - p0) - vec2(1.0, 0.0));
@@ -377,6 +382,69 @@ vec3 strikesOnWater(vec3 s, vec3 n, float lod, float transmittance, int stride, 
   return sum * WATER_DIFFUSE / PI;
 }
 
+// the eye's ray's first crest: the ray is marched down through the waves from the plane at the highest wave to the flat hit t (inout: the flat hit in, the crest's out), the waves' surface taken as the
+// plane where they are under it and as a crest where they are over it (troughs are not followed). False: no crest, t untouched. The path is stepped uniformly in the disparity 1 / Z (Z the depth: both
+// grid axes are linear in it along a straight ray), so a coarse step is exactly span / steps cells (2 at most, below WAVEHIT_STEPS): the half blocks of behindWaves. A step is looked at (its start, its middle and its end: reads 1 cell apart,
+// the start being the last step's end when that was looked at too; the crossing found by the secant between the last place above and the first below) only where one of its two blocks' tops is over 0 and
+// the ray's height at its end is under it, a top under WAVEHIT_PX of shift at its depth counting as 0. Nothing is marched where the highest wave shifts the picture by less than that anywhere on the path.
+// the height (m) under which the ray is not under the surface: 10 um, 0.008 px at 3 m (WaveHit.shiftPx), 100 float32 steps at the eye's height; the rounding of the ray's height at the flat hit
+// (about 1e-7 m) must not read as a crest, or calm water would move its hit by a few bits
+const float WAVEHIT_EPS = 1e-5;
+const int WAVEHIT_STEPS = 32;
+const float WAVEHIT_PX = ${M.WaveHit.THRESHOLD_PX.toFixed(2)};
+bool waveHit(vec3 eye, vec3 d, inout float t) {
+  float q = -d.z;
+  if (q <= 1e-3 || d.y >= -1e-4) return false;
+  float thr = uForceWaveHit ? 0.0 : WAVEHIT_PX;
+  float top = highestWave();
+  float zc = -eye.z;
+  float ta = max((eye.y - top) / -d.y, 0.0);
+  float tb = min(t, (wGrid.y - zc) / q);
+  float za = max(zc + q * ta, wGrid.x);
+  ta = (za - zc) / q;
+  float zb = zc + q * tb;
+  if (ta >= tb || zb <= wGrid.x || top * cEye.w < thr * za) return false;
+  vec2 ga = gridAt(vec2(eye.x + ta * d.x, za));
+  vec2 gb = gridAt(vec2(eye.x + tb * d.x, zb));
+  int steps = clamp(int(ceil(0.5 * max(abs(gb.x - ga.x), abs(gb.y - ga.y)))), 1, WAVEHIT_STEPS);
+  float ua = 1.0 / za;
+  float du = (1.0 / zb - ua) / float(steps);
+  float top0 = 0.0;
+  float t0 = ta;
+  float tPrev = ta;
+  float gapPrev = 0.0;
+  bool have = false;
+  for (int j = 0; j <= steps; j++) {
+    float t1 = j == steps ? tb : j == 0 ? ta : (1.0 / (ua + du * float(j)) - zc) / q;
+    vec3 p1 = eye + t1 * d;
+    float z1 = zc + q * t1;
+    float top1 = blockTop(vec2(p1.x, z1));
+    top1 = top1 * cEye.w >= thr * z1 ? top1 : 0.0;
+    // (the ray descends: its lowest in the step is its end)
+    float topMax = max(top0, top1);
+    if (j > 0 && (uForceWaveHit || (topMax > 0.0 && p1.y - SHADOW_BIAS < topMax))) {
+      // (k 0 is the step's start, the baseline, the last step's end when that was looked at; one place of the program reads the heights)
+      for (int k = 0; k <= 2; k++) {
+        if (k == 0 && have) continue;
+        float tk = mix(t0, t1, float(k) * 0.5);
+        float gap = eye.y + tk * d.y - waveHeight(vec2(eye.x + tk * d.x, zc + q * tk));
+        if (gap < -WAVEHIT_EPS) {
+          t = k == 0 ? tk : mix(tPrev, tk, max(gapPrev / (gapPrev - gap), 0.0));
+          return true;
+        }
+        tPrev = tk;
+        gapPrev = gap;
+      }
+      have = true;
+    } else {
+      have = false;
+    }
+    top0 = top1;
+    t0 = t1;
+  }
+  return false;
+}
+
 void main() {
   vec3 d = rayOf(gl_FragCoord.xy);
   ivec2 pixel = ivec2(gl_FragCoord.xy);
@@ -410,21 +478,27 @@ void main() {
 #endif
   bool water = uMode != MODE_SKY && d.y < 0.0 && !uWaterOff;
   float hit = water ? cEye.y / -d.y : 0.0;
+  // (the wave hit: where the march finds a crest on the eye's ray, hit is the crest's distance; flatHit stays the plane's, which the pixel's footprint is measured on)
+  float flatHit = hit;
+  bool crest = water && uWaveHit != 0 && waveHit(cEye.xyz, d, hit);
   // (the distance's change over one pixel, for the Nearness view's lines: derivatives taken before any branch)
   float hitStep = fwidth(hit);
   // the water's normal (averaged over the pixel's footprint on the water: the way to the next pixel's
   // ray across and down) and the reflected direction's change a pixel across and down: derivatives
   // taken before any branch
   vec2 foot = vec2(0.0);
-  vec3 sPre = cEye.xyz + hit * d;
+  vec3 sFlat = cEye.xyz + flatHit * d;
+  vec3 sPre = crest ? cEye.xyz + hit * d : sFlat;
   if (water && !uNoFilteredNormal) {
     for (int k = 0; k < 2; k++) {
       vec3 dk = rayOf(gl_FragCoord.xy + (k == 0 ? vec2(1.0, 0.0) : vec2(0.0, 1.0)));
       if (dk.y < -1e-4) {
         vec3 sk = cEye.xyz + (cEye.y / -dk.y) * dk;
-        foot = max(foot, abs(vec2(sk.x - sPre.x, sk.z - sPre.z)));
+        foot = max(foot, abs(vec2(sk.x - sFlat.x, sk.z - sFlat.z)));
       }
     }
+    // (the footprint on the crest's nearer surface: scaled by the distance)
+    if (crest) foot *= hit / flatHit;
   }
   // the fog along the eye's ray to the water, with the strikes' light in it (the last term over the pixel: the same read, made first, as the
   // flat tolerance, the level and the cut need its transmittance)
@@ -476,6 +550,8 @@ void main() {
     }
 #endif
     vec3 n = nPre;
+    // (the distance from the eye's mirror to the crest: reflectedAt reads the ink's distance from it)
+    float hitM = crest ? length(vec3(cEye.x, -cEye.y, cEye.z) - s) : hit;
     vec3 litStill = vec3(0.0);
     int level = uFlatPx > 0.0 ? waterLevel(vec2(sPre.x, -sPre.z), foot, transmittance) : 40;
     vec3 lit = strikeCount() > 0 && !uNoStrikeWater ? strikesOnWater(s, n, lod, transmittance, shadowStride(level), litStill) : vec3(0.0);
@@ -498,7 +574,7 @@ void main() {
       vec3 em;
       vec3 scn;
       vec3 ownShaded = waterOwnShaded(shade, nn);
-      vec3 mir = reflectedAt(s, hit, reflect(d, nn), nn, pixel, lod, pass == 0 && !isFlat, drx, dry, ownShaded, em, scn);
+      vec3 mir = reflectedAt(s, hit, hitM, reflect(d, nn), nn, pixel, lod, pass == 0 && !isFlat, drx, dry, ownShaded, em, scn);
       vec3 litPass = pass == 0 ? lit : litStill;
       // (the Fresnel reflectance of the water: the Reflection strength does not scale it, the water keeps its full look)
       float fPass = min(${WATER_F0} + ${1 - WATER_F0} * pow(1.0 - max(dot(-d, nn), 0.0), 5.0), 1.0);

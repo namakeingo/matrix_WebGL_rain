@@ -42,17 +42,19 @@ vec3 waterNormalOver(vec2 xz, vec2 foot) {
   int nx = clamp(int(ceil(w.x / c.x - 0.01)), 1, 4);
   float hx = 0.0;
   float hz = 0.0;
-  // (one loop for both sums, so the height read's code is in the program once: the first nz passes sum hx, the next nx hz, each in the same order as two loops)
+  // (one loop for both sums and both sides, so the height read's code is in the program once: the passes' pairs of places in the order a, b of each, the first nz pairs sum hx,
+  // the next nx hz; the b side's height is subtracted: (hx + a) - b, within a rounding of hx + (a - b))
   int along = nz + nx;
-  for (int m = 0; m < along; m++) {
+  for (int q = 0; q < 2 * along; q++) {
+    int m = q >> 1;
     bool onX = m < nz;
     int i = onX ? m : m - nz;
     float cnt = onX ? float(nz) : float(nx);
     float o = ((float(i) + 0.5) / cnt - 0.5) * 2.0 * (onX ? w.y : w.x);
-    vec2 pa = onX ? xz + vec2(w.x, o) : xz + vec2(o, w.y);
-    vec2 pb = onX ? xz + vec2(-w.x, o) : xz + vec2(o, -w.y);
-    float dh = waveHeight(pa) - waveHeight(pb);
-    if (onX) hx += dh; else hz += dh;
+    float side = (q & 1) == 0 ? 1.0 : -1.0;
+    vec2 p = onX ? xz + vec2(side * w.x, o) : xz + vec2(o, side * w.y);
+    float h = side * waveHeight(p);
+    if (onX) hx += h; else hz += h;
   }
   hx /= float(nz) * 2.0 * w.x;
   hz /= float(nx) * 2.0 * w.y;

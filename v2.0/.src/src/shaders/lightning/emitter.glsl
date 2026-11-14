@@ -61,30 +61,45 @@ float emitterLight(int s, int r, vec3 p, vec3 normal, out vec3 vector, out vec3 
   stack[0] = root;
   int depth = 1;
   int visits = int(lCounts.y);
-  for (int v = 0; v < visits; v++) {
-    if (v >= VISITS_EACH || depth <= 0) break;
-    depth--;
-    int o = NODE_BASE + stack[depth] * NODE_TEXELS;
+  // (one loop, its one call site of the node's reads and of emitterAdd: the walk first, then what
+  // is left on its stack as from its centroids; the same visits and sums in the same order as a
+  // walk loop followed by a drain loop, which compiled as two copies of the reads)
+  bool walking = true;
+  int drain = 0;
+  for (int v = 0; v < visits + STACK; v++) {
+    if (walking && (v >= VISITS_EACH || depth <= 0 || v >= visits)) walking = false;
+    int node;
+    if (walking) {
+      depth--;
+      node = stack[depth];
+    } else {
+      if (drain >= depth || drain >= STACK) break;
+      node = stack[drain];
+      drain++;
+    }
+    int o = NODE_BASE + node * NODE_TEXELS;
     vec4 t0 = emitterTexel(s, o);
     vec4 t1 = emitterTexel(s, o + 1);
     vec4 t2 = emitterTexel(s, o + 2);
-    if (t2.w < 0.0) {
+    vec3 q;
+    float light;
+    if (walking && t2.w < 0.0) {
       // (a leaf: its chord's line light carrying its power)
-      float light = t0.w / max(length(t2.xyz - t1.xyz), 1e-4) * pieceLight(p, t1.xyz, t2.xyz);
-      emitterAdd(p, nearestOn(p, t1.xyz, t2.xyz), light, sum, vector, best, near);
-    } else if ((t1.w < THETA * length(t0.xyz - p) && (!surface || t1.w < THETA * dot(t0.xyz - p, normal))) || depth + 2 > STACK) {
-      emitterFar(p, t0, sum, vector, best, near);
+      light = t0.w / max(length(t2.xyz - t1.xyz), 1e-4) * pieceLight(p, t1.xyz, t2.xyz);
+      q = nearestOn(p, t1.xyz, t2.xyz);
+    } else if (!walking || (t1.w < THETA * length(t0.xyz - p) && (!surface || t1.w < THETA * dot(t0.xyz - p, normal))) || depth + 2 > STACK) {
+      // (a node as from its centroid, as emitterFar)
+      float d = max(length(t0.xyz - p), EMITTER_NEAREST);
+      light = t0.w / (d * d);
+      q = t0.xyz;
     } else {
       int child = int(t1.x);
       stack[depth] = child;
       stack[depth + 1] = child + 1;
       depth += 2;
+      continue;
     }
-  }
-  // (what is left on its stack: as from its centroids)
-  for (int k = 0; k < depth; k++) {
-    if (k >= STACK) break;
-    emitterFar(p, emitterTexel(s, NODE_BASE + stack[k] * NODE_TEXELS), sum, vector, best, near);
+    emitterAdd(p, q, light, sum, vector, best, near);
   }
   return sum;
 }

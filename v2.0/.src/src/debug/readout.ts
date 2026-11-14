@@ -16,6 +16,30 @@ import type { SupportReport, PerformanceReport, MouseReport, MusicReport, OledRe
 import type { FrameHealthReport } from "./debug";
 import type { EffectQuality, QualityReport, QualityPoolReport } from "../models/quality/types";
 
+// the last 60 seconds of the Performance readout's values (fps, script, GPU, quality pool), for the square brackets after each immediate value: samples [time ms, value] by key, at most
+// one every 900 ms (the report is renewed once a second, the readout may be drawn more often), those older than 60 s dropped; the mean includes the sample of this call when one was taken
+const AVERAGE_WINDOW_MS = 60000;
+const AVERAGE_EVERY_MS = 900;
+const averageSamples = new Map<string, [number, number][]>();
+function averageOf(key: string, value: number, nowMs: number): number {
+  let list = averageSamples.get(key);
+  if (!list) {
+    list = [];
+    averageSamples.set(key, list);
+  }
+  if (list.length === 0 || nowMs - list[list.length - 1]![0] >= AVERAGE_EVERY_MS) {
+    list.push([nowMs, value]);
+  }
+  while (list.length > 1 && list[0]![0] <= nowMs - AVERAGE_WINDOW_MS) {
+    list.shift();
+  }
+  let sum = 0;
+  for (const sample of list) {
+    sum += sample[1];
+  }
+  return sum / list.length;
+}
+
 export class SupportReadout {
   written: { text: string | null; display: string | null; panel: string | null };
   shown: boolean;
@@ -58,18 +82,23 @@ export class SupportReadout {
     return lines;
   }
 
+  // forgets the averages' samples (for the tests)
+  static resetAverages() {
+    averageSamples.clear();
+  }
+
   // Debug mode's Performance readout: the frames a second (their limit), the frame's script and
   // GPU time, the scene's size and counts, the frames' health
-  static performanceLines(p: PerformanceReport): string[] {
+  static performanceLines(p: PerformanceReport, nowMs: number = performance.now()): string[] {
     const limit = `limit ${p.limit}: Frame cap ${p.frameCap}, Wallpaper Engine's FPS ${p.wallpaperFps > 0 ? p.wallpaperFps : "-"}`;
     return [
-      `Performance: ${p.fps.toFixed(1)} fps (${limit})${p.frozen ? `, frozen ${p.frozenFor} s` : ""}`,
-      `  script ${p.scriptMs.toFixed(2)} ms a frame`,
-      p.timer && p.gpuMs !== null ? `  GPU ${p.gpuMs.toFixed(2)} ms a frame (the GPU guard's timer queries)` : `  GPU: not measured (${p.timer ? "no pass timed yet" : "no timer queries"})`,
+      `Performance: ${p.fps.toFixed(1)} fps [${averageOf("fps", p.fps, nowMs).toFixed(1)}] (${limit})${p.frozen ? `, frozen ${p.frozenFor} s` : ""}`,
+      `  script ${p.scriptMs.toFixed(2)} ms a frame [${averageOf("script", p.scriptMs, nowMs).toFixed(2)}]`,
+      p.timer && p.gpuMs !== null ? `  GPU ${p.gpuMs.toFixed(2)} ms a frame [${averageOf("gpu", p.gpuMs, nowMs).toFixed(2)}] (the GPU guard's timer queries)` : `  GPU: not measured (${p.timer ? "no pass timed yet" : "no timer queries"})`,
       `  screen ${p.width} x ${p.height}, drops ${p.drops} falling, splashes ${p.splashes}, strikes ${p.strikes}`,
       SupportReadout.framesLine(p.frames),
       SupportReadout.latencyLine(p.frames),
-      ...SupportReadout.qualityLines(p.quality),
+      ...SupportReadout.qualityLines(p.quality, nowMs),
       ...(p.mouse ? [SupportReadout.mouseLine(p.mouse)] : []),
     ];
   }
@@ -87,7 +116,7 @@ export class SupportReadout {
 
   // the effects' quality: a line for each effect class and one for the quality pool, never one for each instance
   // (null or missing: not counted yet)
-  static qualityLines(q: QualityReport | null | undefined): string[] {
+  static qualityLines(q: QualityReport | null | undefined, nowMs: number = performance.now()): string[] {
     if (!q) {
       return ["  Quality: counted once the wallpaper has loaded"];
     }
@@ -99,7 +128,7 @@ export class SupportReadout {
     if (p.mode === "none") {
       lines.push("  Quality pool: none (the quality is not computed in workers yet)");
     } else {
-      lines.push(`  Quality pool: ${p.workers} ${p.workers === 1 ? "worker" : "workers"}, ${p.ms.toFixed(2)} ms${p.waitedMs > 0 ? `, waited ${p.waitedMs.toFixed(2)} ms` : ""}${p.late > 0 ? `, ${p.late} late` : ""}${p.restarts ? `, ${p.restarts} ${p.restarts === 1 ? "restart" : "restarts"}` : ""}`);
+      lines.push(`  Quality pool: ${p.workers} ${p.workers === 1 ? "worker" : "workers"}, ${p.ms.toFixed(2)} ms [${averageOf("pool", p.ms, nowMs).toFixed(2)}]${p.waitedMs > 0 ? `, waited ${p.waitedMs.toFixed(2)} ms` : ""}${p.late > 0 ? `, ${p.late} late` : ""}${p.restarts ? `, ${p.restarts} ${p.restarts === 1 ? "restart" : "restarts"}` : ""}`);
     }
     return lines;
   }
