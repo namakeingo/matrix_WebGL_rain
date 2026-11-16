@@ -83,6 +83,7 @@
 //   characters (their items are made cut by view) and the mask's clears are as before.
 //
 // Changelog:
+// 2026-11-15: crestHide and the uCrest sampler: the characters drawn after the water's pass are hidden behind a crest; the cover pass writes zero to the crest attachment; warmScene.
 // 2026-11-12: the foot of a strike (the lines' point at y = 0) rests on the water's live height at its place (uWaterWaves, waterWaves; shaders/bolt/foot.glsl, shaders/waves/lift.glsl), in the bands' and the characters' vertex shaders.
 // 2026-11-12: 3D Symbols (uSymbols3d, symbols3d): the characters' ink read at the relief's parallax uv (the depth offset only: no light), in the characters' fragment shader and the mask's.
 // 2026-11-12: the items are culled against the mirrored picture's larger frustum (itemsView).
@@ -329,12 +330,17 @@ export class Bolt extends M.Effect {
   warmed: boolean;
   warmItem: Float32Array<ArrayBuffer>;
   warmPair: RenderTarget;
+  // the cover pass's warm-up picture: as many attachments as the scene picture it covers (the third is the crest picture, see Exposure)
+  warmScene: RenderTarget;
   warmMask: RenderTarget;
   glyphTexture: WebGLTexture;
   segmentTexture: WebGLTexture;
   none: Float32Array<ArrayBuffer>;
   mask: RenderTarget;
   covers: boolean;
+  // whether the crest picture hides the characters behind a crest this frame (set by src/index.ts: the water's wave hit is on and its picture drawn). Only the characters drawn after the
+  // water's pass can use it: the lines' and the characters' masks are drawn before it (the water reads them), so they are never hidden
+  crestHide: boolean;
   lit: boolean;
   tinted: boolean;
   white: Float32Array<ArrayBuffer>;
@@ -390,6 +396,7 @@ export class Bolt extends M.Effect {
     this.tinted = false;
     this.lit = false;
     this.covers = false;
+    this.crestHide = false;
     // the shapes' light (see the mask pass), their opacities and their nearness, one sample a
     // pixel
     const sums = this.caps.floats ? gl.RGBA16F : gl.RGBA8;
@@ -401,6 +408,7 @@ export class Bolt extends M.Effect {
     // mask's of its formats)
     this.warmMask = this.target({ formats: [sums, gl.RGBA8, sums] });
     this.warmPair = this.target({ formats: [gl.RGBA8, gl.RGBA8] });
+    this.warmScene = this.target({ formats: [gl.RGBA8, gl.RGBA8, gl.RGBA8] });
     this.warmItem = new Float32Array(Math.max(SEGMENT_FLOATS, GLYPH_FLOATS));
     this.warmed = false;
     this.itemsVersion = 0;
@@ -509,10 +517,10 @@ export class Bolt extends M.Effect {
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
     this.glyphArray = this.vertexArray([{ buffer: this.glyphBuffer, attribute: "aDrop", size: 1, integer: true }]);
     for (const band of [this.band, this.distance]) {
-      band.samplers(Object.assign({ uSegments: M.UNITS.boltSegments, uWaves: M.UNITS.waves, uWaveMax: M.UNITS.waveMax }, fog));
+      band.samplers(Object.assign({ uSegments: M.UNITS.boltSegments, uWaves: M.UNITS.waves, uWaveMax: M.UNITS.waveMax, uCrest: M.UNITS.crest }, fog));
     }
     for (const glyph of [this.glyph, this.glyphMask]) {
-      glyph.samplers(Object.assign({ uBoltGlyphs: M.UNITS.boltGlyphs, uAtlas: M.UNITS.atlas, uWaves: M.UNITS.waves, uWaveMax: M.UNITS.waveMax }, fog));
+      glyph.samplers(Object.assign({ uBoltGlyphs: M.UNITS.boltGlyphs, uAtlas: M.UNITS.atlas, uWaves: M.UNITS.waves, uWaveMax: M.UNITS.waveMax, uCrest: M.UNITS.crest }, fog));
     }
   }
 
@@ -1054,6 +1062,7 @@ export class Bolt extends M.Effect {
     this.warmed = true;
     this.warmMask.resize(1, 1);
     this.warmPair.resize(1, 1);
+    this.warmScene.resize(1, 1);
     this.warmItem.fill(0);
     gl.activeTexture(gl.TEXTURE0 + M.UNITS.boltSegments);
     gl.bindTexture(gl.TEXTURE_2D, this.segmentTexture);
@@ -1072,6 +1081,7 @@ export class Bolt extends M.Effect {
     gl.bindTexture(gl.TEXTURE_2D, this.mask.texture);
     this.quad.drawFull();
     gl.bindTexture(gl.TEXTURE_2D, null);
+    this.warmScene.bind();
     this.cover.use();
     this.quad.drawFull();
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -1100,6 +1110,8 @@ export class Bolt extends M.Effect {
     const characters = program === this.glyph || program === this.glyphMask;
     gl.uniform3fv(u.uColor, this.white);
     gl.uniform1f(u.uMirror, mirror ? -1 : 1);
+    // (only the characters drawn after the water's pass: see crestHide)
+    gl.uniform1i(u.uCrestHide, this.crestHide && !mirror && program === this.glyph ? 1 : 0);
     gl.uniform1f(u.uWaterWaves, this.waterWaves ? 1 : 0);
     gl.uniform4fv(u.uMainLight, this.mainLight);
     gl.uniform4fv(u.uBranchLight, this.branchLight);
@@ -1277,7 +1289,7 @@ Bolt.bandVertex = (glsl) => fill(BAND_VERTEX_SOURCE, { "M.Camera.GLSL": M.Camera
 // other line), its opacity (uCovers: COVER x the profile x min(1, its radiance / COVER_LIGHT); R
 // direct, B mirrored) and its nearness (R direct, G mirrored); else (the reflection's distance)
 // no light, the distance of its line (within half its size) as the second output
-Bolt.bandFragment = (glsl, mask) => fill(BAND_FRAGMENT_SOURCE, { "M.Camera.GLSL": M.Camera.GLSL, "glsl.waves": glsl.waves, "PROFILE_GLSL": PROFILE_GLSL, "nearOutput": mask ? NEAR_OUTPUT_SOURCE : "", "COVER.toFixed(4)": COVER.toFixed(4), "COVER_LIGHT.toFixed(4)": COVER_LIGHT.toFixed(4), "NEAR_SCALE.toFixed(1)": NEAR_SCALE.toFixed(1), "BAND_PER_SIZE.toFixed(6)": BAND_PER_SIZE.toFixed(6), "SHAPE_MOST.toFixed(4)": SHAPE_MOST.toFixed(4), "mask ? 1 : 0": mask ? 1 : 0 });
+Bolt.bandFragment = (glsl, mask) => fill(BAND_FRAGMENT_SOURCE, { "M.Camera.GLSL": M.Camera.GLSL, "glsl.waves": glsl.waves, "glsl.crest": glsl.crest, "PROFILE_GLSL": PROFILE_GLSL, "nearOutput": mask ? NEAR_OUTPUT_SOURCE : "", "COVER.toFixed(4)": COVER.toFixed(4), "COVER_LIGHT.toFixed(4)": COVER_LIGHT.toFixed(4), "NEAR_SCALE.toFixed(1)": NEAR_SCALE.toFixed(1), "BAND_PER_SIZE.toFixed(6)": BAND_PER_SIZE.toFixed(6), "SHAPE_MOST.toFixed(4)": SHAPE_MOST.toFixed(4), "mask ? 1 : 0": mask ? 1 : 0 });
 
 // the lightning's light: the combined shape x the light it carries
 // (direct, or mirrored), white or TINT, under the characters' ink (uInked: 1 - the ink's
@@ -1292,7 +1304,7 @@ Bolt.coverFragment = (glsl) => fill(COVER_FRAGMENT_SOURCE, { "M.Camera.GLSL": M.
 
 // a character's ink into the mask: its opacity (its ink x min(1, its radiance / COVER_LIGHT); G
 // direct, A mirrored) and its nearness (R direct, G mirrored); no light; nothing under the water
-Bolt.glyphMaskFragment = (glsl) => fill(GLYPH_MASK_FRAGMENT_SOURCE, { "M.Camera.GLSL": M.Camera.GLSL, "glsl.waves": glsl.waves, "M.GlyphAtlas.RELIEF_GLSL": M.GlyphAtlas.RELIEF_GLSL, "NEAR_SCALE.toFixed(1)": NEAR_SCALE.toFixed(1) });
+Bolt.glyphMaskFragment = (glsl) => fill(GLYPH_MASK_FRAGMENT_SOURCE, { "M.Camera.GLSL": M.Camera.GLSL, "glsl.waves": glsl.waves, "glsl.crest": glsl.crest, "M.GlyphAtlas.RELIEF_GLSL": M.GlyphAtlas.RELIEF_GLSL, "NEAR_SCALE.toFixed(1)": NEAR_SCALE.toFixed(1) });
 
 // a character of Characters lightning: its place (its point, size, seed at rest, radiance for
 // full ink, kind and slot, the joint before the next place, the next place and its rate) read by

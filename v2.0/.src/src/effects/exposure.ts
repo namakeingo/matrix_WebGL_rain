@@ -11,6 +11,8 @@
 // from both;
 // the light it moves, Bloom.GLSL's bloomMoved, added); the tests' views as they are (linear,
 // clamped, without the bloom).
+// Its third attachment, the crest picture (see Water, models/crest.ts), is drawn into by every water pass and read by the glyph programs of the same frame (they hide what lies behind a crest);
+// like the second it is always drawn into, so the draw buffers never change.
 // Once shown, the pictures' contents are let go (invalidateFramebuffer). The sky, water and fog's
 // picture is not cleared when the water's pass covers it all (every frame but the tests' views).
 // Its second attachment is always drawn into (its draw buffer never NONE: through ANGLE's Direct3D
@@ -23,6 +25,7 @@
 // scene's x - shiftX, the column it uncovers black.
 //
 // Changelog:
+// 2026-11-15: the scene picture's third attachment, the crest picture (R32F: the eye's distance to the crest each pixel shows; bindCrest, unbindCrest).
 // 2026-11-04: TypeScript, a module of src/effects/ (was effects/exposure.js).
 // 2026-11-04: shiftX, the scene's OLED shift where it is shown.
 // 2026-11-05: gain, the Exposure setting (was a constant 1).
@@ -65,6 +68,8 @@ export class Exposure extends M.Effect {
   resolved: boolean;
   none: Float32Array;
   black: Float32Array;
+  // the crest picture's clear value: no crest (M.CrestHide.FAR)
+  far: Float32Array;
   glyphs: MultisampleTarget;
   scene: RenderTarget;
   constructor(context: EffectContext) {
@@ -72,10 +77,13 @@ export class Exposure extends M.Effect {
     const gl = this.gl;
     const format = this.caps.floats ? gl.RGBA16F : gl.RGBA8;
     // (its light, and the emitters' light in it: see Water)
-    this.scene = this.target({ formats: [format, format] });
+    // (the third: the crest picture, the eye's distance to the crest each pixel shows, M.CrestHide.FAR where none: see Water; one float a pixel where floats can be drawn into, else
+    // a byte picture the water pass writes and nothing reads, as the wave hit is off then)
+    this.scene = this.target({ formats: [format, format, this.caps.floats ? gl.R32F : gl.RGBA8] });
     this.glyphs = this.multisampleTarget({ format, samples: SAMPLES });
     this.black = new Float32Array([0, 0, 0, 1]);
     this.none = new Float32Array([0, 0, 0, 0]);
+    this.far = new Float32Array([M.CrestHide.FAR, 0, 0, 0]);
     // whether the characters' picture is resolved this frame; whether the last frame made a bloom
     // (the second attachment then the bloom's to read: set by begin)
     this.resolved = false;
@@ -190,7 +198,21 @@ export class Exposure extends M.Effect {
     if (!covered) {
       gl.clearBufferfv(gl.COLOR, 0, this.black);
       gl.clearBufferfv(gl.COLOR, 1, this.none);
+      gl.clearBufferfv(gl.COLOR, 2, this.far);
     }
+  }
+
+  // the crest picture on its unit, for the glyph programs of the frame (from the water's pass to the last characters), and off it again before the next frame's water pass draws into it
+  bindCrest() {
+    const gl = this.gl;
+    gl.activeTexture(gl.TEXTURE0 + M.UNITS.crest);
+    gl.bindTexture(gl.TEXTURE_2D, this.scene.textures[2]);
+  }
+
+  unbindCrest() {
+    const gl = this.gl;
+    gl.activeTexture(gl.TEXTURE0 + M.UNITS.crest);
+    gl.bindTexture(gl.TEXTURE_2D, null);
   }
 
   // the characters are drawn into theirs from here

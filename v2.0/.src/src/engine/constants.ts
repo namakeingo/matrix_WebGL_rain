@@ -60,6 +60,11 @@ export const UNITS = {
   // and mirrored) and the nearness of what covers (1 / its distance), read by what lies behind
   boltCover: 30,
   boltNear: 31,
+  // the crest picture (the scene picture's third attachment: the eye's distance to the crest each pixel shows, read by the glyph programs to hide what lies behind a crest), read only while
+  // the wave hit's march is on. A context may have no more than the 32 units WebGL 2.0 guarantees (MAX_COMBINED_TEXTURE_IMAGE_UNITS), and all 32 are taken, so it shares the unit of
+  // reflectionDistance: that picture is read only by the water's pass and let go (Reflection.done) before the crest picture is bound for the glyph passes (index.ts), and no glyph program
+  // declares a sampler on it
+  crest: 6,
 };
 
 export type TextureUnit = keyof typeof UNITS;

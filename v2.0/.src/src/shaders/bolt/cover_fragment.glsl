@@ -9,6 +9,8 @@ uniform highp sampler2D uBoltNear;
 uniform bool uInFront;
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec4 outReflected;
+// the scene picture's third attachment (the crest picture, which the glyph passes after this one read) is an enabled draw buffer: blended with (ONE, ONE_MINUS_SRC_ALPHA) a zero leaves it as it is
+layout(location = 2) out vec4 outCrest;
 const float NEAR_SCALE = ${NEAR_SCALE.toFixed(1)};
 const float COVER = ${COVER.toFixed(4)};
 void main() {
@@ -25,4 +27,5 @@ void main() {
   }
   outColor = vec4(cover * front, cover);
   outReflected = vec4(cover * strike, cover);
+  outCrest = vec4(0.0);
 }

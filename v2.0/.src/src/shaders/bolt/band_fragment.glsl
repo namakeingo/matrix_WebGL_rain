@@ -7,6 +7,7 @@ uniform float uMirror;
 uniform bool uCovers;
 ${M.Camera.GLSL}
 ${glsl.waves}
+${glsl.crest}
 ${PROFILE_GLSL}
 in vec3 vWorld;
 in float vFog;
@@ -62,7 +63,8 @@ void main() {
   // corner, which lies off the line by up to its reach)
   vec3 at = mix(vA, vB, clamp(near.y, 0.0, 1.0));
   float height = abs(at.y);
-  if (vLight <= 0.0 || (height < highestWave() && height < waveHeight(vec2(at.x, -at.z)))) discard;
+  // (and behind the crest the water shows at this pixel: only the main pass, only while the wave hit's march is on; one discard, the existing test first)
+  if (vLight <= 0.0 || (height < highestWave() && height < waveHeight(vec2(at.x, -at.z))) || (uCrestHide && uMirror >= 0.0 && behindCrest(at))) discard;
   float r = near.x / vSize;
   float seen = vLight * vFog;
   vec3 bell = bellOf(vPixels);

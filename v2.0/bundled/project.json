@@ -1565,8 +1565,8 @@
 	"ratingviolence" : "none",
 	"tags" : [ "Abstract" ],
 	"title" : "Matrix 3D Rain WebGL 2.0",
-	"type" : "web",
-	"version" : 5,
+	"type" : "Web",
+	"version" : 6,
 	"visibility" : "public",
 	"workshopid" : "3837678671",
 	"workshopurl" : "steam://url/CommunityFilePage/3837678671"

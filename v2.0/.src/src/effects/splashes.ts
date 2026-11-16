@@ -45,6 +45,7 @@
 // is read by the water). With lod false the floor is 0 and the draw is as without it.
 //
 // Changelog:
+// 2026-11-15: crestHide and the uCrest sampler: a splash behind a crest is discarded in the direct pass.
 // 2026-11-12: a splash starts at the water's live height at its launch place and lands there (uWaterWaves, waterWaves; shaders/waves/lift.glsl); placeAt takes the lift.
 // 2026-11-12: the glyphs' lights (the shade at the glyph and the strikes' light the fog gives, passed to the lit fragment shader: LIGHT_VERTEX_GLSL, uShade) and 3D Symbols (uSymbols3d, symbols3d).
 // 2026-11-11: the queued reset's flag (resetQueued) is cleared when the frame's payload is consumed, also when the tick or the task's answer fails (it stayed set).
@@ -170,6 +171,8 @@ export class Splashes extends M.Effect {
   // a reset queued for the tick and not yet applied (the simulation still holds the splashes it clears)
   resetQueued: boolean;
   covered: boolean;
+  // whether the crest picture hides what lies behind a crest this frame: the water's wave hit is on and its picture was drawn (set by src/index.ts); the mirrored draw is never hidden
+  crestHide: boolean;
   // 3D Symbols: the stamps' relief (the shader's uSymbols3d)
   symbols3d: boolean;
   // whether the water shows waves (Collision plane and Ripples on): a splash starts and lands at the wave's height under its launch place only then (uWaterWaves)
@@ -225,6 +228,7 @@ export class Splashes extends M.Effect {
     this.litNormal = new Float32Array(4);
     // whether the bolt covers what lies behind it this frame (Characters lightning: set by src/index.ts)
     this.covered = false;
+    this.crestHide = false;
     this.symbols3d = true;
     this.waterWaves = true;
     this.slotList = new Uint32Array(2 * MOST);
@@ -325,6 +329,7 @@ export class Splashes extends M.Effect {
       uWaveMax: M.UNITS.waveMax,
       uBoltCover: M.UNITS.boltCover,
       uBoltNear: M.UNITS.boltNear,
+      uCrest: M.UNITS.crest,
     });
     // (an integer attribute's own current value: the draw without the list reads it)
     this.gl.vertexAttribI4ui(M.ATTRIBUTES.aDrop, 0, 0, 0, 0);
@@ -705,6 +710,7 @@ export class Splashes extends M.Effect {
     gl.uniform1f(u.uMirror, mirror ? -1 : 1);
     gl.uniform1f(u.uWaterWaves, this.waterWaves ? 1 : 0);
     gl.uniform1i(u.uCovered, this.covered ? 1 : 0);
+    gl.uniform1i(u.uCrestHide, this.crestHide && !mirror ? 1 : 0);
     gl.uniform1i(u.uSymbols3d, this.symbols3d ? 1 : 0);
     M.GlyphAtlas.setNearness(gl, u, mirror ? null : this.nearness);
     gl.activeTexture(gl.TEXTURE0 + M.UNITS.work);

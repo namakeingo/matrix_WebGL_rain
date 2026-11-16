@@ -72,7 +72,7 @@ export class GlyphAtlas {
   static setNearness: (gl: WebGL2RenderingContext, u: Uniforms, nearFar: ArrayLike<number> | null) => void;
   static VERTEX_GLSL: string;
   static HEAD: number;
-  static fragment: (glsl: { waves: string; fog?: string }, test: boolean, vertexColor?: boolean, covered?: boolean, lit?: boolean) => string;
+  static fragment: (glsl: { waves: string; fog?: string; crest: string }, test: boolean, vertexColor?: boolean, covered?: boolean, lit?: boolean) => string;
   static RELIEF_GLSL: string;
   static LIGHT_VERTEX_GLSL: string;
   static NEAR_SCALE: number;
@@ -253,7 +253,7 @@ GlyphAtlas.COVER_BEHIND = COVER_BEHIND;
 // vertex shader (vertexColor: vColor, each drop's and splash's own) or a uniform (uColor);
 // covered: dimmed where the bolt covers them (see above); lit (the rain's and the splashes': glsl.fog given too): one term of the sky's, the moon's and the strikes' light the
 // glyph reflects added to its emission
-GlyphAtlas.fragment = (glsl, test, vertexColor, covered, lit) => fill(FRAGMENT_SOURCE, { "TEST_VIEWS": test ? "#define TEST_VIEWS" : "", "COVERED": covered ? "#define COVERED" : "", "LIT": lit ? "#define LIT" : "", "glsl.fog": lit ? glsl.fog! : "", "RELIEF_GLSL": GlyphAtlas.RELIEF_GLSL, "color": vertexColor ? COLOR_VERTEX_SOURCE : COLOR_UNIFORM_SOURCE, "M.Camera.GLSL": M.Camera.GLSL, "glsl.waves": glsl.waves, "M.Nearness.GLSL": M.Nearness.GLSL, "HEAD_GAIN.toFixed(1)": HEAD_GAIN.toFixed(1), "NEAR_SCALE.toFixed(1)": NEAR_SCALE.toFixed(1), "COVER_BEHIND.toFixed(3)": COVER_BEHIND.toFixed(3), "(covered ? M.Bolt.COVER : 0).toFixed(4)": (covered ? M.Bolt.COVER : 0).toFixed(4) });
+GlyphAtlas.fragment = (glsl, test, vertexColor, covered, lit) => fill(FRAGMENT_SOURCE, { "TEST_VIEWS": test ? "#define TEST_VIEWS" : "", "COVERED": covered ? "#define COVERED" : "", "LIT": lit ? "#define LIT" : "", "glsl.fog": lit ? glsl.fog! : "", "RELIEF_GLSL": GlyphAtlas.RELIEF_GLSL, "color": vertexColor ? COLOR_VERTEX_SOURCE : COLOR_UNIFORM_SOURCE, "M.Camera.GLSL": M.Camera.GLSL, "glsl.waves": glsl.waves, "glsl.crest": glsl.crest, "M.Nearness.GLSL": M.Nearness.GLSL, "HEAD_GAIN.toFixed(1)": HEAD_GAIN.toFixed(1), "NEAR_SCALE.toFixed(1)": NEAR_SCALE.toFixed(1), "COVER_BEHIND.toFixed(3)": COVER_BEHIND.toFixed(3), "(covered ? M.Bolt.COVER : 0).toFixed(4)": (covered ? M.Bolt.COVER : 0).toFixed(4) });
 
 // the relief's GLSL (3D Symbols: the twin of models/glyphrelief.ts, with its constants; after the atlas sampler, uMirror and the camera block), in the characters' fragment shader and
 // the bolt's mask's

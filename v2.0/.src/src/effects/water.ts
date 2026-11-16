@@ -85,6 +85,8 @@
 //   M.TEST noWaveHit forces it off and forceWaveHit on, its gates open (uForceWaveHit).
 //
 // Changelog:
+// 2026-11-15: the third output outCrest (the crest picture: the eye's distance to the crest, M.CrestHide.FAR where none), also in the sky-only variant.
+// 2026-11-14: the tests' waveHeight view (Water.MODES, uProbe): waveHeight read at a sweep of grid places, edges and outside included.
 // 2026-11-13: the wave hit (waveHitOn, uWaveHit, noWaveHit, forceWaveHit, waveSource, nearestWater).
 // 2026-11-12: the tests' displacement views (testReflection "displacementX" and "displacementY": the lookup's shift from the pixel's own place).
 // 2026-11-12: uMirrorMargin: the mirrored picture's margin past the view (the lookup, the glossy taps and the distance read map into the larger picture).
@@ -132,6 +134,8 @@ interface WaterTest {
   fogDistance: number;
   viewScale: number;
   marched: boolean;
+  // the waveHeight view's sweep: [first cell across, step, first cell down, step]
+  probe: number[];
 }
 
 export class Water extends M.Effect {
@@ -158,6 +162,8 @@ export class Water extends M.Effect {
   // (the wave hit's march forced off / on with its gates open)
   noWaveHit!: boolean;
   forceWaveHit!: boolean;
+  // (the crest hiding of the glyph programs forced off: uCrestHide false in every one, src/index.ts)
+  noCrestHide!: boolean;
   // the waves, for the highest wave read back (src/index.ts), and whether the global gate switched the wave hit's march on for the last frame
   waveSource: { highest: number } | null;
   waveHitOn: boolean;
@@ -238,6 +244,7 @@ export class Water extends M.Effect {
       this.noGlossyRead = false;
       this.noWaveHit = false;
       this.forceWaveHit = false;
+      this.noCrestHide = false;
       this.bandsDrawn = { sky: 0, full: 0, skyRows: 0 };
     }
   }
@@ -403,6 +410,7 @@ export class Water extends M.Effect {
       gl.uniform1f(u.uFogDistance, test.fogDistance);
       gl.uniform1f(u.uViewScale, test.viewScale);
       gl.uniform1i(u.uMarched, test.marched ? 1 : 0);
+      gl.uniform4f(u.uProbe, test.probe[0], test.probe[1], test.probe[2], test.probe[3]);
       gl.uniform1i(u.uNoWaveShadow, this.noWaveShadow ? 1 : 0);
       gl.uniform1i(u.uNoStrikeWater, this.noStrikeWater ? 1 : 0);
       gl.uniform1i(u.uNoFilteredNormal, this.noFilteredNormal ? 1 : 0);
@@ -451,16 +459,18 @@ export class Water extends M.Effect {
 // the strikes' light on the water alone, the moon's glint alone (times viewScale)
 // (times viewScale), the sky and fog alone, the light the water reflects diffusely alone (times viewScale); and
 // the fog to fogDistance from its volume and marched along the pixel's ray: what it lets
-// through, its light (times viewScale), and what it lets through mirrored (below the horizon)
+// through, its light (times viewScale), and what it lets through mirrored (below the horizon); and waveHeight: the
+// waves' height (waves.glsl waveHeight) at the grid places uProbe sweeps (pixel x, y of the bottom-left corner: cell
+// probe[0] + x probe[1] across, probe[2] + y probe[3] down), as a 24-bit code of (height + 0.5 m) in the red, green and blue bytes
 Water.MODES = {
   scene: 0, waterMask: 1, waterDistance: 2, reflection: 3, reflectionPicture: 4, waterLight: 5, sky: 6, waterOwn: 7,
-  fogT: 8, fogTMarch: 9, fogLight: 10, fogLightMarch: 11, mirrorFogT: 12, mirrorFogTMarch: 13, waterGlint: 14,
+  fogT: 8, fogTMarch: 9, fogLight: 10, fogLightMarch: 11, mirrorFogT: 12, mirrorFogTMarch: 13, waterGlint: 14, waveHeight: 15,
 };
 
 // the sky-only program (see the header): the water's source with the water's parts taken away, over the camera's and the fog's code
-Water.skyFragment = (glsl) => fill(SKY_FRAGMENT_SOURCE, { "M.Camera.GLSL": M.Camera.GLSL, "glsl.fog": glsl.fog });
+Water.skyFragment = (glsl) => fill(SKY_FRAGMENT_SOURCE, { "M.Camera.GLSL": M.Camera.GLSL, "glsl.fog": glsl.fog, "M.CrestHide.FAR.toFixed(1)": M.CrestHide.FAR.toFixed(1) });
 
-Water.fragment = (glsl, test, floats) => fill(FRAGMENT_SOURCE, { "TEST_VIEWS": test ? "#define TEST_VIEWS" : "", "FLOAT_PICTURES": floats ? "#define FLOAT_PICTURES" : "", "M.Camera.GLSL": M.Camera.GLSL, "glsl.fog": glsl.fog, "glsl.medium": glsl.medium, "glsl.shade": glsl.shade, "glsl.test": glsl.test, "glsl.lightning": glsl.lightning, "march": test ? glsl.march : "", "glsl.waves": glsl.waves, "modes": Object.entries(Water.MODES).map(([name, value]) => fill(MODE_SOURCE, { "NAME": name.toUpperCase(), "value": value })).join("\n"), "M.Nearness.GLSL": M.Nearness.GLSL, "M.GlyphAtlas.NEAR_SCALE.toFixed(1)": M.GlyphAtlas.NEAR_SCALE.toFixed(1), "Water.GRID_GLSL": Water.GRID_GLSL, "M.Bolt.COVER.toFixed(4)": M.Bolt.COVER.toFixed(4), 'WATER_ALBEDO.map((v) => v.toFixed(2)).join(", ")': WATER_ALBEDO.map((v) => v.toFixed(2)).join(", "), "WATER_DIFFUSE": WATER_DIFFUSE, "WATER_F0": WATER_F0, "1 - WATER_F0": 1 - WATER_F0, "FOOTPRINT_FULL_PX": QualityUnit.FOOTPRINT_FULL_PX.toFixed(1), "STRIDE_1": QualityWaves.STRIDE_LEVELS[0], "STRIDE_2": QualityWaves.STRIDE_LEVELS[1], "STRIDE_4": QualityWaves.STRIDE_LEVELS[2], "STRIKE_CUT": (QualityWaves.LIGHT_TOL / QualityWaves.STRIKES_MOST).toExponential(6), "FOG_CUT": QualityWaves.CUT_T.toExponential(6), "M.WaveHit.THRESHOLD_PX.toFixed(2)": M.WaveHit.THRESHOLD_PX.toFixed(2) });
+Water.fragment = (glsl, test, floats) => fill(FRAGMENT_SOURCE, { "TEST_VIEWS": test ? "#define TEST_VIEWS" : "", "FLOAT_PICTURES": floats ? "#define FLOAT_PICTURES" : "", "M.Camera.GLSL": M.Camera.GLSL, "glsl.fog": glsl.fog, "glsl.medium": glsl.medium, "glsl.shade": glsl.shade, "glsl.test": glsl.test, "glsl.lightning": glsl.lightning, "march": test ? glsl.march : "", "glsl.waves": glsl.waves, "modes": Object.entries(Water.MODES).map(([name, value]) => fill(MODE_SOURCE, { "NAME": name.toUpperCase(), "value": value })).join("\n"), "M.Nearness.GLSL": M.Nearness.GLSL, "M.GlyphAtlas.NEAR_SCALE.toFixed(1)": M.GlyphAtlas.NEAR_SCALE.toFixed(1), "Water.GRID_GLSL": Water.GRID_GLSL, "M.Bolt.COVER.toFixed(4)": M.Bolt.COVER.toFixed(4), 'WATER_ALBEDO.map((v) => v.toFixed(2)).join(", ")': WATER_ALBEDO.map((v) => v.toFixed(2)).join(", "), "WATER_DIFFUSE": WATER_DIFFUSE, "WATER_F0": WATER_F0, "1 - WATER_F0": 1 - WATER_F0, "FOOTPRINT_FULL_PX": QualityUnit.FOOTPRINT_FULL_PX.toFixed(1), "STRIDE_1": QualityWaves.STRIDE_LEVELS[0], "STRIDE_2": QualityWaves.STRIDE_LEVELS[1], "STRIDE_4": QualityWaves.STRIDE_LEVELS[2], "STRIKE_CUT": (QualityWaves.LIGHT_TOL / QualityWaves.STRIKES_MOST).toExponential(6), "FOG_CUT": QualityWaves.CUT_T.toExponential(6), "M.WaveHit.THRESHOLD_PX.toFixed(2)": M.WaveHit.THRESHOLD_PX.toFixed(2), "M.CrestHide.FAR.toFixed(1)": M.CrestHide.FAR.toFixed(1) });
 
 // the grid on the water: its cells, nearest and furthest distance, scale, and a place's grid
 // coordinates (0 to 1 each way, the cells' middles at (i + 0.5) / cells: x / distance across the

@@ -31,6 +31,7 @@
 // platform/renderlink.ts.
 //
 // Changelog:
+// 2026-11-15: the crest picture (the scene picture's third attachment) bound after the water's pass and given to the rain, the splashes and the bolt's characters (crestHide: the wave hit's gate).
 // 2026-11-13: the water gets the waves as its wave hit's source (waveSource).
 // 2026-11-12: Support.workers and Support.sceneWorker are set to "" when the first attempt of the bolt's or the scene's worker fails or is refused (no Worker), so the readout says "Workers: no".
 // 2026-11-12: the drops, the splashes and the strikes' feet rest on the waves' live height where the waves are stepped (applyWaterState gives them waterWaves; the quality units' margin is the highest wave read back).
@@ -58,6 +59,7 @@ import "./models/ripplespeed";
 import "./models/wavesteps";
 import "./models/wavelift";
 import "./models/wavehit";
+import "./models/crest";
 import "./models/quality/tasks";
 import "./models/quality/jobs";
 import "./models/quality/unit";
@@ -248,6 +250,8 @@ export interface TestValues {
   viewScale: number;
   noWaterLight: boolean;
   marched: boolean;
+  // (the water's waveHeight view: [first cell across, step, first cell down, step])
+  probe: number[];
   // (when the start's steps came, ms since the page began; each program's own compile, ms)
   timings: Record<string, number>;
   compileMs: Record<string, number> | null;
@@ -482,7 +486,7 @@ export class Wallpaper implements WallpaperControl {
     this.nextReadout = 0;
     this.sized = null;
     // (the tests' values and the water's test views: with window.Matrix3DTest only)
-    this.test = M.TEST ? { fogDistance: 0, reflection: "", viewScale: 1, noWaterLight: false, marched: false, timings: {}, compileMs: null, gpuBusy: null } : null;
+    this.test = M.TEST ? { fogDistance: 0, reflection: "", viewScale: 1, noWaterLight: false, marched: false, probe: [0, 1, 0, 1], timings: {}, compileMs: null, gpuBusy: null } : null;
     this.views = [];
     this.programs = null;
     this.step = 0;
@@ -1587,6 +1591,7 @@ export class Wallpaper implements WallpaperControl {
       march: M.TEST ? M.Fog.MARCH_GLSL : "",
       waves: M.Waves.GLSL,
       bloom: M.Bloom.GLSL,
+      crest: M.CrestHide.GLSL,
     };
     const sources: ProgramSources = Object.assign({}, ...this.effects.map((effect) => (effect.constructor as typeof Effect).programs(glsl, caps)));
     // (the tests: when the start's steps came, and with window.Matrix3DTest { compileEach } each
@@ -1837,10 +1842,16 @@ export class Wallpaper implements WallpaperControl {
       this.water.mirrorMargin[1] = this.reflection.frame.marginY;
       this.water.draw(mode, this.test);
     }
+    // (the crest picture the water's pass just wrote hides the glyphs behind a crest, in the direct pass only, while the wave hit's march is on: waveHitOn, once a frame. Off, calm water
+    // included, the picture holds no crest and the programs skip it; no water pass this frame (the tests' parts): the picture was not drawn, nothing is hidden)
+    const crestOn = !!mode && this.water.waveHitOn && !(M.TEST && this.water.noCrestHide);
+    this.rain.crestHide = this.splashes.crestHide = this.bolt.crestHide = crestOn;
     if (covers && mode) {
       this.bolt.coverScene(mode === "scene");
     }
+    // (after the reflection's pictures are let go: the crest picture shares the unit of the reflection's distance picture, which only the water's pass reads)
     this.reflection.done();
+    this.exposure.bindCrest();
     this.exposure.beginGlyphs();
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE);
@@ -1862,6 +1873,7 @@ export class Wallpaper implements WallpaperControl {
       gl.blendEquation(gl.FUNC_ADD);
     }
     gl.disable(gl.BLEND);
+    this.exposure.unbindCrest();
     if (covers) {
       this.bolt.unbindCover();
     }

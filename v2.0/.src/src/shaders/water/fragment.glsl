@@ -49,6 +49,8 @@ uniform bool uNoFilteredNormal;
 uniform bool uNoGlossyRead;
 // the wave hit's march with its gates open (every pixel, every block)
 uniform bool uForceWaveHit;
+// the waveHeight view's sweep: the grid cell at pixel p is (probe.x + p.x * probe.y, probe.z + p.y * probe.w)
+uniform vec4 uProbe;
 #else
 const int uMode = MODE_SCENE;
 const bool uNoWaterLight = false;
@@ -63,6 +65,10 @@ const bool uForceWaveHit = false;
 uniform int uWaveHit;
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec4 outReflected;
+// the crest picture (the third attachment, R32F): the eye's distance to the crest the pixel shows (the wave hit's hit), CREST_FAR where there is none (calm water, the sky, no crest found).
+// Read by the glyph programs (shaders/waves/crest.glsl) to hide what lies behind a crest. CREST_FAR is M.CrestHide.FAR.
+layout(location = 2) out float outCrest;
+const float CREST_FAR = ${M.CrestHide.FAR.toFixed(1)};
 const int SHADOW_MOST = 256;
 const int BLOCK_STEPS = 128;
 const float SHADOW_BIAS = 0.0005;
@@ -449,9 +455,20 @@ void main() {
   vec3 d = rayOf(gl_FragCoord.xy);
   ivec2 pixel = ivec2(gl_FragCoord.xy);
   outReflected = vec4(0.0, 0.0, 0.0, 1.0);
+  outCrest = CREST_FAR;
 #ifdef TEST_VIEWS
-  // (the fog views: the modes from MODE_FOGT on, but the glint view, numbered after them)
-  if (uMode >= MODE_FOGT && uMode != MODE_WATERGLINT) {
+  // (the waveHeight view: the height at a place of the grid, given in cells and put through the grid's own mapping to the world, as a 24-bit code of
+  // (height + 0.5 m) in three bytes; before the fog views, whose test takes every mode from MODE_FOGT on)
+  if (uMode == MODE_WAVEHEIGHT) {
+    vec2 uv = (uProbe.xz + floor(gl_FragCoord.xy) * uProbe.yw + 0.5) / gridCells();
+    float dist = 1.0 / (1.0 / wGrid.x - uv.y * (1.0 / wGrid.x - 1.0 / wGrid.y));
+    float height = waveHeight(vec2((uv.x * 2.0 - 1.0) * wGrid.z * dist, dist));
+    uint q = uint(clamp(floor((height + 0.5) * 16777216.0), 0.0, 16777215.0));
+    outColor = vec4(float(q >> 16u) / 255.0, float((q >> 8u) & 255u) / 255.0, float(q & 255u) / 255.0, 1.0);
+    return;
+  }
+  // (the fog views: the modes from MODE_FOGT on, but the glint and waveHeight views, numbered after them)
+  if (uMode >= MODE_FOGT && uMode != MODE_WATERGLINT && uMode != MODE_WAVEHEIGHT) {
     bool mirrored = uMode == MODE_MIRRORFOGT || uMode == MODE_MIRRORFOGTMARCH;
     bool march = uMode == MODE_FOGTMARCH || uMode == MODE_FOGLIGHTMARCH || uMode == MODE_MIRRORFOGTMARCH;
     if (mirrored && d.y >= 0.0) {
@@ -481,6 +498,7 @@ void main() {
   // (the wave hit: where the march finds a crest on the eye's ray, hit is the crest's distance; flatHit stays the plane's, which the pixel's footprint is measured on)
   float flatHit = hit;
   bool crest = water && uWaveHit != 0 && waveHit(cEye.xyz, d, hit);
+  outCrest = crest ? hit : CREST_FAR;
   // (the distance's change over one pixel, for the Nearness view's lines: derivatives taken before any branch)
   float hitStep = fwidth(hit);
   // the water's normal (averaged over the pixel's footprint on the water: the way to the next pixel's

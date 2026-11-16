@@ -1,6 +1,6 @@
 // Synthetic Wallpaper Engine audio arrays: 128 values (64 bins left, 64 right, low to
 // high frequencies), as wallpaperRegisterAudioListener gives them. Used by the tests
-// (.tests/matrix_web_rain, where remote.sh sync copies it) and by Debug mode's
+// (.tests/matrix_web_rain, where the harness shipper copies it) and by Debug mode's
 // simulated music (index.js, debugMusicSource).
 // Deterministic, with its own random numbers (never Math.random, which the
 // wallpaper's test runs seed). Levels are modelled on typical spectra: bass

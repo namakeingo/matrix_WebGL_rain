@@ -71,6 +71,8 @@ export interface SharedGlsl {
   march: string;
   waves: string;
   bloom: string;
+  // the crest hiding's chunk (M.CrestHide.GLSL), included by the programs that draw glyphs
+  crest: string;
 }
 
 // a Wallpaper Engine setting's value as an effect is given it (by its kind in project.json)

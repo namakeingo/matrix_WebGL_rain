@@ -379,6 +379,26 @@ const makeTestApi = (wallpaper: Wallpaper, ready: Promise<void>) => {
     parallaxOffsets: () => ({ yaw: wallpaper.camera.yaw, pitchShift: wallpaper.camera.pitchShift, eyeX: wallpaper.camera.eyeX, eyeShift: wallpaper.camera.eyeShift }),
     toScreen: (x: number, y: number, z: number) => wallpaper.camera.toScreen(x, y, z),
     rayAt: (x: number, y: number) => wallpaper.camera.rayAt(x, y),
+    // the crest picture (the scene picture's third attachment, R32F: the eye's distance to the crest each pixel shows, M.CrestHide.FAR where none) at a pixel (x across, y down from the
+    // top, as the pictures of the tests), read from the last frame drawn; the read framebuffer and read buffer are put back as they were
+    crestAt: (x: number, y: number) => {
+      const gl = wallpaper.gl;
+      const scene = wallpaper.exposure.scene;
+      const out = new Float32Array(4);
+      const framebuffer = gl.getParameter(gl.READ_FRAMEBUFFER_BINDING) as WebGLFramebuffer | null;
+      const buffer = gl.getParameter(gl.READ_BUFFER) as GLenum;
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, scene.framebuffer);
+      gl.readBuffer(gl.COLOR_ATTACHMENT0 + 2);
+      gl.readPixels(Math.round(x), scene.height - 1 - Math.round(y), 1, 1, gl.RGBA, gl.FLOAT, out);
+      gl.readBuffer(buffer);
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, framebuffer);
+      return out[0]!;
+    },
+    // the texture unit limit of this context (MAX_COMBINED_TEXTURE_IMAGE_UNITS) and the unit the crest picture is on
+    textureUnits: () => {
+      const gl = wallpaper.gl;
+      return { combined: gl.getParameter(gl.MAX_COMBINED_TEXTURE_IMAGE_UNITS) as number, fragment: gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS) as number, crest: M().UNITS.crest };
+    },
     dropAt: (i: number, step: number) => wallpaper.rain.dropAt(i, step),
     landings: (step: number) => wallpaper.rain.landings(step),
     get onlyDrop() {
@@ -432,11 +452,25 @@ const makeTestApi = (wallpaper: Wallpaper, ready: Promise<void>) => {
     set fogDistance(v) {
       wallpaper.test!.fogDistance = v;
     },
+    // the crest hiding of the glyph programs forced off (uCrestHide false), the water's pass still writing the crest picture: the A/B of the hiding's cost
+    get noCrestHide() {
+      return wallpaper.water.noCrestHide;
+    },
+    set noCrestHide(v) {
+      wallpaper.water.noCrestHide = v;
+    },
     get viewScale() {
       return wallpaper.test!.viewScale;
     },
     set viewScale(v) {
       wallpaper.test!.viewScale = v;
+    },
+    // the waveHeight view's sweep: [first cell across, step, first cell down, step]
+    get waveProbe() {
+      return wallpaper.test!.probe;
+    },
+    set waveProbe(v) {
+      wallpaper.test!.probe = v;
     },
     // every baked shadow marched instead (the fog and the water)
     get marched() {

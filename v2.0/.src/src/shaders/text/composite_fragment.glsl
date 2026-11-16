@@ -11,6 +11,9 @@ uniform int uShift;
 #ifdef SCENE
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec4 outReflected;
+// the scene picture's third attachment (the crest picture) is an enabled draw buffer: every enabled draw buffer needs an output (a WebGL error otherwise), and with the blend's source alpha 0
+// the picture is left as it is
+layout(location = 2) out vec4 outCrest;
 #else
 // High contrast text off with the colour wave: the hue of the rain in the pixel's column (a fall
 // beginning now at its bearing), its luminosity kept (the W3C 'color' blend)
@@ -54,6 +57,7 @@ void main() {
 #ifdef SCENE
   outColor = vec4(0.0, 0.0, 0.0, ink);
   outReflected = vec4(0.0, 0.0, 0.0, ink);
+  outCrest = vec4(0.0);
 #else
   if (uRecolor) {
     vec3 ray = rayOf(gl_FragCoord.xy);

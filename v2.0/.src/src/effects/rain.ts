@@ -81,6 +81,7 @@
 //   by column.
 //
 // Changelog:
+// 2026-11-15: crestHide and the uCrest sampler: a drop behind a crest is discarded in the direct pass.
 // 2026-11-12: a drop meets the water by its life, never by moving: the gather pass (shaders/rain/gather_vertex.glsl, gatherMeets, pollMeets, setMeets) reads the water's rows at each drop's
 //   landing place back to the wheel (models/rainwheel.ts: setMeets), which ends the fall where the head meets the surface; the vertex shader draws the head's extension below the floor in a
 //   trough (uWaterWaves, waterWaves, waveSource); the lift of the last rows is gone.
@@ -335,6 +336,8 @@ export class Rain extends M.Effect {
   onlyDrop: number;
   hashes: Uint32Array | null;
   covered: boolean;
+  // whether the crest picture hides what lies behind a crest this frame: the water's wave hit is on and its picture was drawn (set by src/index.ts); the mirrored draw is never hidden
+  crestHide: boolean;
   viewScale: number;
   // (the tests' knobs of the glyphs' lit term: its gain, and a normal in place of the glyph's, [x, y, z, w] with w over 0)
   litScale: number;
@@ -398,6 +401,7 @@ export class Rain extends M.Effect {
     this.litNormal = new Float32Array(4);
     // whether the bolt covers what lies behind it this frame (Characters lightning: set by src/index.ts)
     this.covered = false;
+    this.crestHide = false;
     this.hashes = null;
     this.onlyDrop = -1;
     this.symbols3d = true;
@@ -481,6 +485,7 @@ export class Rain extends M.Effect {
       uBoltNear: M.UNITS.boltNear,
       uWaves: M.UNITS.waves,
       uWaveMax: M.UNITS.waveMax,
+      uCrest: M.UNITS.crest,
     });
     [this.newest] = this.ownPrograms(programs, ["rainNewest"]);
     [this.gatherProgram] = this.ownPrograms(programs, ["rainMeet"]);
@@ -1448,6 +1453,7 @@ export class Rain extends M.Effect {
     gl.uniform1f(u.uFogOnce, this.lod && !mirror ? M.QualityRain.Lod.FOG_ONCE_DISTANCE : 0);
     gl.uniform1f(u.uLightCut, this.lod && !mirror ? M.QualityRain.Lod.LIGHT_CUT : 0);
     gl.uniform1i(u.uCovered, this.covered ? 1 : 0);
+    gl.uniform1i(u.uCrestHide, this.crestHide && !mirror ? 1 : 0);
     gl.uniform1i(u.uSymbols3d, this.symbols3d ? 1 : 0);
     M.GlyphAtlas.setNearness(gl, u, mirror ? null : this.nearness);
     const name = mirror ? "rain mirrored" : "rain";

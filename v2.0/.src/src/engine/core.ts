@@ -74,11 +74,17 @@ M.seededRandom = (seed: number): (() => number) => {
 // what the device can do, looked up once a context: float pictures to draw into (and so the
 // waves, the fog's noise and the HDR picture), one blend equation per attachment, and the
 // pictures one draw can write (8, or WebGL 2.0's least, 4)
-M.capabilities = (gl: WebGL2RenderingContext): Capabilities => ({
-  floats: !!gl.getExtension("EXT_color_buffer_float"),
-  drawBuffersIndexed: gl.getExtension("OES_draw_buffers_indexed"),
-  drawBuffers: gl.getParameter(gl.MAX_DRAW_BUFFERS) >= 8 ? 8 : 4,
-});
+M.capabilities = (gl: WebGL2RenderingContext): Capabilities => {
+  const floats = !!gl.getExtension("EXT_color_buffer_float");
+  // (32-bit float pictures are blended only with this extension enabled: the scene picture's crest attachment (R32F) is an enabled draw buffer of the blended passes drawn into it, the
+  // bolt's cover and the text's composite; without the extension those draws are an INVALID_OPERATION; every context that has EXT_color_buffer_float on a desktop has it too)
+  gl.getExtension("EXT_float_blend");
+  return {
+    floats,
+    drawBuffersIndexed: gl.getExtension("OES_draw_buffers_indexed"),
+    drawBuffers: gl.getParameter(gl.MAX_DRAW_BUFFERS) >= 8 ? 8 : 4,
+  };
+};
 
 // the texture units (engine/constants.ts)
 M.UNITS = UNITS;

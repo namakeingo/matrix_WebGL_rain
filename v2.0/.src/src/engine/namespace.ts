@@ -14,6 +14,7 @@ import type { RippleSpeed } from "../models/ripplespeed";
 import type { WaveSteps } from "../models/wavesteps";
 import type { WaveLift } from "../models/wavelift";
 import type { WaveHit } from "../models/wavehit";
+import type { CrestHide } from "../models/crest";
 import type { WaveMax } from "../models/quality/wavemax";
 import type { WaveFuse } from "../models/quality/wavefuse";
 import type { QualityTasks } from "../models/quality/tasks";
@@ -172,6 +173,7 @@ export interface Matrix3DNamespace {
   WaveSteps: typeof WaveSteps;
   WaveLift: typeof WaveLift;
   WaveHit: typeof WaveHit;
+  CrestHide: typeof CrestHide;
   WaveMax: typeof WaveMax;
   WaveFuse: typeof WaveFuse;
   QualityTasks: typeof QualityTasks;

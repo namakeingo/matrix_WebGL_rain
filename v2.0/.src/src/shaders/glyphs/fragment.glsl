@@ -25,6 +25,7 @@ uniform vec2 uNearFar;
 ${M.Camera.GLSL}
 ${glsl.fog}
 ${glsl.waves}
+${glsl.crest}
 ${M.Nearness.GLSL}
 ${RELIEF_GLSL}
 in vec2 vUv;
@@ -81,7 +82,8 @@ void main() {
     ink = texture(uAtlas, vec3(vUv, float(vGlyph))).r;
   }
   // (under the water: only within the highest wave of the water is the wave there looked at)
-  if (ink <= 0.0 || (abs(vWorld.y) < highestWave() && abs(vWorld.y) < waveHeight(vec2(vWorld.x, -vWorld.z)))) discard;
+  // (and behind the crest the water shows at this pixel: only the main pass, only while the wave hit's march is on; one discard, the existing test first, so the gate-off path's code is the earlier one's)
+  if (ink <= 0.0 || (abs(vWorld.y) < highestWave() && abs(vWorld.y) < waveHeight(vec2(vWorld.x, -vWorld.z))) || (uCrestHide && uMirror >= 0.0 && behindCrest(vWorld))) discard;
   if (uNearness) {
     if (ink < INK_SOLID) discard;
     outColor = vec4(vec3(nearnessOf(length(vWorld - cEye.xyz), uNearFar.x, uNearFar.y)), 1.0);
