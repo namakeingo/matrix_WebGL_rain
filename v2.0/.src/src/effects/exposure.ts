@@ -30,6 +30,7 @@
 // 2026-11-04: shiftX, the scene's OLED shift where it is shown.
 // 2026-11-05: gain, the Exposure setting (was a constant 1).
 // 2026-11-05: packHdr, the HDR picture packed into the canvas (twice as wide) for an ImageBitmap.
+// 2026-11-17: the packed canvas HdrPack.packedWidth(width) wide (1.25 width, was 2 width); invalidateHdr, hdrOut let go once presented.
 // 2026-11-05: the HDR picture is RGB10_A2 (the encoded output over 0 to HdrOutput.ENCODED_MAX), 4 bytes a pixel.
 // 2026-11-05: the HDR output (hdr, headroom): the tone map drawn into a half-float picture of its own by
 //   HdrOutput's curve, sRGB-encoded (extended above 1) in SDR-white units, for the HDR bridge to read back.
@@ -171,21 +172,30 @@ export class Exposure extends M.Effect {
     gl.disable(gl.SCISSOR_TEST);
   }
 
-  // the HDR picture packed into the canvas (2 x its width wide, the default framebuffer) for an ImageBitmap:
-  // the high 8 bits of each level on the left, the low 2 bits on the right (HdrPack)
+  // the HDR picture packed into the canvas (HdrPack.packedWidth(its width) wide, the default framebuffer) for an ImageBitmap:
+  // the high 8 bits of each level, then a byte of the low 2 bits of each four pixels (HdrPack)
   packHdr() {
     const gl = this.gl;
     const target = this.hdrTarget();
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.viewport(0, 0, 2 * target.width, target.height);
+    const packedWidth = M.HdrPack.packedWidth(target.width);
+    gl.viewport(0, 0, packedWidth, target.height);
     const u = this.pack.use();
     gl.uniform1i(u.uWidth, target.width);
     gl.activeTexture(gl.TEXTURE0 + M.UNITS.hdr);
     gl.bindTexture(gl.TEXTURE_2D, target.texture);
     this.guard.begin("hdr pack", "band");
-    this.quad.drawTiled("hdr pack", 2 * target.width, target.height);
+    this.quad.drawTiled("hdr pack", packedWidth, target.height);
     this.guard.end();
     gl.bindTexture(gl.TEXTURE_2D, null);
+  }
+
+  // the HDR picture's contents are no longer needed (read by the pack pass or the readback request: nothing reads it afterwards);
+  // leaves the default framebuffer bound
+  invalidateHdr() {
+    if (this.hdrOut) {
+      this.hdrOut.invalidate();
+    }
   }
 
   // the sky, water and fog are drawn into their picture from here (covered: the water's pass

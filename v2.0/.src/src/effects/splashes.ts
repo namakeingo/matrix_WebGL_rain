@@ -63,6 +63,8 @@
 import { M } from "../engine/core";
 import { fill } from "../engine/glsl";
 import VERTEX_SOURCE from "../shaders/splashes/vertex.glsl";
+import TURN_SCALE_UNIFORM_SOURCE from "../shaders/rain/turn_scale_uniform.glsl";
+import TURN_SCALE_USE_SOURCE from "../shaders/rain/turn_scale_use.glsl";
 import WAVE_LIFT_SOURCE from "../shaders/waves/lift.glsl";
 import WAVE_GRID_SOURCE from "../shaders/waves/grid.glsl";
 import { QualitySplashes } from "../models/quality/splashes";
@@ -143,8 +145,9 @@ export class Splashes extends M.Effect {
   static RING: number;
   static placeAt: (rec: SplashRecord, step: number, from: number, to: number, lift?: number) => SplashStamp;
   static stampsOf: (clock: StepClock, t0: number, land: number, out?: Float64Array) => Float64Array;
-  static vertex: (glsl: SharedGlsl) => string;
+  static vertex: (glsl: SharedGlsl, test: boolean) => string;
   describe!: (time: number) => SplashState[];
+  records!: () => (SplashRecord & { time: number })[];
   // the simulation (models/splashsim.ts): the arrays, the ring's CPU side, the counters and the settings are its, read through the getters below
   sim: SplashSim;
   // the frame's work as a stepped model over the simulation (models/splashtick.ts), the task that gives it to a worker (src/index.ts makes it: workers/splashworker.ts), the operations
@@ -180,6 +183,8 @@ export class Splashes extends M.Effect {
   viewScale: number;
   // (the tests' knobs of the glyphs' lit term: its gain, and a normal in place of the glyph's, [x, y, z, w] with w over 0)
   litScale: number;
+  // (the tests: the glyphs' turn frozen at angle 0 with 3D Symbols on)
+  noGlyphTurn: boolean;
   litNormal: Float32Array;
   head: number;
   clock: StepClock;
@@ -225,6 +230,7 @@ export class Splashes extends M.Effect {
     // (the tests' scale of the characters' light: with M.TEST only)
     this.viewScale = 1;
     this.litScale = 1;
+    this.noGlyphTurn = false;
     this.litNormal = new Float32Array(4);
     // whether the bolt covers what lies behind it this frame (Characters lightning: set by src/index.ts)
     this.covered = false;
@@ -291,7 +297,7 @@ export class Splashes extends M.Effect {
   set onLand(v: (x: number, z: number, weight: number) => void) { this.impactCallback = v; this.sim.onLand = v; }
 
   static programs(glsl: SharedGlsl): ProgramSources {
-    return { splash: [Splashes.vertex(glsl), M.GlyphAtlas.fragment(glsl, M.TEST, true, true, true)] };
+    return { splash: [Splashes.vertex(glsl, M.TEST), M.GlyphAtlas.fragment(glsl, M.TEST, true, true, true, true)] };
   }
 
   static QUALITY_UNIT = "splashes";
@@ -706,6 +712,7 @@ export class Splashes extends M.Effect {
       gl.uniform1f(u.uViewScale, this.viewScale);
       gl.uniform1f(u.uLitScale, this.litScale);
       gl.uniform4fv(u.uLitNormal, this.litNormal);
+      gl.uniform1f(u.uTurnScale, this.noGlyphTurn ? 0 : 1);
     }
     gl.uniform1f(u.uMirror, mirror ? -1 : 1);
     gl.uniform1f(u.uWaterWaves, this.waterWaves ? 1 : 0);
@@ -740,6 +747,16 @@ Splashes.stampsOf = SplashSim.stampsOf;
 
 if (M.TEST) {
   // the splashes with where they are at a time (for the tests)
+  // the splashes' records as the vertex shader reads them (Splashes.placeAt takes one), with the time of their first stamp's step (the tests: the glyph seed of a stamp is seed + step x 977)
+  Splashes.prototype.records = function (this: Splashes) {
+    const out: (SplashRecord & { time: number })[] = [];
+    for (let i = 0; i < this.count; i++) {
+      const st = Splashes.stampsOf(this.clock, this.t0[i]!, this.land[i]!, new Float64Array(3));
+      out.push({ x0: this.x0[i]!, z0: this.z0[i]!, vx: this.vx[i]!, vy: this.vy[i]!, vz: this.vz[i]!, size: this.size[i]!, seed: this.seeds[i]!, first: st[0]!, count: st[1]!, offset: st[2]!, rate: this.clock.rate, time: this.clock.timeOf(st[0]!) });
+    }
+    return out;
+  };
+
   Splashes.prototype.describe = function (this: Splashes, time: number) {
     const out: SplashState[] = [];
     for (let i = 0; i < this.count; i++) {
@@ -779,6 +796,6 @@ Splashes.RING = RING;
 // the lift's GLSL (WaveLift): the waves' switch, the reach and the share over the floor
 const WAVE_LIFT_GLSL = fill(WAVE_LIFT_SOURCE, { "GRID_GLSL": WAVE_GRID_SOURCE, "WAVE_CALM": M.WaveLift.CALM.toFixed(6) });
 
-Splashes.vertex = (glsl) => fill(VERTEX_SOURCE, { "M.Camera.GLSL": M.Camera.GLSL, "WAVE_LIFT_GLSL": WAVE_LIFT_GLSL, "glsl.fog": glsl.fog, "glsl.medium": glsl.medium, "glsl.shade": glsl.shade, "M.GlyphAtlas.VERTEX_GLSL": M.GlyphAtlas.VERTEX_GLSL, "M.GlyphAtlas.LIGHT_VERTEX_GLSL": M.GlyphAtlas.LIGHT_VERTEX_GLSL, "M.HASH_GLSL": M.HASH_GLSL, "GRAVITY.toFixed(2)": GRAVITY.toFixed(2), "RING": RING, "PER_ROW": PER_ROW, "SPLASH_TEXELS": SPLASH_TEXELS });
+Splashes.vertex = (glsl, test) => fill(VERTEX_SOURCE, { "M.Camera.GLSL": M.Camera.GLSL, "WAVE_LIFT_GLSL": WAVE_LIFT_GLSL, "glsl.fog": glsl.fog, "glsl.medium": glsl.medium, "glsl.shade": glsl.shade, "M.GlyphAtlas.VERTEX_GLSL": M.GlyphAtlas.VERTEX_GLSL, "M.GlyphAtlas.LIGHT_VERTEX_GLSL": M.GlyphAtlas.LIGHT_VERTEX_GLSL, "M.HASH_GLSL": M.HASH_GLSL, "glsl.turn": glsl.turn, "TURN_SCALE_UNIFORM": test ? " " + TURN_SCALE_UNIFORM_SOURCE : "", "TURN_SCALE_USE": test ? " " + TURN_SCALE_USE_SOURCE : "", "GRAVITY.toFixed(2)": GRAVITY.toFixed(2), "RING": RING, "PER_ROW": PER_ROW, "SPLASH_TEXELS": SPLASH_TEXELS });
 
 M.Splashes = Splashes;

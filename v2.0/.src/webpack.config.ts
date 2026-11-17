@@ -2,16 +2,16 @@
 // shaders (src/shaders/, as text) bundled and minified into one script,
 // matrix_web_3d_rain/dist/bundle.js, which the page and every worker load (each worker by its
 // name: see src/index.ts). No source map (Wallpaper Engine uploads every file of the project
-// folder). Types are checked by tsc before (npm run build); ts-loader only transpiles.
+// folder). Types are checked by tsc before (npm run build:matrix_web_3d_rain); ts-loader only transpiles.
 // The bundle registers itself whole (Matrix3DFactory("bundle", body)): a worker that cannot be
 // made from the bundle's URL is made from a Blob of that body's own text, with no fetch.
 // This config is TypeScript run by Node.js as it is (its types stripped: only erasable syntax,
 // type-checked by tsconfig.tools.json); webpack-cli loads it with import().
-// Options (npm run build -- --env NAME=VALUE):
+// Options (npm run build:matrix_web_3d_rain -- --env NAME=VALUE):
 //   swap=SOURCE=FILE  FILE in place of the source module SOURCE (a path under src/, e.g.
 //                     models/boltshape.ts): a proof copy, broken on purpose
 //   out=FILE          the bundle written to FILE (from the repository's root) instead
-//   coverage=1        a bundle for measuring test coverage (npm run coverage): not minified, its modules not merged, with a source map beside it (never the shipped bundle)
+//   coverage=1        a bundle for measuring test coverage (npm run coverage:matrix_web_3d_rain): not minified, its modules not merged, with a source map beside it (never the shipped bundle)
 import path from "node:path";
 import webpack from "webpack";
 import TerserPlugin from "terser-webpack-plugin";

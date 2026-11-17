@@ -407,13 +407,24 @@ const makeTestApi = (wallpaper: Wallpaper, ready: Promise<void>) => {
     set onlyDrop(v) {
       wallpaper.rain.onlyDrop = v;
     },
+    // the glyphs' random turn frozen at angle 0, the rain's, the splashes' and the bolt's characters (3D Symbols on, the glyphs unturned): the relief's own measurements
+    get noGlyphTurn() {
+      return wallpaper.rain.noGlyphTurn;
+    },
+    set noGlyphTurn(v) {
+      wallpaper.rain.noGlyphTurn = v;
+      wallpaper.splashes.noGlyphTurn = v;
+      wallpaper.bolt.noGlyphTurn = v;
+    },
     get headOnly() {
       return wallpaper.rain.headOnly;
     },
     set headOnly(v) {
       wallpaper.rain.headOnly = v;
     },
-    splashAt: (x: number, z: number, count: number) => wallpaper.splashes.spawn(x, z, count, M().Rain.CELL, wallpaper.time),
+    // (size: the splashes' base size in metres, the cell's by default; a splash's own is 0.3 to 0.7 of it)
+    splashAt: (x: number, z: number, count: number, size?: number) => wallpaper.splashes.spawn(x, z, count, size ?? M().Rain.CELL, wallpaper.time),
+    splashRecords: () => wallpaper.splashes.records(),
     splashList: () => wallpaper.splashes.describe(wallpaper.time),
     get impactLog() {
       return wallpaper.waves.impactLog();

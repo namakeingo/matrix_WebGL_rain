@@ -1,6 +1,6 @@
 // HdrCheck: the bitmap path's self-check, the render worker's half. make() packs the known picture
-// (HdrPack.checkWords) with the production pack shader (shaders/hdr/pack_fragment.glsl) into a canvas 2 x
-// CHECK_WIDTH wide, in a WebGL 2.0 context of its own (small, made and let go at once), and gives its
+// (HdrPack.checkWords) with the production pack shader (shaders/hdr/pack_fragment.glsl) into a canvas
+// HdrPack.packedWidth(CHECK_WIDTH) wide, in a WebGL 2.0 context of its own (small, made and let go at once), and gives its
 // ImageBitmap (transferToImageBitmap); the presenter copies it on the GPU, unpacks it and compares every
 // level (HdrPresenter.checkBitmap). A GPU or browser whose canvas images change the bytes (colour
 // management, premultiplication) fails the check and the bridge reads the picture back instead. null:
@@ -8,6 +8,7 @@
 //
 // Changelog:
 // 2026-11-05: new, for the bitmap path.
+// 2026-11-17: the canvas packedWidth(CHECK_WIDTH) wide (1.25 W, was 2 W).
 import { M } from "./core";
 import { fill } from "./glsl";
 import PACK_SOURCE from "../shaders/hdr/pack_fragment.glsl";
@@ -22,7 +23,7 @@ export const HdrCheck = {
       const P = M.HdrPack;
       const W = P.CHECK_WIDTH;
       const H = P.CHECK_HEIGHT;
-      const canvas = new OffscreenCanvas(2 * W, H);
+      const canvas = new OffscreenCanvas(P.packedWidth(W), H);
       if (typeof canvas.transferToImageBitmap !== "function") {
         return null;
       }
@@ -53,7 +54,7 @@ export const HdrCheck = {
       gl.useProgram(program);
       gl.uniform1i(gl.getUniformLocation(program, "uPicture"), 0);
       gl.uniform1i(gl.getUniformLocation(program, "uWidth"), W);
-      gl.viewport(0, 0, 2 * W, H);
+      gl.viewport(0, 0, P.packedWidth(W), H);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       const bitmap = canvas.transferToImageBitmap();
       gl.deleteTexture(texture);

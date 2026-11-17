@@ -111,6 +111,8 @@ import { fill } from "../engine/glsl";
 import CELL_SOURCE from "../shaders/rain/cell.glsl";
 import VERTEX_SOURCE from "../shaders/rain/vertex.glsl";
 import COLOR_SOURCE from "../shaders/rain/color.glsl";
+import TURN_SCALE_UNIFORM_SOURCE from "../shaders/rain/turn_scale_uniform.glsl";
+import TURN_SCALE_USE_SOURCE from "../shaders/rain/turn_scale_use.glsl";
 import WAVE_LIFT_SOURCE from "../shaders/waves/lift.glsl";
 import WAVE_GRID_SOURCE from "../shaders/waves/grid.glsl";
 import NEWEST_VERTEX_SOURCE from "../shaders/rain/newest_vertex.glsl";
@@ -334,6 +336,8 @@ export class Rain extends M.Effect {
   texture: WebGLTexture | null;
   headOnly: boolean;
   onlyDrop: number;
+  // (the tests: the glyphs' turn frozen at angle 0 with 3D Symbols on)
+  noGlyphTurn: boolean;
   hashes: Uint32Array | null;
   covered: boolean;
   // whether the crest picture hides what lies behind a crest this frame: the water's wave hit is on and its picture was drawn (set by src/index.ts); the mirrored draw is never hidden
@@ -404,6 +408,7 @@ export class Rain extends M.Effect {
     this.crestHide = false;
     this.hashes = null;
     this.onlyDrop = -1;
+    this.noGlyphTurn = false;
     this.symbols3d = true;
     this.headOnly = false;
     this.texture = null;
@@ -438,7 +443,7 @@ export class Rain extends M.Effect {
 
   static programs(glsl: SharedGlsl): ProgramSources {
     return {
-      rain: [Rain.vertex(glsl, M.TEST), M.GlyphAtlas.fragment(glsl, M.TEST, true, true, true)],
+      rain: [Rain.vertex(glsl, M.TEST), M.GlyphAtlas.fragment(glsl, M.TEST, true, true, true, true)],
       rainNewest: [Rain.newestVertex(M.TEST), Rain.newestFragment(M.TEST)],
       rainMeet: [Rain.gatherVertex(), Rain.gatherFragment()],
     };
@@ -1239,6 +1244,7 @@ export class Rain extends M.Effect {
     gl.uniform1i(u.uTrail, this.trail);
     if (M.TEST) {
       gl.uniform1i(u.uOnlyDrop, this.onlyDrop);
+      gl.uniform1f(u.uTurnScale, this.noGlyphTurn ? 0 : 1);
       gl.uniform1i(u.uHeadOnly, this.headOnly ? 1 : 0);
       gl.uniform1f(u.uViewScale, this.viewScale);
       gl.uniform1f(u.uLitScale, this.litScale);
@@ -1535,7 +1541,7 @@ const WAVE_LIFT_GLSL = fill(WAVE_LIFT_SOURCE, { "GRID_GLSL": WAVE_GRID_SOURCE, "
 const CELL_GLSL = fill(CELL_SOURCE, { "CELL.toFixed(4)": CELL.toFixed(4), "SEED": SEED, "M.Camera.SPAN.toFixed(4)": M.Camera.SPAN.toFixed(4), "DROPS_ACROSS": DROPS_ACROSS });
 
 // (test: with the tests' uniforms, only one drop or only the heads drawn)
-Rain.vertex = (glsl, test) => fill(VERTEX_SOURCE, { "TEST_VIEWS": test ? "#define TEST_VIEWS" : "", "M.Camera.GLSL": M.Camera.GLSL, "M.WaveLift.BIAS": M.WaveLift.BIAS, "glsl.fog": glsl.fog, "glsl.medium": glsl.medium, "glsl.shade": glsl.shade, "M.GlyphAtlas.VERTEX_GLSL": M.GlyphAtlas.VERTEX_GLSL, "M.GlyphAtlas.LIGHT_VERTEX_GLSL": M.GlyphAtlas.LIGHT_VERTEX_GLSL, "M.HASH_GLSL": M.HASH_GLSL, "CELL_GLSL": CELL_GLSL, "WAVE_SCREEN.toFixed(6)": WAVE_SCREEN.toFixed(6), "COLOR_GLSL": COLOR_SOURCE });
+Rain.vertex = (glsl, test) => fill(VERTEX_SOURCE, { "TEST_VIEWS": test ? "#define TEST_VIEWS" : "", "M.Camera.GLSL": M.Camera.GLSL, "M.WaveLift.BIAS": M.WaveLift.BIAS, "glsl.fog": glsl.fog, "glsl.medium": glsl.medium, "glsl.shade": glsl.shade, "M.GlyphAtlas.VERTEX_GLSL": M.GlyphAtlas.VERTEX_GLSL, "M.GlyphAtlas.LIGHT_VERTEX_GLSL": M.GlyphAtlas.LIGHT_VERTEX_GLSL, "M.HASH_GLSL": M.HASH_GLSL, "glsl.turn": glsl.turn, "TURN_SCALE_UNIFORM": test ? " " + TURN_SCALE_UNIFORM_SOURCE : "", "TURN_SCALE_USE": test ? " " + TURN_SCALE_USE_SOURCE : "", "CELL_GLSL": CELL_GLSL, "WAVE_SCREEN.toFixed(6)": WAVE_SCREEN.toFixed(6), "COLOR_GLSL": COLOR_SOURCE });
 // (the newest characters' shaders: drawNewest)
 Rain.newestVertex = (test) => fill(NEWEST_VERTEX_SOURCE, { "TEST_VIEWS": test ? "#define TEST_VIEWS" : "", "M.Camera.GLSL": M.Camera.GLSL, "M.HASH_GLSL": M.HASH_GLSL, "CELL_GLSL": CELL_GLSL, "WAVE_SCREEN.toFixed(6)": WAVE_SCREEN.toFixed(6), "COLOR_GLSL": COLOR_SOURCE });
 Rain.newestFragment = (test) => fill(NEWEST_FRAGMENT_SOURCE, { "TEST_VIEWS": test ? "#define TEST_VIEWS" : "" });

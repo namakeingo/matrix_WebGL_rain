@@ -81,6 +81,7 @@ import type { MusicIdle } from "../models/musicidle";
 import type { MouseParallax } from "../models/mouseparallax";
 import type { SpawnBox } from "../models/spawnbox";
 import type { GlyphRelief } from "../models/glyphrelief";
+import type { GlyphTurn } from "../models/glyphturn";
 import type { Workers } from "../platform/workers";
 import type { RenderLink } from "../platform/renderlink";
 import type { probeHdr, pageHdrEnv } from "../platform/hdr";
@@ -236,6 +237,7 @@ export interface Matrix3DNamespace {
   MouseParallax: typeof MouseParallax;
   SpawnBox: typeof SpawnBox;
   GlyphRelief: typeof GlyphRelief;
+  GlyphTurn: typeof GlyphTurn;
   Workers: typeof Workers;
   RenderLink: typeof RenderLink;
   probeHdr: typeof probeHdr;

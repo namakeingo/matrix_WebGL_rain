@@ -94,6 +94,10 @@ void main() {
 #ifdef LIT
   // the glyph's own emission plus ONE term of the light it reflects, in the same pass: its colour as the albedo times the sky box's and the moon's light on the normal (the
   // mirror image shows the same glyph, so the same normal) and the strikes' light; all times the trail's fade and the fog's transmittance (vLight), the character fading as a whole
+#ifdef TURNED
+  // (the relief's normal is in the glyph's own frame: turned about Y with the quad, the world's normal)
+  normal = vec3(normal.x * vTurn.x - normal.z * vTurn.y, normal.y, normal.x * vTurn.y + normal.z * vTurn.x);
+#endif
 #ifdef TEST_VIEWS
   if (uLitNormal.w > 0.0) normal = normalize(uLitNormal.xyz);
   vec3 lit = COLOR * (glyphSkyMoonLight(normal, vShade) + vStrike) * uLitScale;

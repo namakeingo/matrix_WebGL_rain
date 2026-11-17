@@ -10,6 +10,7 @@ ${glsl.shade}
 ${M.GlyphAtlas.VERTEX_GLSL}
 ${M.GlyphAtlas.LIGHT_VERTEX_GLSL}
 ${M.HASH_GLSL}
+${glsl.turn}
 #define WAVE_LIFT_AT
 ${WAVE_LIFT_GLSL}
 uniform usampler2D uSplashes;
@@ -25,6 +26,8 @@ uniform int uAges;
 uniform float uPointPx;
 uniform float uLodFloor;
 uniform float uHeadPeak;
+// 3D Symbols: each glyph is turned about its own vertical axis by a random angle fixed by its stamp (turnAngle); off, no turn
+uniform bool uSymbols3d;${TURN_SCALE_UNIFORM}
 in vec2 aCorner;
 in uint aDrop;
 out vec2 vUv;
@@ -33,6 +36,8 @@ out float vLight;
 out float vHead;
 out vec3 vWorld;
 flat out vec3 vColor;
+// the glyph's turn as (cos, sin), for the fragment shader's normal and relief view
+flat out vec2 vTurn;
 // the baked shade at the stamp (sky, moon) and the strikes' light the air scatters towards the eye before it
 flat out vec2 vShade;
 out vec3 vStrike;
@@ -87,7 +92,13 @@ void main() {
     quadSize = start.z / footprint;
     pointGain = footprint * footprint;
   }
-  vec3 world = place + vec3((aCorner.x - 0.5) * quadSize, (aCorner.y - 0.5) * quadSize, 0.0);
+  // (the turn about the glyph's own vertical axis through its centre: fixed by its stamp, the same in the mirrored pass, which only flips y; angle 0 is the cosine 1 and the sine 0: no
+  // change)
+  float turn = uSymbols3d ? turnAngle(ids.z + s * 977u) : 0.0;${TURN_SCALE_USE}
+  vec2 cs = turnCS(turn);
+  vTurn = cs;
+  vec2 side = turnOffset((aCorner.x - 0.5) * quadSize, cs);
+  vec3 world = place + vec3(side.x, (aCorner.y - 0.5) * quadSize, side.y);
   world.y *= uMirror;
   vec4 clip = cViewProj * vec4(world, 1.0);
   vWorld = world;
@@ -115,7 +126,8 @@ void main() {
       vLight *= pointGain;
     } else {
       // (too bright for a point: the quad as it is)
-      vec3 whole = place + vec3((aCorner.x - 0.5) * start.z, (aCorner.y - 0.5) * start.z, 0.0);
+      vec2 wholeSide = turnOffset((aCorner.x - 0.5) * start.z, cs);
+      vec3 whole = place + vec3(wholeSide.x, (aCorner.y - 0.5) * start.z, wholeSide.y);
       whole.y *= uMirror;
       clip = cViewProj * vec4(whole, 1.0);
       vWorld = whole;

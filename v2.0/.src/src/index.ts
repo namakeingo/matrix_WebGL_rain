@@ -60,6 +60,7 @@ import "./models/wavesteps";
 import "./models/wavelift";
 import "./models/wavehit";
 import "./models/crest";
+import "./models/glyphturn";
 import "./models/quality/tasks";
 import "./models/quality/jobs";
 import "./models/quality/unit";
@@ -1592,6 +1593,7 @@ export class Wallpaper implements WallpaperControl {
       waves: M.Waves.GLSL,
       bloom: M.Bloom.GLSL,
       crest: M.CrestHide.GLSL,
+      turn: M.GlyphTurn.GLSL,
     };
     const sources: ProgramSources = Object.assign({}, ...this.effects.map((effect) => (effect.constructor as typeof Effect).programs(glsl, caps)));
     // (the tests: when the start's steps came, and with window.Matrix3DTest { compileEach } each
@@ -1664,12 +1666,12 @@ export class Wallpaper implements WallpaperControl {
   // ---- the canvas's size, in device pixels (the platform's: a ResizeObserver on the page,
   // the page's sizes in a worker; applied at the start of a frame, never in the observer) ----
 
-  // packed: the HDR picture is packed into the canvas this frame (the bitmap path), which is then twice as wide
+  // packed: the HDR picture is packed into the canvas this frame (the bitmap path), which is then packedWidth(width) wide
   applySize(packed = false) {
     const size = this.platform.size();
     const width = Math.max(1, size[0]);
     const height = Math.max(1, size[1]);
-    const canvasWidth = packed ? 2 * width : width;
+    const canvasWidth = packed ? M.HdrPack.packedWidth(width) : width;
     if (this.canvas.width !== canvasWidth || this.canvas.height !== height) {
       this.canvas.width = canvasWidth;
       this.canvas.height = height;
@@ -2443,7 +2445,7 @@ export class Wallpaper implements WallpaperControl {
     p.frameCap = s.frameCap;
     p.wallpaperFps = s.wallpaperFps;
     p.limit = s.wallpaperFps > 0 ? Math.min(s.frameCap, s.wallpaperFps) : s.frameCap;
-    // (the scene's size: the canvas is twice as wide while the HDR bitmap path draws the packed picture into it)
+    // (the scene's size: the canvas is 1.25 times as wide while the HDR bitmap path draws the packed picture into it)
     p.width = this.sized ? this.sized[0] : this.canvas.width;
     p.height = this.sized ? this.sized[1] : this.canvas.height;
     p.drops = this.rain ? this.rain.active : 0;

@@ -11,8 +11,11 @@ ${glsl.shade}
 ${M.GlyphAtlas.VERTEX_GLSL}
 ${M.GlyphAtlas.LIGHT_VERTEX_GLSL}
 ${M.HASH_GLSL}
+${glsl.turn}
 ${CELL_GLSL}
 uniform uint uStep;
+// 3D Symbols: each glyph is turned about its own vertical axis by a random angle fixed by its cell (turnAngle); off, no turn
+uniform bool uSymbols3d;${TURN_SCALE_UNIFORM}
 // 1 when the water shows waves (the Collision plane and Ripples on)
 uniform float uWaterWaves;
 uniform float uMirror;
@@ -49,6 +52,8 @@ out float vLight;
 out float vHead;
 out vec3 vWorld;
 flat out vec3 vColor;
+// the glyph's turn as (cos, sin), for the fragment shader's normal and relief view
+flat out vec2 vTurn;
 // the baked shade at the glyph (sky, moon) and the strikes' light the air scatters towards the eye before it
 flat out vec2 vShade;
 out vec3 vStrike;
@@ -133,7 +138,13 @@ void main() {
   uint epoch = (uStep + hash(cell) % 64u) / 48u;
   vGlyph = int(hash(cell ^ (epoch * 2654435761u)) % uint(uGlyphs));
   float above = (row + aCorner.y) * CELL;
-  vec3 world = vec3(x + (aCorner.x - 0.5) * CELL, above * uMirror + floorOf(c.z), -c.z);
+  // (the turn about the glyph's own vertical axis through its centre: fixed by its cell, the same in the mirrored pass, which only flips y; angle 0 is the cosine 1 and the sine 0: no
+  // change)
+  float turn = uSymbols3d ? turnAngle(cell) : 0.0;${TURN_SCALE_USE}
+  vec2 cs = turnCS(turn);
+  vec2 corner = turnOffset((aCorner.x - 0.5) * CELL, cs);
+  vTurn = cs;
+  vec3 world = vec3(x + corner.x, above * uMirror + floorOf(c.z), -c.z + corner.y);
   vec4 clip = cViewProj * vec4(world, 1.0);
   vWorld = world;
   vColor = fallColor(x / c.z / WAVE_SCREEN + 0.5, uWaveNow - float(c.since) * uWavePerStep) * musicLight(x / c.z);

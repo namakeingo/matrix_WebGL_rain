@@ -1,7 +1,11 @@
 // The glyphs' relief ("3D Symbols"), the GLSL twin of models/glyphrelief.ts: the atlas read as if the ink were raised RELIEF (1/5 of the glyph's size, the glyph spanning 1 in uv)
 // above the quad. Needs uAtlas, uMirror and the camera block; LIT (the rain's and the splashes' fragment shaders) adds the normal.
 uniform bool uSymbols3d;
-const float RELIEF = ${RELIEF.toFixed(4)};
+#ifdef TURNED
+// the glyph's turn about its own vertical axis (the vertex shader's cosine and sine): its right axis is (cos, 0, sin) and its normal (-sin, 0, cos)
+flat in vec2 vTurn;
+#endif
+const float RELIEF =${RELIEF.toFixed(4)};
 const int RELIEF_STEPS = ${RELIEF_STEPS};
 const float RELIEF_VIEW_MIN = ${RELIEF_VIEW_MIN.toFixed(4)};
 const float RELIEF_SKIP_PX = ${RELIEF_SKIP_PX.toFixed(4)};
@@ -26,6 +30,10 @@ Relief reliefAt(vec2 uv, int layer, vec3 world, float footprint) {
   r.uv = uv;
   r.normal = vec3(0.0, 0.0, 1.0);
   vec3 view = normalize(cEye.xyz - world);
+#ifdef TURNED
+  // (the view in the turned quad's own frame: its right axis, up, its normal)
+  view = vec3(view.x * vTurn.x + view.z * vTurn.y, view.y, -view.x * vTurn.y + view.z * vTurn.x);
+#endif
   vec2 w = vec2(view.x, -uMirror * view.y) / max(view.z, RELIEF_VIEW_MIN);
   if (RELIEF * length(w) > RELIEF_SKIP_PX * footprint) {
     float previousGap = 0.0;

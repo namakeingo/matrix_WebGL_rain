@@ -173,6 +173,8 @@ import type { Strike } from "./lightning";
 import type { EffectQuality, QualityJob, QualityShared } from "../models/quality/types";
 import type { QualityStatics, QualityParams } from "../models/quality/jobs";
 import LIGHT_SOURCE from "../shaders/bolt/light.glsl";
+import TURN_SCALE_UNIFORM_SOURCE from "../shaders/rain/turn_scale_uniform.glsl";
+import TURN_SCALE_USE_SOURCE from "../shaders/rain/turn_scale_use.glsl";
 import PROFILE_SOURCE from "../shaders/bolt/profile.glsl";
 import FOOT_SOURCE from "../shaders/bolt/foot.glsl";
 import WAVE_LIFT_SOURCE from "../shaders/waves/lift.glsl";
@@ -253,7 +255,7 @@ export class Bolt extends M.Effect {
   static lightFragment: (test: boolean) => string;
   static coverFragment: (glsl: SharedGlsl) => string;
   static glyphMaskFragment: (glsl: SharedGlsl) => string;
-  static glyphVertex: (glsl: SharedGlsl) => string;
+  static glyphVertex: (glsl: SharedGlsl, test: boolean) => string;
   cover!: ShaderProgram;
   light!: ShaderProgram;
   glyphMask!: ShaderProgram;
@@ -356,6 +358,8 @@ export class Bolt extends M.Effect {
   mostGlyphs: number;
   mostSegments: number;
   viewScale: number;
+  // (the tests: the characters' turn frozen at angle 0 with 3D Symbols on)
+  noGlyphTurn: boolean;
   levels: Float32Array<ArrayBuffer>;
   slots: (Strike | null)[];
   characters: boolean;
@@ -374,6 +378,7 @@ export class Bolt extends M.Effect {
     this.slots = [];
     this.levels = new Float32Array(SLOTS * 3);
     this.viewScale = 1;
+    this.noGlyphTurn = false;
     // the most items a slot holds (the tests lower them)
     this.mostSegments = SLOT_SEGMENTS;
     this.mostGlyphs = SLOT_GLYPHS;
@@ -486,8 +491,8 @@ export class Bolt extends M.Effect {
       boltBand: [Bolt.bandVertex(glsl), Bolt.bandFragment(glsl, true)],
       boltDistance: [Bolt.bandVertex(glsl), Bolt.bandFragment(glsl, false)],
       boltLight: [M.FULL_VERTEX, Bolt.lightFragment(M.TEST)],
-      boltGlyph: [Bolt.glyphVertex(glsl), M.GlyphAtlas.fragment(glsl, M.TEST)],
-      boltGlyphMask: [Bolt.glyphVertex(glsl), Bolt.glyphMaskFragment(glsl)],
+      boltGlyph: [Bolt.glyphVertex(glsl, M.TEST), M.GlyphAtlas.fragment(glsl, M.TEST, undefined, undefined, undefined, true)],
+      boltGlyphMask: [Bolt.glyphVertex(glsl, M.TEST), Bolt.glyphMaskFragment(glsl)],
       boltCover: [M.FULL_VERTEX, Bolt.coverFragment(glsl)],
     };
   }
@@ -1134,6 +1139,9 @@ export class Bolt extends M.Effect {
     if (M.TEST && program === this.glyph) {
       gl.uniform1f(u.uViewScale, this.viewScale);
     }
+    if (M.TEST && (program === this.glyph || program === this.glyphMask)) {
+      gl.uniform1f(u.uTurnScale, this.noGlyphTurn ? 0 : 1);
+    }
     const chunk = this.guard.size(name, "chunk");
     if ((program === this.band || program === this.distance) && count === null && this.listsUsable()) {
       this.drawListed(u, name, chunk, mirror);
@@ -1313,7 +1321,7 @@ Bolt.glyphMaskFragment = (glsl) => fill(GLYPH_MASK_FRAGMENT_SOURCE, { "M.Camera.
 // back), its ink from
 // the inks' rows (none: blank, not drawn); a plane in the world facing along z, as a rain
 // character (the characters' fragment shader, or the mask's)
-Bolt.glyphVertex = (glsl) => fill(GLYPH_VERTEX_SOURCE, { "FOOTPRINT_FULL_PX.toFixed(1)": QualityBolt.FOOTPRINT_FULL_PX.toFixed(1), "QUALITY_LEVELS": QualityBolt.QUALITY_LEVELS, "M.Camera.GLSL": M.Camera.GLSL, "WAVE_LIFT_GLSL": WAVE_LIFT_GLSL, "FOOT_GLSL": FOOT_GLSL, "glsl.fog": glsl.fog, "M.GlyphAtlas.VERTEX_GLSL": M.GlyphAtlas.VERTEX_GLSL, "M.HASH_GLSL": M.HASH_GLSL, "LIGHT_GLSL": LIGHT_GLSL, "GLYPHS_ACROSS": GLYPHS_ACROSS, "GLYPH_TEXELS": GLYPH_TEXELS, "MOST_GLYPHS / GLYPHS_ACROSS": MOST_GLYPHS / GLYPHS_ACROSS, "GLYPHS_ACROSS * GLYPH_TEXELS": GLYPHS_ACROSS * GLYPH_TEXELS, "COVER_LIGHT.toFixed(4)": COVER_LIGHT.toFixed(4) });
+Bolt.glyphVertex = (glsl, test) => fill(GLYPH_VERTEX_SOURCE, { "FOOTPRINT_FULL_PX.toFixed(1)": QualityBolt.FOOTPRINT_FULL_PX.toFixed(1), "QUALITY_LEVELS": QualityBolt.QUALITY_LEVELS, "M.Camera.GLSL": M.Camera.GLSL, "WAVE_LIFT_GLSL": WAVE_LIFT_GLSL, "FOOT_GLSL": FOOT_GLSL, "glsl.fog": glsl.fog, "M.GlyphAtlas.VERTEX_GLSL": M.GlyphAtlas.VERTEX_GLSL, "M.HASH_GLSL": M.HASH_GLSL, "glsl.turn": glsl.turn, "TURN_SCALE_UNIFORM": test ? " " + TURN_SCALE_UNIFORM_SOURCE : "", "TURN_SCALE_USE": test ? " " + TURN_SCALE_USE_SOURCE : "", "LIGHT_GLSL": LIGHT_GLSL, "GLYPHS_ACROSS": GLYPHS_ACROSS, "GLYPH_TEXELS": GLYPH_TEXELS, "MOST_GLYPHS / GLYPHS_ACROSS": MOST_GLYPHS / GLYPHS_ACROSS, "GLYPHS_ACROSS * GLYPH_TEXELS": GLYPHS_ACROSS * GLYPH_TEXELS, "COVER_LIGHT.toFixed(4)": COVER_LIGHT.toFixed(4) });
 
 Bolt.MOST_SEGMENTS = MOST_SEGMENTS;
 Bolt.MOST_GLYPHS = MOST_GLYPHS;

@@ -73,6 +73,8 @@ export interface SharedGlsl {
   bloom: string;
   // the crest hiding's chunk (M.CrestHide.GLSL), included by the programs that draw glyphs
   crest: string;
+  // the glyphs' random turn's chunk (M.GlyphTurn.GLSL), included by the vertex programs that draw glyphs
+  turn: string;
 }
 
 // a Wallpaper Engine setting's value as an effect is given it (by its kind in project.json)

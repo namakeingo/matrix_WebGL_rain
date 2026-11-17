@@ -3,7 +3,7 @@
 // picture (HdrOutput.decide's gate on, a presenter ready and its path checked); after the tone map:
 // present() hands the picture to the presenter (WebGPU's extended tone mapping), a frame or two behind.
 // The picture reaches WebGPU one of two ways (HdrOutput.pathFor): "bitmap" (the pack pass writes it into the
-// canvas, twice as wide, which becomes an ImageBitmap that WebGPU copies on the GPU: no CPU readback; used
+// canvas, 1.25 times as wide (HdrPack.packedWidth), which becomes an ImageBitmap that WebGPU copies on the GPU: no CPU readback; used
 // only after a self-check sent a known picture through it once and every level came back exact), else
 // "readback" (the picture read into pixel pack buffers, fences, the newest taken into a buffer of HdrBuffers'
 // pool and transferred on). The presenter runs in a worker of its own (workers/hdrworker.ts); where no worker
@@ -20,6 +20,7 @@
 // 2026-11-05: the presenter in a worker of its own (HdrWorker, HdrBuffers); DirectBackend where none.
 // 2026-11-05: RGB10_A2: no float formats to choose between, no float render targets needed.
 // 2026-11-05: the bitmap path and its self-check, the readback as the fallback.
+// 2026-11-17: presentPacked tests the in-flight limit before the pack; the HDR picture let go after each present.
 import { M } from "./core";
 import type { HdrReport, HdrOutputReport } from "../platform/support";
 import type { Exposure } from "../effects/exposure";
@@ -206,7 +207,7 @@ export class HdrPath {
     this.gate = { on: false, why: "HDR setting off" };
   }
 
-  // whether the canvas is to be twice as wide this frame (the bitmap path draws the packed picture into it)
+  // whether the canvas is to be packedWidth wide this frame (the bitmap path draws the packed picture into it)
   get packed(): boolean {
     return this.ready && !this.checking && this.path === "bitmap";
   }
@@ -431,6 +432,8 @@ export class HdrPath {
     } else {
       this.presentReadback(gl, exposure, backend);
     }
+    // (the pack pass or the readback request has read the HDR picture: nothing reads it afterwards)
+    exposure.invalidateHdr();
     this.reveal();
   }
 
@@ -444,18 +447,17 @@ export class HdrPath {
     }
   }
 
-  // the bitmap path: the picture packed into the canvas (twice as wide), the canvas handed over as an ImageBitmap
+  // the bitmap path: the picture packed into the canvas (packedWidth wide), the canvas handed over as an ImageBitmap
   // (a transfer, not a copy), the presenter copying it on the GPU; a frame while it has IN_FLIGHT to do is skipped
   presentPacked(gl: WebGL2RenderingContext, exposure: Exposure, backend: HdrBackend): void {
     const r = this.report;
     const t0 = performance.now();
-    exposure.packHdr();
-    const t1 = performance.now();
-    const bitmap = (gl.canvas as OffscreenCanvas).transferToImageBitmap();
-    if (backend.inFlight >= IN_FLIGHT) {
-      bitmap.close();
-    } else {
-      backend.presentBitmap(bitmap, exposure.scene.width, exposure.scene.height);
+    let t1 = t0;
+    // (the in-flight limit first: a frame that will be dropped pays no pack and no transfer)
+    if (backend.inFlight < IN_FLIGHT) {
+      exposure.packHdr();
+      t1 = performance.now();
+      backend.presentBitmap((gl.canvas as OffscreenCanvas).transferToImageBitmap(), exposure.scene.width, exposure.scene.height);
     }
     const t2 = performance.now();
     r.requestMs += (t1 - t0 - r.requestMs) * SMOOTH;

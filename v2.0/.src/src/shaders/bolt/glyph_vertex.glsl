@@ -6,6 +6,7 @@ ${M.Camera.GLSL}
 ${glsl.fog}
 ${M.GlyphAtlas.VERTEX_GLSL}
 ${M.HASH_GLSL}
+${glsl.turn}
 #define WAVE_LIFT_AT
 ${WAVE_LIFT_GLSL}
 ${FOOT_GLSL}
@@ -13,6 +14,8 @@ ${LIGHT_GLSL}
 uniform highp sampler2D uBoltGlyphs;
 uniform int uFirst;
 uniform float uMirror;
+// 3D Symbols: each character is turned about its own vertical axis by a random angle fixed by its seed (turnAngle); off, no turn
+uniform bool uSymbols3d;${TURN_SCALE_UNIFORM}
 uniform int uGlyphs;
 uniform vec4 uAge;
 // the characters drawn from a list of their indices (aDrop: slot x region + place), else uFirst + gl_InstanceID
@@ -27,6 +30,8 @@ out float vLight;
 out float vHead;
 out vec3 vWorld;
 flat out float vCover;
+// the character's turn as (cos, sin), for the fragment shaders' relief view
+flat out vec2 vTurn;
 const int ACROSS = ${GLYPHS_ACROSS};
 const int TEXELS = ${GLYPH_TEXELS};
 const int INK_ROW = ${MOST_GLYPHS / GLYPHS_ACROSS};
@@ -102,7 +107,12 @@ void main() {
     return;
   }
   vGlyph = glyph;
-  vec3 world = place + vec3((aCorner.x - 0.5) * p.w, (aCorner.y - 0.5) * p.w, 0.0);
+  // (the turn about the character's own vertical axis through its centre, fixed by the seed it moves with: angle 0 is the cosine 1 and the sine 0: no change; the mask's quad is this one)
+  float turn = uSymbols3d ? turnAngle(seed) : 0.0;${TURN_SCALE_USE}
+  vec2 cs = turnCS(turn);
+  vTurn = cs;
+  vec2 side = turnOffset((aCorner.x - 0.5) * p.w, cs);
+  vec3 world = place + vec3(side.x, (aCorner.y - 0.5) * p.w, side.y);
   world.y *= uMirror;
   vec4 clip = cViewProj * vec4(world, 1.0);
   vWorld = world;

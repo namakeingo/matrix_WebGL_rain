@@ -10,6 +10,6 @@ ${unpackHdr}
   let x = i32(at.x);
   let row = ${height} - 1 - i32(at.y);
   let hi = textureLoad(image, vec2<i32>(x, row), 0);
-  let lo = textureLoad(image, vec2<i32>(x + ${width}, row), 0);
-  return vec4<u32>(unpackHdr(hi, lo), 3u);
+  let lo = textureLoad(image, vec2<i32>(${width} + (x >> 2), row), 0);
+  return vec4<u32>(unpackHdr(hi, lo, x), 3u);
 }

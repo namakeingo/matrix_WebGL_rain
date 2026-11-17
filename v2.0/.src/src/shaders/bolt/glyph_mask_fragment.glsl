@@ -3,6 +3,8 @@ precision highp float;
 precision highp int;
 precision highp sampler3D;
 precision highp sampler2DArray;
+// (the characters' turn: the relief's view is taken in the turned quad's frame, vTurn from the vertex shader)
+#define TURNED
 uniform sampler2DArray uAtlas;
 uniform float uMirror;
 ${M.Camera.GLSL}

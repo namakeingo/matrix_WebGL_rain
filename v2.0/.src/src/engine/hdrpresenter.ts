@@ -170,7 +170,7 @@ export class HdrPresenter {
     this.draw(this.pipeline, this.group);
   }
 
-  // a picture handed over as an ImageBitmap (2 x width wide, height rows: HdrPack's two halves), copied on the
+  // a picture handed over as an ImageBitmap (HdrPack.packedWidth(width) wide, height rows), copied on the
   // GPU and shown; the bitmap is closed
   presentBitmap(bitmap: ImageBitmap, width: number, height: number): void {
     if (this.lost) {
@@ -183,7 +183,7 @@ export class HdrPresenter {
         this.packed.destroy();
       }
       this.packed = this.device.createTexture({
-        size: [2 * width, height],
+        size: [M.HdrPack.packedWidth(width), height],
         format: "rgba8unorm",
         usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
       });
@@ -195,7 +195,7 @@ export class HdrPresenter {
         ],
       });
     }
-    this.device.queue.copyExternalImageToTexture({ source: bitmap }, { texture: this.packed }, [2 * width, height]);
+    this.device.queue.copyExternalImageToTexture({ source: bitmap }, { texture: this.packed }, [M.HdrPack.packedWidth(width), height]);
     bitmap.close();
     this.draw(this.bitmapPipeline, this.packedGroup!);
   }
@@ -212,21 +212,21 @@ export class HdrPresenter {
     this.frames++;
   }
 
-  // the bitmap path's self-check: the known picture (HdrPack.checkWords, packed into a canvas 2 x CHECK_WIDTH
+  // the bitmap path's self-check: the known picture (HdrPack.checkWords, packed into a canvas HdrPack.packedWidth(CHECK_WIDTH)
   // wide) copied and unpacked into a 32 bit unsigned target, read back, and compared level by level; true when
   // every level of every channel of every pixel is exact; the bitmap is closed
   async checkBitmap(bitmap: ImageBitmap, width: number, height: number): Promise<boolean> {
     const P = M.HdrPack;
     const W = P.CHECK_WIDTH;
     const H = P.CHECK_HEIGHT;
-    if (this.lost || width !== W || height !== H || bitmap.width !== 2 * W || bitmap.height !== H) {
+    if (this.lost || width !== W || height !== H || bitmap.width !== P.packedWidth(W) || bitmap.height !== H) {
       bitmap.close();
       return false;
     }
     const device = this.device;
     device.pushErrorScope("validation");
-    const packed = device.createTexture({ size: [2 * W, H], format: "rgba8unorm", usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT });
-    device.queue.copyExternalImageToTexture({ source: bitmap }, { texture: packed }, [2 * W, H]);
+    const packed = device.createTexture({ size: [P.packedWidth(W), H], format: "rgba8unorm", usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT });
+    device.queue.copyExternalImageToTexture({ source: bitmap }, { texture: packed }, [P.packedWidth(W), H]);
     bitmap.close();
     const target = device.createTexture({ size: [W, H], format: "rgba32uint", usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
     const module = device.createShaderModule({ code: fill(HDR_CHECK_SOURCE, { "unpackHdr": P.WGSL, "width": W, "height": H }) });
