@@ -5,11 +5,12 @@
 // it), so a longer step means fewer steps. The edge loss a step (EDGE_LOSS at STABLE_REF) is proportional to cdt: the loss per metre stays. Pure: no GL, no page.
 //
 // Changelog:
+// 2026-11-18: the grid 1024 x 512 cells, was 2048 x 1024 (cells twice as wide, so cdt doubles and the steps a second halve: about an eighth of the wave work)
 // 2026-11-08: new (STABLE 0.8 as the level of detail's constant, STABLE_REF 0.45 the earlier one).
 import { M } from "../engine/core";
 
-const ACROSS = 2048;
-const DOWN = 1024;
+const ACROSS = 1024;
+const DOWN = 512;
 // the waves' speed at Ripples speed 75 (m/s)
 const SPEED = 0.25;
 // the share of the stability limit a step uses: with the level of detail, and without it (the earlier value)

@@ -9,26 +9,31 @@
 // - An impact is a push of the water's speed: its height is its push after one step and grows about linearly (about one push a step) to a peak of
 //   7 to 60 pushes after 12 to 130 steps, so a chain that ran when an impact was young reads a fraction of the height it reaches. newPush is the sum of the
 //   peaks (peakOf) of the impacts still young at S0 (Young.sum(S0)): applied before S0 and not yet past their peak, or applied after S0.
-// - peakOf: 0.4 keep min(spread) (spread = max(size, 0.7 cell) each way, keep = (size / spread.x)(size / spread.z)): the replica of the scheme gives at most
-//   0.75 P min(spread) / cdt for the push P = 0.4 cdt keep (cdt cancels), over sizes 0.1 to 6 x 5 cm, 4 to 40 m, STABLE 0.45 and 0.8.
-// - youngSteps: 4 min(spread) / cdt + 4: the replica's peak comes by 2.7 min(spread) / cdt steps at the latest.
-// - growth: the field with every impact past its peak rises by waves lining up by at most 1.036 after 1 step, 1.122 after 4, 1.234 after 8, 1.382 after 24,
-//   then falls back (replica: STABLE 0.45 and 0.8, Ripples speeds 75 to 300, 0.25 to 64 impacts a m^2 a second, up to 220 steps; the largest single
-//   ratio 1.737). No exact bound exists for the discrete scheme (it is not energy bounded), so the margin is measured: tests.wavemaxbound holds it in 100% of
-//   the replica's pairs.
+// - peakOf: 0.8 x 0.4 keep min(spread) (spread = max(size, 0.7 cell) each way, keep = (size / spread.x)(size / spread.z)): the replica of the scheme on the
+//   1024 x 512 grid gives at most 0.64 P min(spread) / cdt for the push P = 0.4 cdt keep (cdt cancels), over sizes 0.1 to 6 x 5 cm, 4 to 40 m, STABLE 0.45 and
+//   0.8, so PEAK_RATIO 0.8 keeps a margin of 1.25 (the replica's highest share of peakOf is 0.797). The grid's far edge absorbs the waves over its last 32 rows
+//   (from 26 m on, 58% of the water's area between 3 and 40 m; the replica's peak at 40 m is 0.15 of peakOf): a place-blind bound cannot follow that, it stays
+//   above (a larger value is safe).
+// - youngSteps: 3 min(spread) / cdt + 4: the replica's peak comes by 2.1 min(spread) / cdt steps at the latest (the latest peak step is 0.63 of youngSteps).
+// - growth: the field with every impact past its peak rises by waves lining up by at most 1.037 after 1 step, 1.09 after 2, 1.18 after 3, 1.24 after 5,
+//   1.37 after 7, 1.43 after 18 (the largest), then falls back (replica on the 1024 x 512 grid, cells twice as wide: STABLE 0.45 and 0.8, Ripples speeds 75
+//   to 300, 0.25 to 64 impacts a m^2 a second, up to 86 steps after a chain). growth(n) = min(1 + 0.08 n, 1.8) is above each of those by at least 4% (after 3
+//   steps 1.24 over 1.18) and the cap leaves 26% over the largest. No exact bound exists for the discrete scheme (it is not energy bounded), so the margin
+//   is measured: tests.wavemaxbound holds it in 100% of the replica's pairs.
 // - The blocks' maxima (blockTop) are local: no bound covers them between chains, so the chain runs every frame while a strike's shadow march reads them (due).
 //
 // Changelog:
 // 2026-11-08: new.
+// 2026-11-18: recalibrated on the 1024 x 512 grid (was 2048 x 1024): GROWTH_PER_STEP 0.08 (was 0.04), GROWTH_CAP 1.8 (was 2), PEAK_RATIO 0.8 (was 1), YOUNG_RATIO 3 (was 4)
 import { M } from "../../engine/core";
 
 // the seconds between two chains
 const PERIOD = 1 / 30;
-const GROWTH_PER_STEP = 0.04;
-const GROWTH_CAP = 2;
+const GROWTH_PER_STEP = 0.08;
+const GROWTH_CAP = 1.8;
 const IMPACT_PUSH = 0.4;
-const PEAK_RATIO = 1;
-const YOUNG_RATIO = 4;
+const PEAK_RATIO = 0.8;
+const YOUNG_RATIO = 3;
 // the ledger's ring (steps of expiry it holds directly: longer ones go to the overflow list)
 const RING = 4096;
 const MASK = RING - 1;

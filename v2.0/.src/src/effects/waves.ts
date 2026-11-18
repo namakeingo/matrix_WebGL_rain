@@ -1,5 +1,5 @@
 // The waves: the water's surface, simulated on the water in the world: every step the waves need,
-// on a grid of 2048 x 1024 cells.
+// on a grid of 1024 x 512 cells.
 // - The grid lies on the water, fixed in the world (not on the view: a change of Plane height or
 //   of the window keeps every wave where it is): across by x / Z over the world's width
 //   (Camera.SPAN), down evenly by 1 / Z, from 0.9 of the nearest distance the camera sees the

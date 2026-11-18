@@ -12,7 +12,7 @@
 //   the eye from at least as far as it travelled) and the strikes' light on the water by eps times the light's sum: the pixel is flat
 //   when that shift is under FLAT_PX pixels and the light's error under FLAT_STRIKE (HDR). With the tolerance 0 (LOD off) no pixel is.
 //
-// The waves' job (kind "waves") is the coarse map of the water's blocks (512 x 256 blocks of 4 x 4 cells), in units of 8 x 8 blocks (64 x 32:
+// The waves' job (kind "waves") is the coarse map of the water's blocks (256 x 128 blocks of 4 x 4 cells), in units of 8 x 8 blocks (32 x 16:
 // UNITS, row by row from the nearest), each a conservative bound over its blocks (see levelOfUnit; a whole map is a couple of thousand bounds,
 // remade at any change of the view well inside the pool's late bound). A block's level is 0 where no pixel of the screen has its water point (the shader reads the PLANE point of a
 // pixel's ray, no displacement: the block's quad on the plane, the frustum's four side planes) or where the fog's transmittance to its
@@ -27,6 +27,7 @@
 // - The flat path's tolerance grows as the light falls: flatPx(T) = FLAT_PX / T, at most 1 pixel, so T x flatPx stays FLAT_PX.
 //
 // Changelog:
+// 2026-11-18: the waves' grid 1024 x 512 cells (was 2048 x 1024): the map 256 x 128 blocks of 4 x 4 cells in 512 units, the block size in cells derived (CELLS_PER_BLOCK).
 // 2026-11-07: the map in units of 8 x 8 blocks (2048 units, no kept map: a recompute is cheap).
 // 2026-11-07: the block map job ("waves"), the shadow march's cut and stride, flatPx by transmittance.
 // 2026-11-07: the flat path's bound (eps, the projection's pixels per radian, the limit).
@@ -72,14 +73,16 @@ function withinBlocks(wx: number, wz: number, cx: number, cz: number): boolean {
   return 2 * (wx + cx) <= 4 * cx && 2 * (wz + cz) <= 4 * cz;
 }
 
-// the blocks of the waves' grid (2048 x 1024 cells in blocks of 4 x 4), the tables' entries (levels 0 to 40) and the most strikes at once
-const BLOCKS_ACROSS = 512;
-const BLOCKS_DOWN = 256;
+// the blocks of the waves' grid (1024 x 512 cells in blocks of 4 x 4), the tables' entries (levels 0 to 40) and the most strikes at once
+const BLOCKS_ACROSS = 256;
+const BLOCKS_DOWN = 128;
 const BLOCKS = BLOCKS_ACROSS * BLOCKS_DOWN;
 const TABLE_SIZE = 41;
 const STRIKES_MOST = 4;
-const CELLS_ACROSS = 2048;
-const CELLS_DOWN = 1024;
+const CELLS_ACROSS = 1024;
+const CELLS_DOWN = 512;
+// the cells a block is wide and deep (the map's blocks across the grid)
+const CELLS_PER_BLOCK = CELLS_ACROSS / BLOCKS_ACROSS;
 const STEPS_MOST = 128;
 // the HDR light error one strike's dropped march may make (INVISIBLE through the exposure's largest gain and the tone curve's steepest
 // slope), shared by at most STRIKES_MOST strikes, and the fog model's transmittance under which the water's light is invisible
@@ -139,8 +142,8 @@ interface WavesView {
 let CORNER_X = 0;
 let CORNER_Z = 0;
 function cornerAt(grid: WavesGrid, bx: number, by: number, cx: number, cy: number): void {
-  const ux = (4 * (bx + cx)) / CELLS_ACROSS;
-  const uy = (4 * (by + cy)) / CELLS_DOWN;
+  const ux = (CELLS_PER_BLOCK * (bx + cx)) / CELLS_ACROSS;
+  const uy = (CELLS_PER_BLOCK * (by + cy)) / CELLS_DOWN;
   CORNER_Z = 1 / (1 / grid.near - uy * (1 / grid.near - 1 / grid.far));
   CORNER_X = CORNER_Z * (2 * ux - 1) * grid.span;
 }
@@ -182,7 +185,7 @@ function blockCellPixels(grid: WavesGrid, view: WavesView, bx: number, by: numbe
       edge = l;
     }
   }
-  return edge / 4;
+  return edge / CELLS_PER_BLOCK;
 }
 
 // an upper bound of the fog's transmittance to the block: the distance to its nearest point (exact: in distance z and bearing r = x / z the
@@ -270,7 +273,7 @@ function gridStatics(grid: WavesGrid): Float32Array {
   return Float32Array.of(grid.near, grid.far, grid.span, CELLS_ACROSS, CELLS_DOWN);
 }
 
-// the map's units: a unit is SUPER x SUPER blocks (64 x 32 units), so a whole map is a couple of thousand bounds and any change of the view
+// the map's units: a unit is SUPER x SUPER blocks (32 x 16 units), so a whole map is a few hundred bounds and any change of the view
 // remakes it in a small part of the pool's late bound. A unit's level bounds its blocks': it is 0 only when every block in it is (its quad
 // outside one frustum plane holds every block's quad outside it; the fog's transmittance to its nearest point is at least each block's),
 // and otherwise from the footprint of its largest cell (the corner blocks' and the near edge's middle block's) times that transmittance.
