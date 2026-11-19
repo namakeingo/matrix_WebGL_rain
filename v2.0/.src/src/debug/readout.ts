@@ -244,14 +244,12 @@ export class SupportReadout {
   }
 
   // Debug mode's OLED readout: OLED Pixel Shift (the most a shift may reach from where it started,
-  // across or down; 0: off), the scene's shift across, the clock's and the message's across and
+  // across or down; 0: off), the shift (one for the scene, the clock and the message), across and
   // down, in pixels
   static oledLines(o: OledReport): string[] {
     return [
       `OLED Pixel Shift: at most ${o.limit} px from where they started, across or down${o.limit === 0 ? " (off)" : ""}`,
-      `  scene ${o.scene.x} px across`,
-      `  clock ${o.clock.x} px across, ${o.clock.y} px down`,
-      `  message ${o.message.x} px across, ${o.message.y} px down`,
+      `  shift ${o.scene.x} px across, ${o.scene.y} px down (the scene, the clock and the message together)`,
     ];
   }
 

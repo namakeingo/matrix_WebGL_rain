@@ -7,9 +7,10 @@ layout(std140) uniform Camera {
   vec4 cUp;
   vec4 cScreen;   // the screen's width and height (pixels); z: the tangent of the angle below
                   // the horizon of the bottom of the screen
+  vec4 cLens;     // the image centre's shift from the window's centre in pixels (x right, y up; z, w 0)
 };
 const float FAR_DISTANCE = ${Camera.FAR_DISTANCE.toFixed(1)};
 // the ray from the eye through a pixel (gl_FragCoord's place)
 vec3 rayOf(vec2 fc) {
-  return normalize(cForward.xyz + (fc.x - cScreen.x * 0.5) / cEye.w * cRight.xyz + (fc.y - cScreen.y * 0.5) / cEye.w * cUp.xyz);
+  return normalize(cForward.xyz + (fc.x - cScreen.x * 0.5 - cLens.x) / cEye.w * cRight.xyz + (fc.y - cScreen.y * 0.5 - cLens.y) / cEye.w * cUp.xyz);
 }

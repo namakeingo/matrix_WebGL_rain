@@ -25,6 +25,7 @@
 // - compare(a, b): how many values of two arrays differ, and the first.
 //
 // Changelog:
+// 2026-11-18: restartOf's topAngle (the shown top row's angle for the view's top; halfFov when absent), and its halfFov is the floor's (the shown bottom row's angle).
 // 2026-11-12: landingOf (the step a fall ends in when its head meets the water m rows over or under the floor).
 // 2026-11-12: the spawn plane the rain gives is the spawn box's top (comment only; the layout's arithmetic is unchanged).
 // 2026-11-05: the floor (the water's, or the bottom of the screen's): layout, restartOf, headY.
@@ -68,7 +69,10 @@ export interface RestartParams {
   lastStep: number;
   eyeHeight: number;
   pitch: number;
+  // the angle of the shown window's bottom row below the optical axis (the screen floor's), halfFov with no lens
   halfFov: number;
+  // the angle of the shown window's top row above it (the view's top: the first fall past it), halfFov when absent
+  topAngle?: number;
   // the floor kind the layout was made for (omitted: the water)
   floor?: FloorKind;
 }
@@ -211,7 +215,7 @@ const restartOf = (p: RestartParams, into: Partial<RestartArrays> = {}): Restart
   const slots = fits(into.slots, Int32Array, p.slots) ? into.slots : new Int32Array(p.slots);
   const nextInSlot = fits(into.nextInSlot, Int32Array, COUNT) ? into.nextInSlot : new Int32Array(COUNT);
   const inWheel = fits(into.inWheel, Uint8Array, COUNT) ? into.inWheel : new Uint8Array(COUNT);
-  const tanTop = Math.tan(p.pitch + p.halfFov);
+  const tanTop = Math.tan(p.pitch + (p.topAngle === undefined ? p.halfFov : p.topAngle));
   const floor: FloorView | undefined = p.floor === "screen" ? { kind: "screen", eyeHeight: p.eyeHeight, pitch: p.pitch, halfFov: p.halfFov } : undefined;
   for (let i = 0; i < COUNT; i++) {
     life[i * 4] = NONE;

@@ -20,14 +20,15 @@
 // the other set waits for); it is the bloom's to read only in a frame that makes one. The bloom's
 // GLSL comes with the shared GLSL (glsl.bloom), its levels bound by Bloom's own result (bind,
 // unbind).
-// OLED Pixel Shift: the whole scene's picture shifted across where it is shown (shiftX, device
-// pixels, set by src/index.ts each frame from the text's shift): the screen's pixel x shows the
-// scene's x - shiftX, the column it uncovers black.
+// OLED Pixel Shift: the last pass has no shift of its own: the scene's shift is the camera's lens
+// (src/index.ts), so the scene's picture is already drawn shifted and each screen pixel shows the
+// scene's pixel at the same place.
 //
 // Changelog:
+// 2026-11-18: no shiftX and no uShift: the OLED shift is the camera's lens, the last pass reads the scene at the fragment's own pixel (no black edge).
 // 2026-11-15: the scene picture's third attachment, the crest picture (R32F: the eye's distance to the crest each pixel shows; bindCrest, unbindCrest).
 // 2026-11-04: TypeScript, a module of src/effects/ (was effects/exposure.js).
-// 2026-11-04: shiftX, the scene's OLED shift where it is shown.
+// 2026-11-04: shiftX, the scene's OLED shift where it is shown (removed 2026-11-18).
 // 2026-11-05: gain, the Exposure setting (was a constant 1).
 // 2026-11-05: packHdr, the HDR picture packed into the canvas (twice as wide) for an ImageBitmap.
 // 2026-11-17: the packed canvas HdrPack.packedWidth(width) wide (1.25 width, was 2 width); invalidateHdr, hdrOut let go once presented.
@@ -64,7 +65,6 @@ export class Exposure extends M.Effect {
   pack!: ShaderProgram;
   packWarmed: boolean;
   keep: boolean;
-  shiftX: number;
   secondWritten: boolean;
   resolved: boolean;
   none: Float32Array;
@@ -91,8 +91,6 @@ export class Exposure extends M.Effect {
     this.secondWritten = false;
     // (the tests': the pictures kept after they are shown, to read them)
     this.keep = false;
-    // the scene's shift across where it is shown (device pixels: OLED Pixel Shift)
-    this.shiftX = 0;
     this.gain = 1;
     this.hdr = false;
     this.headroom = M.HdrOutput.MAX_HEADROOM;
@@ -274,7 +272,6 @@ export class Exposure extends M.Effect {
     gl.uniform1i(u.uRaw, raw ? 1 : 0);
     gl.uniform1i(u.uNearness, nearness ? 1 : 0);
     gl.uniform1f(u.uExposure, this.gain);
-    gl.uniform1i(u.uShift, Math.round(this.shiftX));
     gl.uniform1f(u.uBloom, share);
     gl.uniform1i(u.uWithReflected, reflected ? 1 : 0);
     if (share > 0) {

@@ -100,6 +100,7 @@
 //   thread only without a worker).
 // Changelog:
 // 2026-11-04: TypeScript, a module of src/models/ (was engine/boltshape.js).
+// 2026-11-18: the meeting point reads the view's image centre (BoltView.cx() and cy(), the window's centre moved by the camera's lens) instead of width / 2 and height / 2.
 import { M } from "../engine/core";
 import type { Camera } from "../engine/camera";
 
@@ -114,6 +115,9 @@ export interface BoltView {
   pitch: number;
   eyeHeight: number;
   focal(): number;
+  // (the image centre in pixels from the top left: the window's centre moved by the camera's lens)
+  cx(): number;
+  cy(): number;
   // (x, y on the screen and the distance along the view, into out)
   project(x: number, y: number, z: number, out: Out): void;
 }
@@ -2419,7 +2423,7 @@ export class BoltShape {
       const eye = view.eyeHeight;
       // a row's plane through the eye (sign 1: n . p + w above 0 above the row on the screen)
       const rowPlane = (row: number, sign: number) => {
-        const k = (view.height / 2 - row) / focal;
+        const k = (view.cy() - row) / focal;
         return [0, sign * (c - k * s), sign * (s + k * c), -sign * eye * (c - k * s)];
       };
       view.project(top[0], top[1], top[2], proj);
@@ -2432,7 +2436,7 @@ export class BoltShape {
       const footAlong = proj[2];
       // (the meeting point's height: at its row, part of the way down, at its place across and
       // in depth)
-      const k = (view.height / 2 - (topRow + part * (footRow - topRow))) / focal;
+      const k = (view.cy() - (topRow + part * (footRow - topRow))) / focal;
       // (on its row at its depth; where the row meets the water nearer than that, at least
       // 0.02 of the strike's height up, the point brought nearer along the row instead, so it
       // keeps its row)
@@ -2444,7 +2448,7 @@ export class BoltShape {
           meet[1] = lowest;
         }
         const x = topX + part * (footX - topX) + ((f * meetAcross) / height) * (footRow - topRow);
-        meet[0] = ((x - view.width / 2) * ((meet[1] - eye) * s - meet[2] * c)) / focal;
+        meet[0] = ((x - view.cx()) *((meet[1] - eye) * s - meet[2] * c)) / focal;
       };
       meetPlace(placeMeet, top, meet, foot, view, proj);
       view.project(meet[0], meet[1], meet[2], proj);

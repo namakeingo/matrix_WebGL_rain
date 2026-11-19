@@ -42,6 +42,7 @@
 //   density's scale).
 //
 // Changelog:
+// 2026-11-18: the columns' rays go through the image centre of the lens (inputs.lensX and lensY, 0 when absent: the window's centre); the lens is in both tables' keys.
 // 2026-11-07: Lod: the physical level of a slice (transmittance), the refresh and the octaves by level, whole slices held, the strikes' skip.
 // 2026-11-07: level of detail: the dense tail (level 0), the refresh periods and the far octaves.
 // 2026-11-06: new; the pool's job kind "fog" registered.
@@ -85,7 +86,7 @@ const TOP_MIP = 7;
 
 // the view a job is made for: the shared inputs' eye, focal and screen, the water, and the volume's columns
 export interface FogQualityView {
-  inputs: { eyeY: number; focal: number; width: number; height: number; waterDrawn: boolean; sigma: number; air: number };
+  inputs: { eyeY: number; focal: number; width: number; height: number; lensX?: number; lensY?: number; waterDrawn: boolean; sigma: number; air: number };
   pitch: number;
   margin: number;
   across: number;
@@ -114,8 +115,9 @@ function rayY(view: FogQualityView, sin: number, cos: number, ix: number, iy: nu
   const i = view.inputs;
   const x = (((ix + 0.5) / view.across) * (1 + 2 * view.margin) - view.margin) * i.width;
   const y = (((iy + 0.5) / view.down) * (1 + 2 * view.margin) - view.margin) * i.height;
-  const u = (x - i.width * 0.5) / i.focal;
-  const v = (y - i.height * 0.5) / i.focal;
+  // (the image centre: the window's centre moved by the lens, 0 when absent)
+  const u = (x - (i.width * 0.5 + (i.lensX || 0))) / i.focal;
+  const v = (y - (i.height * 0.5 - (i.lensY || 0))) / i.focal;
   return (sin + v * cos) / Math.sqrt(1 + u * u + v * v);
 }
 
@@ -215,11 +217,11 @@ function flatOctaves(view: FogQualityView, k: number): number {
 // the table kept for a view: the sampled columns' cuts (times 1 + CULL_RELATIVE), sorted
 const TABLE_MOST = (SAMPLE_ACROSS + 2) * (SAMPLE_ACROSS + 2) * 4;
 const CUTS = new Float64Array(TABLE_MOST);
-const KEY = { eyeY: NaN, focal: NaN, width: NaN, height: NaN, waterDrawn: false, sigma: NaN, air: NaN, pitch: NaN, margin: NaN, across: -1, down: -1, count: 0, samples: 1 };
+const KEY = { eyeY: NaN, focal: NaN, width: NaN, height: NaN, lensX: NaN, lensY: NaN, waterDrawn: false, sigma: NaN, air: NaN, pitch: NaN, margin: NaN, across: -1, down: -1, count: 0, samples: 1 };
 
 function sameView(view: FogQualityView): boolean {
   const i = view.inputs;
-  return KEY.eyeY === i.eyeY && KEY.focal === i.focal && KEY.width === i.width && KEY.height === i.height && KEY.waterDrawn === i.waterDrawn && KEY.sigma === i.sigma && KEY.air === i.air && KEY.pitch === view.pitch && KEY.margin === view.margin && KEY.across === view.across && KEY.down === view.down;
+  return KEY.eyeY === i.eyeY && KEY.focal === i.focal && KEY.width === i.width && KEY.height === i.height && KEY.lensX === (i.lensX || 0) && KEY.lensY === (i.lensY || 0) && KEY.waterDrawn === i.waterDrawn && KEY.sigma === i.sigma && KEY.air === i.air && KEY.pitch === view.pitch && KEY.margin === view.margin && KEY.across === view.across && KEY.down === view.down;
 }
 
 function remember(view: FogQualityView): void {
@@ -228,6 +230,8 @@ function remember(view: FogQualityView): void {
   KEY.focal = i.focal;
   KEY.width = i.width;
   KEY.height = i.height;
+  KEY.lensX = i.lensX || 0;
+  KEY.lensY = i.lensY || 0;
   KEY.waterDrawn = i.waterDrawn;
   KEY.sigma = i.sigma;
   KEY.air = i.air;
@@ -327,12 +331,12 @@ const FRACTIONS = fractionTable();
 // the geometry of a view's columns, the whole grid scanned once for a view: the highest ray (dyMax), the highest ray among the columns
 // with no cut by the water (dyFree, -Infinity: none) and the distance past which the columns with a cut are all held (heldFrom, 0:
 // none), by the water's cut with its slack or density, whichever is first
-const LKEY = { eyeY: NaN, focal: NaN, width: NaN, height: NaN, waterDrawn: false, sigma: NaN, air: NaN, pitch: NaN, margin: NaN, across: -1, down: -1, dyMax: -Infinity, dyFree: -Infinity, heldFrom: 0 };
+const LKEY = { eyeY: NaN, focal: NaN, width: NaN, height: NaN, lensX: NaN, lensY: NaN, waterDrawn: false, sigma: NaN, air: NaN, pitch: NaN, margin: NaN, across: -1, down: -1, dyMax: -Infinity, dyFree: -Infinity, heldFrom: 0 };
 let DYS = new Float64Array(0);
 
 function lodSame(view: FogQualityView): boolean {
   const i = view.inputs;
-  return LKEY.eyeY === i.eyeY && LKEY.focal === i.focal && LKEY.width === i.width && LKEY.height === i.height && LKEY.waterDrawn === i.waterDrawn && LKEY.sigma === i.sigma && LKEY.air === i.air && LKEY.pitch === view.pitch && LKEY.margin === view.margin && LKEY.across === view.across && LKEY.down === view.down;
+  return LKEY.eyeY === i.eyeY && LKEY.focal === i.focal && LKEY.width === i.width && LKEY.height === i.height && LKEY.lensX === (i.lensX || 0) && LKEY.lensY === (i.lensY || 0) && LKEY.waterDrawn === i.waterDrawn && LKEY.sigma === i.sigma && LKEY.air === i.air && LKEY.pitch === view.pitch && LKEY.margin === view.margin && LKEY.across === view.across && LKEY.down === view.down;
 }
 
 function lodScan(view: FogQualityView): void {
@@ -344,6 +348,8 @@ function lodScan(view: FogQualityView): void {
   LKEY.focal = i.focal;
   LKEY.width = i.width;
   LKEY.height = i.height;
+  LKEY.lensX = i.lensX || 0;
+  LKEY.lensY = i.lensY || 0;
   LKEY.waterDrawn = i.waterDrawn;
   LKEY.sigma = i.sigma;
   LKEY.air = i.air;

@@ -21,11 +21,15 @@
 //   column now (a fall beginning now at the pixel's bearing: Rain's colours, colorState), their
 //   luminosity kept (the W3C 'color' blend: setLum).
 // - OLED Pixel Shift (OledShift, models/oled.ts): every 10 s of real time (not the simulation's:
-//   the screen's own time) the scene moves 1 px left or right and the clock and the message 1 px to
-//   a neighbouring pixel, never past the setting. The scene's shift is applied where its picture
-//   is shown (Exposure.shiftX, src/index.ts); the stamps and the letters are in screen pixels, so
-//   the stamps are drawn at the rain's place plus the scene's shift and the composite reads them at
-//   the scene's pixel plus the shift: the text stays where its own shift puts it.
+//   the screen's own time) the scene moves 1 px at most across and down (a step biased
+//   toward the least visited positions), never past the setting. The scene's shift is the camera's lens (src/index.ts
+//   gives it each frame before the camera's block is made), so the rain and the scene under the
+//   text are drawn at their shifted place; the text moves with the scene by the same number of
+//   pixels and has no shift of its own (layoutJob's shift is the scene's), the letters laid out again
+//   when it changes (stepShift: also a scene shift written, not only stepped), so a letter's place is
+//   its base + scene, and its box, its stamps (taken at
+//   the rain's place as the lens puts it: the stamp job's shift is 0) and its composite (at the
+//   letters' own rectangles, read at their own pixel) follow.
 // - No reflection of the text: taken to be 2.5 m from the eye along each pixel's ray, its mirror
 //   image in the water is below the bottom of the screen for every Plane height and window shape
 //   (scenetest.html ?test=textreflect).
@@ -35,6 +39,9 @@
 // Changelog:
 // 2026-11-04: first version.
 // 2026-11-06: the composite skipped while the letters' box is wholly off the screen.
+// 2026-11-19: the clock and the message have no shift of their own: layoutJob's shift is the scene's alone.
+// 2026-11-18: the text moves with the scene: layoutJob's shift was own + scene (laidX, laidY: the scene's shift the letters were laid out for; stepShift lays them out again when it changes).
+// 2026-11-18: the scene's shift is the camera's lens: the stamp job's shift is 0, the composite has no uShiftPx and uShift; stepShift (the shift's beat, called by src/index.ts before the camera's block).
 import { M } from "../engine/core";
 import { fill } from "../engine/glsl";
 import type { EffectContext } from "../engine/effect";
@@ -57,7 +64,7 @@ const MINUTE_MS = 60000;
 const OLED_SEED = 0x01ed5;
 
 // the stamps' drawing: steps from..to, their cells meeting the box (device pixels from the top
-// left: x0, y0, x1, y1), the scene's shift across, the tests' view of their ids
+// left: x0, y0, x1, y1), the shift of the stamps' place (0: the lens places the rain), the tests' view of their ids
 export type StampCallback = (from: number, to: number, box: Float32Array, shift: number, ids: boolean) => void;
 
 // one of the two texts: shown, its place and size, its text (the message's; the clock's from the
@@ -77,6 +84,9 @@ export class Text extends M.Effect {
   twelveHour: boolean;
   highContrast: boolean;
   limit: number;
+  // the scene's shift the letters were laid out for (device pixels)
+  laidX: number;
+  laidY: number;
   shift: OledShift;
   scale: number;
   width: number;
@@ -140,6 +150,8 @@ export class Text extends M.Effect {
     this.width = 0;
     this.height = 0;
     // the letters to lay out again; the stamps' pictures to clear
+    this.laidX = 0;
+    this.laidY = 0;
     this.dirty = true;
     this.cleared = false;
     // (after a resize: only the steps from the next on stamped)
@@ -266,9 +278,7 @@ export class Text extends M.Effect {
   // the letters laid out again where something they depend on changed; the OLED shift moved on by
   // the real time; the clock's text at a new minute; the steps since the last frame stamped
   update(time: number) {
-    if (this.shift.update(this.now(), this.limit)) {
-      this.dirty = true;
-    }
+    this.stepShift();
     if (this.clock.shown) {
       const ms = M.TEST && this.clockTime !== null ? this.clockTime : Date.now();
       const minute = Math.floor(ms / MINUTE_MS);
@@ -288,6 +298,15 @@ export class Text extends M.Effect {
     this.stamp(this.steps.stepAt(time));
   }
 
+  // the OLED shifts moved on by the real time and clamped to the limit (a change owes the layout, and so does a scene shift other than the one the letters were laid out for, whoever wrote it);
+  // src/index.ts calls it before the camera's block, so the scene's shift (the camera's lens) is the frame's own; update calls it again (the same time: nothing moves twice)
+  stepShift() {
+    const scene = this.shift.scene;
+    if (this.shift.update(this.now(), this.limit) || scene.x !== this.laidX || scene.y !== this.laidY) {
+      this.dirty = true;
+    }
+  }
+
   // both texts' letters, laid out here (the quality mode workers asks the task in fork instead: the same function)
   layOut() {
     this.dirty = false;
@@ -296,14 +315,16 @@ export class Text extends M.Effect {
     this.applyLayouts(out.clock, out.message);
   }
 
-  // what lays both texts out, as the layout's job takes it: the texts, their places, the screen and the shift
+  // what lays both texts out, as the layout's job takes it: the texts, their places, the screen and the shift (the scene's: the text moves with the scene)
   layoutJob(): LayoutJob {
     const s = this.shift;
     const clock = this.clock;
     const message = this.message;
+    this.laidX = s.scene.x;
+    this.laidY = s.scene.y;
     return {
-      clock: clock.shown ? { text: clock.text, place: clock.place, width: this.width, height: this.height, scale: this.scale, measure: CLOCK_MEASURE, dx: s.clock.x, dy: s.clock.y } : null,
-      message: message.shown ? { text: message.text, place: message.place, width: this.width, height: this.height, scale: this.scale, dx: s.message.x, dy: s.message.y } : null,
+      clock: clock.shown ? { text: clock.text, place: clock.place, width: this.width, height: this.height, scale: this.scale, measure: CLOCK_MEASURE, dx: s.scene.x, dy: s.scene.y } : null,
+      message: message.shown ? { text: message.text, place: message.place, width: this.width, height: this.height, scale: this.scale, dx: s.scene.x, dy: s.scene.y } : null,
     };
   }
 
@@ -399,7 +420,7 @@ export class Text extends M.Effect {
         gl.scissor(x0, this.height - y1, x1 - x0, y1 - y0);
         gl.clear(gl.DEPTH_BUFFER_BIT);
         gl.enable(gl.DEPTH_TEST);
-        this.onStamp(from, step, this.box, this.shift.scene.x, M.TEST && this.testIds);
+        this.onStamp(from, step, this.box, 0, M.TEST && this.testIds);
         gl.disable(gl.SCISSOR_TEST);
       }
     }
@@ -420,8 +441,8 @@ export class Text extends M.Effect {
     if (warm && !this.warmComposite) {
       return;
     }
-    // (the letters' box wholly off the screen, the OLED shift's reach included: nothing of them is drawn)
-    if (!warm && !this.warmComposite && !TextVisibility.onScreen(this.box, this.width, this.height, this.limit + 2)) {
+    // (the letters' box wholly off the screen, the reach of the own and the scene's OLED shifts included: nothing of them is drawn)
+    if (!warm && !this.warmComposite && !TextVisibility.onScreen(this.box, this.width, this.height, 2 * this.limit + 2)) {
       return;
     }
     this.warmComposite = false;
@@ -431,7 +452,6 @@ export class Text extends M.Effect {
       gl.bufferData(gl.ARRAY_BUFFER, this.offScreen, gl.DYNAMIC_DRAW);
       gl.bindBuffer(gl.ARRAY_BUFFER, null);
     }
-    const shift = this.shift.scene.x;
     gl.activeTexture(gl.TEXTURE0 + M.UNITS.work);
     gl.bindTexture(gl.TEXTURE_2D, this.stamps.textures[0]);
     gl.activeTexture(gl.TEXTURE0 + M.UNITS.bloomFrom);
@@ -443,8 +463,6 @@ export class Text extends M.Effect {
     glyphs.bind();
     let u = this.glyphsProgram.use();
     gl.uniform2f(u.uSize, glyphs.width, glyphs.height);
-    gl.uniform1f(u.uShiftPx, shift);
-    gl.uniform1i(u.uShift, shift);
     const recolor = colors.wave && !this.highContrast;
     gl.uniform1i(u.uRecolor, recolor ? 1 : 0);
     if (recolor) {
@@ -465,8 +483,6 @@ export class Text extends M.Effect {
     scene.bind();
     u = this.sceneProgram.use();
     gl.uniform2f(u.uSize, scene.width, scene.height);
-    gl.uniform1f(u.uShiftPx, shift);
-    gl.uniform1i(u.uShift, shift);
     gl.blendFunc(gl.ZERO, gl.ONE_MINUS_SRC_ALPHA);
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, count);
     this.guard.piece();

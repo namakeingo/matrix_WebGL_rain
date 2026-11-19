@@ -11,7 +11,7 @@
 // - client.rain(params): a promise of a layout and a restart at a step ({ generation, at, trail,
 //   layout, life, slots, nextInSlot, inWheel, active, reach }), or null when a newer one was asked
 //   before it started; params { generation, near, far, trail, wanted, steady, lastStep,
-//   eyeHeight, pitch, halfFov }.
+//   eyeHeight, pitch, halfFov (the shown bottom row's angle), topAngle (the top row's) }.
 // - client.glyphs(params): a promise of the atlas's characters ({ generation, bitmaps (an
 //   ImageBitmap a batch of GlyphAtlas.BATCH, its characters one under another), inks, ink (their
 //   sum) }), or
@@ -24,6 +24,7 @@
 // them, so a newer rain or glyphs job is seen and the older dropped).
 //
 // Changelog:
+// 2026-11-18: the rain job takes topAngle and gives the layout's angle (halfFov is the shown bottom row's angle).
 // 2026-11-04: TypeScript, a module of src/workers/ (was engine/sceneworker.js).
 import { M } from "../engine/core";
 import { ClientTask } from "../platform/threadedtask";
@@ -44,7 +45,9 @@ export interface RainParams {
   lastStep: number;
   eyeHeight: number;
   pitch: number;
+  // the shown window's bottom row's angle below the optical axis (the screen floor's; halfFov with no lens) and its top row's above it (the view's top; halfFov when absent)
   halfFov: number;
+  topAngle?: number;
   // the floor the drops fall to (omitted: the water)
   floor?: FloorKind;
   // the plane the falls start from, for React to music (omitted: the world's ceiling)
@@ -61,6 +64,8 @@ export interface RainResult extends RestartResult {
   floor: FloorKind;
   pitch: number;
   eyeHeight: number;
+  // the bottom row's angle the layout was made for (halfFov when absent)
+  angle?: number;
   spawn: { eyeHeight: number; pitch: number; halfFov: number } | null;
 }
 
@@ -245,9 +250,10 @@ export class SceneWorker {
           eyeHeight: p.eyeHeight,
           pitch: p.pitch,
           halfFov: p.halfFov,
+          topAngle: p.topAngle,
           floor: kind,
         });
-        const result = Object.assign(r, { generation: p.generation, at: p.lastStep, trail: p.trail, layout: laid.layout, floor: kind, pitch: p.pitch, eyeHeight: p.eyeHeight, spawn: p.spawn || null });
+        const result = Object.assign(r, { generation: p.generation, at: p.lastStep, trail: p.trail, layout: laid.layout, floor: kind, pitch: p.pitch, eyeHeight: p.eyeHeight, angle: p.halfFov, spawn: p.spawn || null });
         answer(message, result, [laid.layout.buffer, r.life.buffer, r.slots.buffer, r.nextInSlot.buffer, r.inWheel.buffer]);
       } else if (message.type === "glyphs") {
         const p = message.params;

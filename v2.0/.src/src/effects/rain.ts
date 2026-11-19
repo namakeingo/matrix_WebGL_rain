@@ -81,6 +81,7 @@
 //   by column.
 //
 // Changelog:
+// 2026-11-18: the OLED margin (Camera.margin, not the lens: the rain's world is the same at every pixel shift): the wheel's view, the call records, the part and the worker's job carry the extended window's top and bottom rows' angles (Camera.topAngle(), bottomAngle()); the screen floor's layout is laid out again past the tolerance of the bottom angle (viewDrifted, layoutAngle); setSpawnBox takes the extended window's angles and side tangents (boxTopAngle, boxBottomAngle, boxLeftTan, boxRightTan, recorded settings).
 // 2026-11-15: crestHide and the uCrest sampler: a drop behind a crest is discarded in the direct pass.
 // 2026-11-12: a drop meets the water by its life, never by moving: the gather pass (shaders/rain/gather_vertex.glsl, gatherMeets, pollMeets, setMeets) reads the water's rows at each drop's
 //   landing place back to the wheel (models/rainwheel.ts: setMeets), which ends the fall where the head meets the surface; the vertex shader draws the head's extension below the floor in a
@@ -186,12 +187,12 @@ const WHEEL_FIELDS = [
   "life", "layout", "slots", "nextInSlot", "inWheel", "active", "reach", "dirtyFirst", "dirtyLast", "lastStep", "wanted", "inView", "shares", "woken", "wokenCount", "fillPart", "fillFor",
   "musicCredit", "meanFall", "meanFallFor", "musicLight", "musicShown", "musicDeficit", "musicFree", "musicShowing", "musicOut", "musicAt", "staticAt", "trail", "time", "steady", "height",
   "width", "density", "fontMax", "fontMin", "layoutDirty", "layoutFloor", "layoutPitch", "layoutEye", "tiltResponsiveness", "wavePerStep", "waveStep", "wavePhase", "waveWidth", "waveSpeed",
-  "wave", "custom", "colors", "at", "landing", "wrongLandings", "boxPitch", "boxEyeHeight", "boxYaw", "boxPitchReach", "boxReachX", "boxReachY",
+  "wave", "custom", "colors", "at", "landing", "wrongLandings", "boxPitch", "boxEyeHeight", "boxYaw", "boxPitchReach", "boxReachX", "boxReachY", "boxTopAngle", "boxBottomAngle", "boxLeftTan", "boxRightTan", "layoutAngle",
 ] as const;
 // the settings the render thread sets on the wheel through the rain's own fields: kept in order among the calls made to the wheel (RainCall "set") while a task keeps a copy of it
 const RECORDED_SETS: Record<string, boolean> = {
   width: true, height: true, density: true, fontMin: true, fontMax: true, steady: true, custom: true, tiltResponsiveness: true,
-  boxPitch: true, boxEyeHeight: true, boxYaw: true, boxPitchReach: true, boxReachX: true, boxReachY: true,
+  boxPitch: true, boxEyeHeight: true, boxYaw: true, boxPitchReach: true, boxReachX: true, boxReachY: true, boxTopAngle: true, boxBottomAngle: true, boxLeftTan: true, boxRightTan: true,
 };
 
 // what the rain asks of the task that runs its steps (the splashes: effects/splashes.ts, src/index.ts gives it): whether it does (a task exists), whether the calls made to the wheel are
@@ -285,10 +286,16 @@ export class Rain extends M.Effect {
   declare boxPitchReach: number;
   declare boxReachX: number;
   declare boxReachY: number;
+  declare boxTopAngle: number;
+  declare boxBottomAngle: number;
+  declare boxLeftTan: number;
+  declare boxRightTan: number;
   // the floor, the pitch and the eye's height the layout in use was made for, with the mouse parallax's shift of it
   declare layoutFloor: FloorKind;
   declare layoutPitch: number;
   declare layoutEye: number;
+  // the shown window's bottom row's angle the layout was made for
+  declare layoutAngle: number;
   declare tiltResponsiveness: number;
   declare wavePerStep: number;
   declare waveStep: number;
@@ -576,7 +583,7 @@ export class Rain extends M.Effect {
   // the floor the next layout is made for (the water's: none to give), by the camera's view now
   floorView(): FloorView | undefined {
     const camera = this.camera;
-    return this.floorKind === "screen" ? { kind: "screen", eyeHeight: camera.eyeY(), pitch: camera.tilt(), halfFov: camera.halfFov() } : undefined;
+    return this.floorKind === "screen" ? { kind: "screen", eyeHeight: camera.eyeY(), pitch: camera.tilt(), halfFov: camera.bottomAngle() } : undefined;
   }
 
   // the frame's quality: the levels are the direct view's for the drops 0 .. n-1 and the mirrored view's for the units n .. 2n-1
@@ -664,7 +671,7 @@ export class Rain extends M.Effect {
     p.floor.kind = this.layoutFloor;
     p.floor.eyeHeight = this.layoutEye;
     p.floor.pitch = this.layoutPitch;
-    p.floor.halfFov = camera.halfFov();
+    p.floor.halfFov = this.layoutAngle;
     p.inputs = shared.inputs;
     const box = this.wheel.box();
     p.box.slope = box.slope;
@@ -697,11 +704,11 @@ export class Rain extends M.Effect {
     return { eyeHeight: box.planeEye, pitch: box.planePitch, halfFov: box.halfFov };
   }
 
-  // the spawn box's inputs (src/index.ts, each frame): the camera's base tilt and eye's height (never the parallax's live offsets) and the range the mouse parallax reaches (zero
+  // the spawn box's inputs (src/index.ts, each frame): the camera's base tilt and eye's height (never the parallax's live offsets), the angles of the top and bottom rows and the tangents of the side columns of the window extended by the OLED margin (Camera.topAngle(), bottomAngle(), leftTan(), rightTan(): never the lens's; a tangent of 0 is the window's own) and the range the mouse parallax reaches (zero
   // with the parallax off); a change is a recorded setting of the wheel (the splashes' worker's copy has it in order) and the drops counted again; the layout's top follows through
   // spawnNow (the layout owed when the top moved past the tolerance)
-  setSpawnBox(pitch: number, eyeHeight: number, reach: { yaw: number; pitch: number; eyeX: number; eyeY: number }): void {
-    if (this.boxPitch === pitch && this.boxEyeHeight === eyeHeight && this.boxYaw === reach.yaw && this.boxPitchReach === reach.pitch && this.boxReachX === reach.eyeX && this.boxReachY === reach.eyeY) {
+  setSpawnBox(pitch: number, eyeHeight: number, reach: { yaw: number; pitch: number; eyeX: number; eyeY: number }, topAngle: number = M.Camera.halfFov(), bottomAngle: number = M.Camera.halfFov(), leftTan = 0, rightTan = 0): void {
+    if (this.boxTopAngle === topAngle && this.boxBottomAngle === bottomAngle && this.boxLeftTan === leftTan && this.boxRightTan === rightTan && this.boxPitch === pitch && this.boxEyeHeight === eyeHeight && this.boxYaw === reach.yaw && this.boxPitchReach === reach.pitch && this.boxReachX === reach.eyeX && this.boxReachY === reach.eyeY) {
       return;
     }
     this.boxPitch = pitch;
@@ -710,6 +717,10 @@ export class Rain extends M.Effect {
     this.boxPitchReach = reach.pitch;
     this.boxReachX = reach.eyeX;
     this.boxReachY = reach.eyeY;
+    this.boxTopAngle = topAngle;
+    this.boxBottomAngle = bottomAngle;
+    this.boxLeftTan = leftTan;
+    this.boxRightTan = rightTan;
     this.retarget();
   }
 
@@ -758,7 +769,8 @@ export class Rain extends M.Effect {
       lastStep: at,
       eyeHeight: camera.eyeY(),
       pitch: camera.tilt(),
-      halfFov: camera.halfFov(),
+      halfFov: camera.bottomAngle(),
+      topAngle: camera.topAngle(),
       floor: this.floorKind,
     };
     this.worker!.rain(params).then(
@@ -786,6 +798,7 @@ export class Rain extends M.Effect {
     this.layoutFloor = r.floor;
     this.layoutPitch = r.pitch;
     this.layoutEye = r.eyeHeight;
+    this.layoutAngle = r.angle === undefined ? this.camera.halfFov() : r.angle;
     this.layoutSpawn = r.spawn;
     this.layoutDirty = true;
     this.adopt(r);
@@ -799,7 +812,7 @@ export class Rain extends M.Effect {
     const spawn = this.spawnNow();
     const r = RL.layout({ hashes: this.hashes!, near: this.nearest(), far: this.furthest(), trail, spawn: spawn || undefined, floor: this.floorView() });
     this.layoutSpawn = spawn;
-    this.installLayout(r.layout, trail, this.floorKind, this.camera.tilt(), this.camera.eyeY(), r.slots);
+    this.installLayout(r.layout, trail, this.floorKind, this.camera.tilt(), this.camera.eyeY(), r.slots, this.camera.bottomAngle());
   }
 
   // ---- the wheel (models/rainwheel.ts): what the rain asks of it ----
@@ -813,6 +826,8 @@ export class Rain extends M.Effect {
     view.tilt = camera.tilt();
     view.halfFov = camera.halfFov();
     view.yaw = camera.yaw;
+    view.topAngle = camera.topAngle();
+    view.bottomAngle = camera.bottomAngle();
     return this.wheel;
   }
 
@@ -836,7 +851,7 @@ export class Rain extends M.Effect {
     // (this wheel runs the call itself, right after: its sequence number is the last it has had)
     const q = ++this.callSeq;
     this.wheel.appliedSeq = q;
-    this.calls.push({ n: name, v: view ? [v.eyeX, v.eyeY, v.tilt, v.halfFov, v.yaw] : null, a: args, q });
+    this.calls.push({ n: name, v: view ? [v.eyeX, v.eyeY, v.tilt, v.halfFov, v.yaw, v.topAngle, v.bottomAngle] : null, a: args, q });
   }
 
   recordSet(key: string, value: unknown) {
@@ -850,9 +865,9 @@ export class Rain extends M.Effect {
   }
 
   // the layout and what it was made for set in the wheel (the trail's cells, the floor, the pitch and the eye's height; a new wheel's number of slots when given)
-  installLayout(layout: Float32Array, trail: number, floor: FloorKind, pitch: number, eye: number, slots: number | null) {
-    this.rec("installLayout", [layout.slice(), trail, floor, pitch, eye, slots], false);
-    this.wheel.installLayout(layout, trail, floor, pitch, eye, slots);
+  installLayout(layout: Float32Array, trail: number, floor: FloorKind, pitch: number, eye: number, slots: number | null, angle: number = this.camera.halfFov()) {
+    this.rec("installLayout", [layout.slice(), trail, floor, pitch, eye, slots, angle], false);
+    this.wheel.installLayout(layout, trail, floor, pitch, eye, slots, angle);
   }
 
   // a restart's lives and wheel taken (all the lives to upload)
@@ -1106,7 +1121,7 @@ export class Rain extends M.Effect {
     return {
       calls: [],
       before: this.calls.length,
-      view: { eyeX: v.eyeX, eyeY: v.eyeY, tilt: v.tilt, halfFov: v.halfFov, yaw: v.yaw },
+      view: { eyeX: v.eyeX, eyeY: v.eyeY, tilt: v.tilt, halfFov: v.halfFov, yaw: v.yaw, topAngle: v.topAngle, bottomAngle: v.bottomAngle },
       time,
       layoutPending: !!this.pending,
       swap: ready ? M.RainSimTick.cloneSwap(ready) : null,
@@ -1187,10 +1202,10 @@ export class Rain extends M.Effect {
     }
   }
 
-  // whether the view now (the eye's height and the pitch with the mouse parallax's shifts) is past the tolerance from the one the drops were laid out for
+  // whether the view now (the eye's height and the pitch with the mouse parallax's shifts, and the angle of the shown window's bottom row, which the lens moves) is past the tolerance from the one the drops were laid out for
   viewDrifted(): boolean {
     const tolerance = M.MouseParallax.TOLERANCE;
-    return Math.abs(this.camera.tilt() - this.layoutPitch) > tolerance.pitch || Math.abs(this.camera.eyeY() - this.layoutEye) > tolerance.eye;
+    return Math.abs(this.camera.tilt() - this.layoutPitch) > tolerance.pitch || Math.abs(this.camera.eyeY() - this.layoutEye) > tolerance.eye || Math.abs(this.camera.bottomAngle() - this.layoutAngle) > tolerance.pitch;
   }
 
   // the layout (when laid out) and the lives changed since the last time (their rows), uploaded

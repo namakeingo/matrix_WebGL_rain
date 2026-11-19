@@ -31,6 +31,8 @@
 // platform/renderlink.ts.
 //
 // Changelog:
+// 2026-11-19: Camera.setMargin(text.limit) each frame before camera.update (the OLED margin: the rain's floor, top and spawn box are the window extended by it, whatever the lens).
+// 2026-11-18: the scene's OLED shift is the camera's lens each frame (Text.stepShift, OledShift.lensOf, Camera.setLens before camera.update); no Exposure.shiftX; the rain reuse's shift key is 0 (the lens is in the camera's version).
 // 2026-11-15: the crest picture (the scene picture's third attachment) bound after the water's pass and given to the rain, the splashes and the bolt's characters (crestHide: the wave hit's gate).
 // 2026-11-13: the water gets the waves as its wave hit's source (waveSource).
 // 2026-11-12: Support.workers and Support.sceneWorker are set to "" when the first attempt of the bolt's or the scene's worker fails or is refused (no Worker), so the readout says "Workers: no".
@@ -551,7 +553,7 @@ export class Wallpaper implements WallpaperControl {
     this.musicCounted = new Int32Array(2048);
     this.musicCountedAt = -Infinity;
     this.nextMusicReadout = 0;
-    this.oledReport = { limit: 0, scene: { x: 0 }, clock: { x: 0, y: 0 }, message: { x: 0, y: 0 } };
+    this.oledReport = { limit: 0, scene: { x: 0, y: 0 } };
     this.frozenSince = 0;
     this.nearFar = new Float32Array(2);
     this.drawNothing = () => undefined;
@@ -894,7 +896,7 @@ export class Wallpaper implements WallpaperControl {
       this.spawnAmount = p.amount;
       this.spawnReach = p.on ? M.MouseParallax.reach(p.mode, p.amount, this.spawnLimits) : { yaw: 0, pitch: 0, eyeX: 0, eyeY: 0 };
     }
-    rain.setSpawnBox(camera.pitch, camera.eyeHeight, this.spawnReach);
+    rain.setSpawnBox(camera.pitch, camera.eyeHeight, this.spawnReach, camera.topAngle(), camera.bottomAngle(), camera.leftTan(), camera.rightTan());
   }
 
   // the music's reactions (matrix_web_rain's, the maths in the music worker: workers/musicworker.ts): the newest audio array, if a frame has not taken it yet, goes to the
@@ -1783,6 +1785,12 @@ export class Wallpaper implements WallpaperControl {
       hdrPath.hide();
     }
     this.applySize(toHdr && hdrPath.packed);
+    // (the OLED shift of the scene is the camera's lens: the shift moved on and clamped first, so the frame's block carries this frame's)
+    this.text.stepShift();
+    const lens = M.OledShift.lensOf(this.text.shift.scene);
+    this.camera.setLens(lens.x, lens.y);
+    // (the OLED margin: the pixel shift's limit, the most the lens can move the picture; the rain's world is the window extended by it, whatever the lens)
+    this.camera.setMargin(this.text.limit);
     this.camera.update();
     // (each strike's light now and their color: the fog applies them to the strikes' light it
     // gathered)
@@ -1825,7 +1833,8 @@ export class Wallpaper implements WallpaperControl {
         lit = lit || this.lightning.bolt[k] > 0;
       }
       ri.step = this.step;
-      ri.shift = this.text.shift.scene.x;
+      // (the reuse key's shift: the OLED shift only moved the text, and the scene's now is the camera's lens, in its version)
+      ri.shift = 0;
       ri.settings = this.settingsStamp;
       ri.covered = covers;
       ri.strikes = lit ? ++this.strikeFrames : 0;
@@ -1885,7 +1894,6 @@ export class Wallpaper implements WallpaperControl {
     if ((all || p.text) && !nearView) {
       this.text.composite(this.exposure.scene, this.exposure.glyphs.resolved, this.rain.colorState);
     }
-    this.exposure.shiftX = this.text.shift.scene.x;
     const bloom = all && !nearView ? this.bloom.render(this.exposure.glyphsTexture, this.exposure.reflectedTexture) : null;
     // (the HDR output: the tone map into the HDR picture, handed to WebGPU; every other frame, and every frame where
     // HDR is not used, the SDR path as before)
@@ -2278,6 +2286,8 @@ export class Wallpaper implements WallpaperControl {
     inputs.focal = camera.focal();
     inputs.width = camera.width;
     inputs.height = camera.height;
+    inputs.lensX = camera.lens.x;
+    inputs.lensY = camera.lens.y;
     inputs.sigma = this.fog.sigma();
     inputs.waterDrawn = this.waterState.waterDrawn;
     // (a drop, a splash or a foot lifted by a wave is at most the highest wave over the floor: every unit's radius grows by it, so the frustum test keeps every lifted one)
@@ -2476,10 +2486,7 @@ export class Wallpaper implements WallpaperControl {
       const shift = this.text.shift;
       o.limit = this.text.limit;
       o.scene.x = shift.scene.x;
-      o.clock.x = shift.clock.x;
-      o.clock.y = shift.clock.y;
-      o.message.x = shift.message.x;
-      o.message.y = shift.message.y;
+      o.scene.y = shift.scene.y;
     }
   }
 

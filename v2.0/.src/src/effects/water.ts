@@ -85,6 +85,7 @@
 //   M.TEST noWaveHit forces it off and forceWaveHit on, its gates open (uForceWaveHit).
 //
 // Changelog:
+// 2026-11-18: gridBox's columns reach the window's half width and slant with the camera's lens added (|lens.x|, |lens.y| over the focal length); at lens 0 the box is what it was.
 // 2026-11-15: the third output outCrest (the crest picture: the eye's distance to the crest, M.CrestHide.FAR where none), also in the sky-only variant.
 // 2026-11-14: the tests' waveHeight view (Water.MODES, uProbe): waveHeight read at a sweep of grid places, edges and outside included.
 // 2026-11-13: the wave hit (waveHitOn, uWaveHit, noWaveHit, forceWaveHit, waveSource, nearestWater).
@@ -281,8 +282,11 @@ export class Water extends M.Effect {
   gridBox() {
     const c = this.camera;
     const tan = Math.tan(c.halfFov());
-    const slant = Math.max(0.1, Math.cos(c.tilt()) - tan * Math.abs(Math.sin(c.tilt())));
-    const wide = ((c.width / c.height) * tan) / slant;
+    // (the window's pixels reach (width / 2 + |lens.x|) / focal across and (height / 2 + |lens.y|) / focal up or down: the lens moves the image centre off the window's centre)
+    const focal = c.focal();
+    const tanY = tan + Math.abs(c.lens.y) / focal;
+    const slant = Math.max(0.1, Math.cos(c.tilt()) - tanY * Math.abs(Math.sin(c.tilt())));
+    const wide = ((c.width / c.height) * tan + Math.abs(c.lens.x) / focal) / slant;
     const column = (g: number) => ((g / M.Camera.SPAN + 1) / 2) * GRID_ACROSS;
     const first = Math.max(0, Math.floor(column(-wide)) - 1);
     const last = Math.min(GRID_ACROSS, Math.ceil(column(wide)) + 1);

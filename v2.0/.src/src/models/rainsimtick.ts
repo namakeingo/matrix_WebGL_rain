@@ -14,6 +14,7 @@
 // - snapshot()/restore() cover the splashes' tick and the wheel (after a restore everything is owed to the upload: the lives and the layout).
 //
 // Changelog:
+// 2026-11-18: the call records' view array has topAngle and bottomAngle (7 numbers); RainSwap and the tick's wheel state carry the layout's angle.
 // 2026-11-12: the call "setMeets" (the water's heights table of the drops' landings, an ordered input of the wheel: models/rainwheel.ts).
 // 2026-11-10: new.
 // 2026-11-11: applyRain keeps the applied mean fall valid for the wheel's clock rate (RainWheel.meanFallRate).
@@ -27,7 +28,7 @@ import type { FloorKind } from "./floor";
 // the pool's size (the lives are 4 numbers a drop)
 const COUNT = 65536;
 
-// a call made to the wheel on the render thread: its name, the view it was made with (eyeX, eyeY, tilt, halfFov, yaw; null: none read) and its arguments (copies: the call is kept to
+// a call made to the wheel on the render thread: its name, the view it was made with (eyeX, eyeY, tilt, halfFov, yaw, topAngle, bottomAngle; null: none read) and its arguments (copies: the call is kept to
 // be run again)
 export interface RainCall {
   n: string;
@@ -45,6 +46,8 @@ export interface RainSwap {
   floor: FloorKind;
   pitch: number;
   eyeHeight: number;
+  // the shown bottom row's angle the layout was made for (halfFov when absent)
+  angle?: number;
   spawn: { eyeHeight: number; pitch: number; halfFov: number } | null;
   life: Uint32Array;
   slots: Int32Array;
@@ -91,6 +94,7 @@ export interface RainOutState {
   layoutFloor: FloorKind;
   layoutPitch: number;
   layoutEye: number;
+  layoutAngle: number;
   trail: number;
   dirtyFirst: number;
   dirtyLast: number;
@@ -145,6 +149,9 @@ function applyCall(w: RainWheel, c: RainCall): void {
     view.tilt = v[2]!;
     view.halfFov = v[3]!;
     view.yaw = v[4]!;
+    // (a view of 5 numbers, from before the lens: the angles are halfFov)
+    view.topAngle = v.length > 5 ? v[5]! : v[3]!;
+    view.bottomAngle = v.length > 6 ? v[6]! : v[3]!;
   }
   const a = c.a;
   const wheel = w as unknown as Record<string, unknown>;
@@ -156,7 +163,7 @@ function applyCall(w: RainWheel, c: RainCall): void {
     w.layoutPending = a[1] as boolean;
     w.spawnByMusic(a[0] as number);
   } else if (c.n === "installLayout") {
-    w.installLayout((a[0] as Float32Array).slice(), a[1] as number, a[2] as FloorKind, a[3] as number, a[4] as number, a[5] as number | null);
+    w.installLayout((a[0] as Float32Array).slice(), a[1] as number, a[2] as FloorKind, a[3] as number, a[4] as number, a[5] as number | null, a[6] as number | undefined);
   } else if (c.n === "adopt") {
     const r = a[0] as { life: Uint32Array; slots: Int32Array; nextInSlot: Int32Array; inWheel: Uint8Array; active: number; reach: number };
     w.adopt({ life: r.life.slice(), slots: r.slots.slice(), nextInSlot: r.nextInSlot.slice(), inWheel: r.inWheel.slice(), active: r.active, reach: r.reach });
@@ -188,6 +195,7 @@ export class RainSimTick extends SplashTick {
       floor: r.floor,
       pitch: r.pitch,
       eyeHeight: r.eyeHeight,
+      angle: r.angle,
       spawn: r.spawn ? { eyeHeight: r.spawn.eyeHeight, pitch: r.spawn.pitch, halfFov: r.spawn.halfFov } : null,
       life: r.life.slice(),
       slots: r.slots.slice(),
@@ -227,7 +235,7 @@ export class RainSimTick extends SplashTick {
         const r = ready!;
         ready = null;
         this.swapped = true;
-        w.installLayout(r.layout.slice(), r.trail, r.floor, r.pitch, r.eyeHeight, null);
+        w.installLayout(r.layout.slice(), r.trail, r.floor, r.pitch, r.eyeHeight, null, r.angle);
         w.adopt({ life: r.life.slice(), slots: r.slots.slice(), nextInSlot: r.nextInSlot.slice(), inWheel: r.inWheel.slice(), active: r.active, reach: r.reach });
         w.retarget();
       };
@@ -322,6 +330,7 @@ export class RainSimTick extends SplashTick {
       layoutFloor: w.layoutFloor,
       layoutPitch: w.layoutPitch,
       layoutEye: w.layoutEye,
+      layoutAngle: w.layoutAngle,
       trail: w.trail,
       dirtyFirst: from,
       dirtyLast: to,
@@ -340,7 +349,7 @@ export class RainSimTick extends SplashTick {
       return;
     }
     if (out.swapped && swap) {
-      wheel.installLayout(swap.layout, swap.trail, swap.floor, swap.pitch, swap.eyeHeight, null);
+      wheel.installLayout(swap.layout, swap.trail, swap.floor, swap.pitch, swap.eyeHeight, null, swap.angle);
       wheel.slots = swap.slots;
       wheel.nextInSlot = swap.nextInSlot;
       wheel.inWheel = swap.inWheel;
@@ -364,6 +373,7 @@ export class RainSimTick extends SplashTick {
     wheel.layoutFloor = out.layoutFloor;
     wheel.layoutPitch = out.layoutPitch;
     wheel.layoutEye = out.layoutEye;
+    wheel.layoutAngle = out.layoutAngle;
     wheel.trail = out.trail;
     wheel.layoutDirty = wheel.layoutDirty || out.layoutDirty;
     if (out.dirtyLast >= out.dirtyFirst) {

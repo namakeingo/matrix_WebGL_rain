@@ -22,7 +22,14 @@
 //   world's ceiling) over (the box's share x the mean part it holds under the box's top).
 // - sees(view, x, y, z): whether a place is within the view's width at its distance (the turned and pitched view's frustum sides, the eye where the parallax has it).
 //
+// - topAngle, bottomAngle (optional, halfFov when absent), leftTan and rightTan (optional, tanH when absent): the angles above and below the optical axis of the top and bottom rows and the
+//   tangents of the left and right columns of the window EXTENDED by the OLED margin (Camera.topAngle(), bottomAngle(), leftTan(), rightTan()): the corner rays are taken there, so the box covers
+//   every row and column the pixel shift can reveal and does not depend on the lens (the rain's world is the same at every shift); exactly the box of before at margin 0.
+// - The top corner rays are taken at tan(topAngle), so the box's top plane (planeEye + z x tan(planePitch + halfFov)) reaches the extended top row at every lens.
+//
 // Changelog:
+// 2026-11-18: BoxParams.topAngle, bottomAngle, leftTan, rightTan (the corner rays at the extended window's rows and columns).
+// 2026-11-18: BoxParams.topAngle (the top corner rays at the extended top row's tangent).
 // 2026-11-12: new.
 import { M } from "../engine/core";
 
@@ -36,6 +43,12 @@ const SAMPLES = 32;
 export interface BoxParams {
   aspect: number;
   halfFov: number;
+  // the angle above the optical axis of the shown window's top row (halfFov when absent)
+  topAngle?: number;
+  // the angle below the optical axis of the extended window's bottom row (halfFov when absent), and the tangents of its left and right columns (tanH when absent)
+  bottomAngle?: number;
+  leftTan?: number;
+  rightTan?: number;
   pitch: number;
   eyeHeight: number;
   yaw: number;
@@ -95,7 +108,8 @@ function cornerRise(p: number, psi: number, u: number, v: number): number {
 }
 
 // the largest of the corner rays' x over z and rise over z for the pitches pitch +- reach and the yaws +- yaw
-function slopes(pitch: number, pitchReach: number, yaw: number, tanH: number, tanV: number): { side: number; rise: number } {
+// (tanLeft and tanRight: the sides' horizontal tangents, tanBottom and tanTop the bottom and top corners' vertical tangents)
+function slopes(pitch: number, pitchReach: number, yaw: number, tanLeft: number, tanRight: number, tanBottom: number, tanTop: number): { side: number; rise: number } {
   let side = 0;
   let rise = -Infinity;
   for (let a = -1; a <= 1; a += 2) {
@@ -103,11 +117,11 @@ function slopes(pitch: number, pitchReach: number, yaw: number, tanH: number, ta
     for (let b = -1; b <= 1; b += 2) {
       const psi = b * yaw;
       for (let k = -1; k <= 1; k += 2) {
-        const u = k * tanH;
+        const u = k < 0 ? -tanLeft : tanRight;
         for (let l = -1; l <= 1; l += 2) {
-          side = Math.max(side, cornerX(p, psi, u, l * tanV));
+          side = Math.max(side, cornerX(p, psi, u, l > 0 ? tanTop : -tanBottom));
         }
-        rise = Math.max(rise, cornerRise(p, psi, u, tanV));
+        rise = Math.max(rise, cornerRise(p, psi, u, tanTop));
       }
     }
   }
@@ -119,8 +133,12 @@ function make(p: BoxParams, into?: SpawnBoxData): SpawnBoxData {
   const span = M.Camera.SPAN;
   const tanH = p.aspect * Math.tan(p.halfFov);
   const tanV = Math.tan(p.halfFov);
-  const reach = slopes(p.pitch, Math.max(0, p.pitchReach), Math.max(0, p.yaw), tanH, tanV);
-  const plain = slopes(p.pitch, 0, 0, tanH, tanV);
+  const tanTop = p.topAngle === undefined ? tanV : Math.tan(p.topAngle);
+  const tanBottom = p.bottomAngle === undefined ? tanV : Math.tan(p.bottomAngle);
+  const tanLeft = p.leftTan === undefined ? tanH : p.leftTan;
+  const tanRight = p.rightTan === undefined ? tanH : p.rightTan;
+  const reach = slopes(p.pitch, Math.max(0, p.pitchReach), Math.max(0, p.yaw), tanLeft, tanRight, tanBottom, tanTop);
+  const plain = slopes(p.pitch, 0, 0, tanLeft, tanRight, tanBottom, tanTop);
   out.slope = Math.min(span, reach.side);
   out.shift = Math.max(0, p.eyeX);
   out.span = span;

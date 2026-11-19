@@ -5,6 +5,7 @@
 // run here) or with the answer its fork asked of the worker in the same frame, so the picture does not depend on where the plan ran.
 //
 // Changelog:
+// 2026-11-18: the lens (lensX, lensY, builtLensX, builtLensY): a lens other than the one the volume was built for is a move of the view; the periods' view carries the lens.
 // 2026-11-10: new, from Fog.update, Fog.setEvery, Fog.due and Fog.buildDue.
 // 2026-11-11: same() tells an array from a typed array or a non-array, compares key sets both ways by own property, and takes objects that are not plain data by reference only.
 import { M } from "../engine/core";
@@ -45,6 +46,11 @@ export interface FogPlanInput {
   baseChanged: boolean;
   offsets: ParallaxOffsets;
   builtFor: ParallaxOffsets;
+  // the camera's lens now and the one the volume was built for (device pixels, Camera.lens; absent: 0): a different lens moves the volume's rays, so it is a move of the view
+  lensX?: number;
+  lensY?: number;
+  builtLensX?: number;
+  builtLensY?: number;
   // the gap in time that refreshes everything, the shade grid's draws (a count) and its refresh rate (draws a second), its credit and the next draw
   gap: number;
   draws: number;
@@ -116,7 +122,7 @@ function periods(input: FogPlanInput, all: boolean, every: Uint8Array, drop: Uin
     return { everyVersion: input.everyVersion, everyAcross: input.everyAcross };
   }
   const view: FogQualityView = {
-    inputs: { eyeY: input.eyeY, focal: input.focal, width: input.width, height: input.height, waterDrawn: input.waterDrawn, sigma: input.sigma, air: input.air },
+    inputs: { eyeY: input.eyeY, focal: input.focal, width: input.width, height: input.height, lensX: input.lensX || 0, lensY: input.lensY || 0, waterDrawn: input.waterDrawn, sigma: input.sigma, air: input.air },
     pitch: input.tilt,
     margin: input.margin,
     across: input.columns[0],
@@ -184,7 +190,7 @@ function plan(input: FogPlanInput): FogPlanOutput {
   const settings = input.stale;
   const passed = input.time - input.lastTime;
   const jump = Math.abs(passed) > input.gap;
-  const moved = input.baseChanged || MouseParallax.farFrom(input.offsets, input.builtFor);
+  const moved = input.baseChanged || MouseParallax.farFrom(input.offsets, input.builtFor) || (input.lensX || 0) !== (input.builtLensX || 0) || (input.lensY || 0) !== (input.builtLensY || 0);
   const cpu = input.lod && input.hasSched;
   const switched = cpu !== input.shadeCpu;
   const view = settings || jump || moved || switched;

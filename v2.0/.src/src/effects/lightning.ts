@@ -84,6 +84,7 @@
 //   strikes planned after it: the AHEAD already planned keep their place.
 //
 // Changelog:
+// 2026-11-18: the strikes' screen-floor foot uses the extended window's bottom row's angle (Camera.bottomAngle(): the OLED margin's, not the lens's); the top is Camera.topAt, the extended top row's.
 // 2026-11-12: compile time: emitterLight's walk and its drain of the stack are one loop (one set of node reads and one emitterAdd); strikeUnit's marched view only with TEST_VIEWS.
 // 2026-11-12: the strikes' ends over the spawn box (models/spawnbox.ts, boxOf): the foot (the plan's) and the top across its width at their distances, kept when an end is within the view, both drawn again (at most MOST_REDRAWS) from the strike's own generator when both are outside; the leaders' meeting at the foot as drawn; TOP_INSIDE removed.
 // 2026-11-11: Debug's spare strike draws from a generator of its own (spareRng), so the plan's stream is the same with and without a bolt worker.
@@ -698,6 +699,8 @@ export class Lightning extends M.Effect {
     const far = range ? range[1] : FURTHEST;
     const aspect = view.width / view.height;
     const halfFov = view.halfFov();
+    // (the extended window's bottom row's angle, for a screen floor under the foot: the OLED margin moves it)
+    const bottomAngle = view.bottomAngle();
     const sides = box || Lightning.viewBox(view);
     const seen = { eyeX: view.eyeX, eyeY: view.eyeY(), tilt: view.tilt(), yaw: view.yaw, aspect, halfFov };
     let footX = x;
@@ -706,7 +709,7 @@ export class Lightning extends M.Effect {
     let across = random() * 2 - 1;
     for (let draws = 0; ; draws++) {
       const ty = view.topAt(distance);
-      const footY = M.Floor.heightAt(floor, -footZ, view.eyeHeight, halfFov, view.pitch);
+      const footY = M.Floor.heightAt(floor, -footZ, view.eyeHeight, bottomAngle, view.pitch);
       const ends: StrikeEnds = { top: [across * M.SpawnBox.widthAt(sides.slope, sides.shift, sides.span, distance), ty, -distance], foot: [footX, footY, footZ] };
       if (draws >= MOST_REDRAWS || M.SpawnBox.sees(seen, ends.top[0]!, ty, ends.top[2]!) || M.SpawnBox.sees(seen, footX, footY, footZ)) {
         return ends;

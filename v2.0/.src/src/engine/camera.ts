@@ -16,7 +16,15 @@
 // with its clip x and y scaled by the view's size over the picture's (the same focal length in pixels), cScreen the picture's size (so rayOf and the pixel reads of the mirrored pass are in
 // the picture's pixels), cUp.w the margin past the view across and cScreen.w down, in pixels (0 in the view's own block). bindMirror / bindView put one or the other on the block's binding point.
 //
+// The lens: `lens` {x, y} in device pixels (0 by default, on the prototype too) moves the image centre to (width / 2 + lens.x, height / 2 - lens.y) (cx(), cy(): positive y moves the
+// picture up). A lens moves every depth by the same number of pixels (a point's pixel is cx() + f X / Z), so project, toScreen, rayAt and horizonY use the centre, the view-projection has the
+// off-axis term (models/frame.ts) and the block holds it in cLens (floats 36 and 37 of its 40; the std140 block is the 36 floats of before, then one vec4). setLens(x, y) makes the camera dirty only
+// when the lens changed. The mirrored pass's block carries the lens clamped to the picture's margin (ReflectionFrame.clampLens); the view's own is not clamped.
+//
 // Changelog:
+// 2026-11-18: margin (the OLED margin, device pixels), setMargin, leftTan(), rightTan(); bottomAngle() and topAngle() are the margin's (the rain's world does not depend on the lens).
+// 2026-11-18: bottomAngle() and topAngle() (the extended window's bottom and top rows' angles from the optical axis, exactly halfFov at margin 0); topAt follows the extended top row.
+// 2026-11-18: the lens (lens, setLens, cx, cy; frameInput's lensX and lensY; the block 40 floats with cLens; the mirrored block carries the lens clamped to its margin).
 // 2026-11-12: the mirrored pass's block (setMirror, mirrorUpdate, bindMirror, bindView): the view's with its clip x and y scaled for the larger picture (models/reflectionframe.ts), cScreen the picture's size, the margin in cUp.w and cScreen.w.
 // 2026-11-12: EYE (the eye's resting height, for the spawn box); ceilingAt stays the world's ceiling (the rain's spawn plane is the spawn box's top: models/spawnbox.ts).
 // 2026-11-10: update() makes its matrices and block with models/frame.ts's compute (one function; axes() too), and takes a worker's answer (offer) made for the same view inputs.
@@ -55,6 +63,10 @@ export class Camera {
   pitchShift: number;
   eyeX: number;
   eyeShift: number;
+  // the image centre's shift in device pixels (x right, y up), 0 by default
+  lens: { x: number; y: number };
+  // the OLED margin in device pixels (0 by default, on the prototype too): the rain's floor line, top and spawn box are the window extended by it, whatever the lens
+  margin: number;
   // the base as of the last update (a change of it moves baseVersion)
   baseKey: number[];
   // an answer a worker made for the frame (offer), taken by the next update when its input is the frame's own
@@ -69,10 +81,13 @@ export class Camera {
   fieldOfView: number;
   eyeHeight: number;
   gl: WebGL2RenderingContext;
-  // the mirrored picture's frame (its margin), the view-projection and the 36 floats of the block it is drawn with, the block's buffer (made at the first bindMirror), and the
+  // the mirrored picture's frame (its margin), the view-projection and the 40 floats of the block it is drawn with, the block's buffer (made at the first bindMirror), and the
   // version of the camera and of the frame they were made for
   mirrorFrame: ReflectionFrameOf;
   mirrorViewProjection: Float32Array<ArrayBuffer>;
+  // the lens the mirrored block carries (clamped to the margin) and the view-projection adjusted to it when the clamp changed it
+  mirrorLens: number[];
+  mirrorAdjusted: Float32Array<ArrayBuffer>;
   mirrorData: Float32Array<ArrayBuffer>;
   mirrorBlock: UniformBlock | null;
   mirrorFor: number;
@@ -84,7 +99,9 @@ export class Camera {
     this.gl = gl;
     this.mirrorFrame = ReflectionFrame.of(1, 1, 0);
     this.mirrorViewProjection = new Float32Array(16);
-    this.mirrorData = new Float32Array(36);
+    this.mirrorLens = [0, 0];
+    this.mirrorAdjusted = new Float32Array(16);
+    this.mirrorData = new Float32Array(40);
     this.mirrorBlock = null;
     this.mirrorFor = -1;
     this.mirrorForStamp = -1;
@@ -105,14 +122,16 @@ export class Camera {
     this.pitchShift = 0;
     this.eyeX = 0;
     this.eyeShift = 0;
+    this.lens = { x: 0, y: 0 };
+    this.margin = 0;
     this.baseKey = [];
     this.answered = null;
     this.taken = 0;
     this.viewProjection = new Float32Array(16);
     this.view = new Float32Array(16);
     this.projection = new Float32Array(16);
-    // (std140: the matrix, then eye + focal, forward + near, right + far, up, screen)
-    this.ubo = new M.UniformBlock(gl, "Camera", 36);
+    // (std140: the matrix, then eye + focal, forward + near, right + far, up, screen, lens)
+    this.ubo = new M.UniformBlock(gl, "Camera", 40);
     this.own = { view: this.view, projection: this.projection, viewProjection: this.viewProjection, block: this.ubo.data, step: 0 };
   }
 
@@ -147,6 +166,9 @@ export class Camera {
       pitchShift: this.pitchShift,
       eyeX: this.eyeX,
       eyeShift: this.eyeShift,
+      lensX: this.lens.x,
+      lensY: this.lens.y,
+      margin: this.margin,
       near: this.near,
       far: this.far,
       halfFov: this.halfFov(),
@@ -173,6 +195,31 @@ export class Camera {
     }
   }
 
+  // the lens (the camera is dirty only when it changed; the lens object is the camera's own, never the prototype's)
+  setLens(x: number, y: number) {
+    if (x !== this.lens.x || y !== this.lens.y) {
+      this.lens = { x, y };
+      this.dirty = true;
+    }
+  }
+
+  // the OLED margin (the camera is dirty only when it changed): the OLED Pixel Shift limit, the most the lens can ever move the picture
+  setMargin(m: number) {
+    if (m !== this.margin) {
+      this.margin = m;
+      this.dirty = true;
+    }
+  }
+
+  // the image centre in pixels from the top left: the window's centre moved by the lens
+  cx() {
+    return this.width / 2 + this.lens.x;
+  }
+
+  cy() {
+    return this.height / 2 - this.lens.y;
+  }
+
   // the pitch with the rotation mode's shift, and the eye's height with the translation mode's
   tilt() {
     return this.pitch + this.pitchShift;
@@ -193,13 +240,15 @@ export class Camera {
     const rel = [x - this.eyeX, y - this.eyeY(), z];
     const along = Camera.dot(rel, a.forward);
     const f = this.focal();
-    return [this.width / 2 + (Camera.dot(rel, a.right) * f) / along, this.height / 2 - (Camera.dot(rel, a.up) * f) / along];
+    return [this.cx() + (Camera.dot(rel, a.right) * f) / along, this.cy() - (Camera.dot(rel, a.up) * f) / along];
   }
 
   // where a place of the world is on the screen, into out: x and y (pixels from the top left)
   // and its distance along the view (no allocation)
   project(x: number, y: number, z: number, out: number[]) {
     const f = this.focal();
+    const centreX = this.cx();
+    const centreY = this.cy();
     const p = this.tilt();
     const c = Math.cos(p);
     const s = Math.sin(p);
@@ -207,8 +256,8 @@ export class Camera {
     if (this.yaw === 0) {
       const rx = x - this.eyeX;
       const along = ry * s - z * c;
-      out[0] = this.width / 2 + (rx * f) / along;
-      out[1] = this.height / 2 - ((ry * c + z * s) * f) / along;
+      out[0] = centreX + (rx * f) / along;
+      out[1] = centreY - ((ry * c + z * s) * f) / along;
       out[2] = along;
       return;
     }
@@ -216,23 +265,42 @@ export class Camera {
     const cy = Math.cos(this.yaw);
     const sy = Math.sin(this.yaw);
     const along = rx * c * sy + ry * s - z * c * cy;
-    out[0] = this.width / 2 + ((rx * cy + z * sy) * f) / along;
-    out[1] = this.height / 2 - ((-rx * s * sy + ry * c + z * s * cy) * f) / along;
+    out[0] = centreX + ((rx * cy + z * sy) * f) / along;
+    out[1] = centreY - ((-rx * s * sy + ry * c + z * s * cy) * f) / along;
     out[2] = along;
   }
 
-  // the height of the top of the view at a distance ahead (-z): where the ray through the top
-  // row of the screen's centre is there (a yaw stretches the ray's way to the depth by 1 / cos(yaw))
+  // the height of the top of the window extended by the margin at a distance ahead (-z): where the ray through its top
+  // row's centre column is there (a yaw stretches the ray's way to the depth by 1 / cos(yaw))
   topAt(distance: number) {
-    const rise = distance * Math.tan(this.tilt() + this.halfFov());
+    const rise = distance * Math.tan(this.tilt() + this.topAngle());
     return this.eyeY() + (this.yaw === 0 ? rise : rise / Math.cos(this.yaw));
+  }
+
+  // the angles from the optical axis of the bottom and top rows of the window extended by the OLED margin (exactly halfFov at margin 0), whatever the lens: the rain covers every row the
+  // pixel shift can reveal and its world does not move with the shift
+  bottomAngle() {
+    return Frame.edgeAngle(this.halfFov(), this.height, this.margin);
+  }
+
+  topAngle() {
+    return Frame.edgeAngle(this.halfFov(), this.height, this.margin);
+  }
+
+  // the tangents of the horizontal angles of the extended window's left and right columns, (width / 2 + margin) / f (exactly (width / height) x tan(halfFov), the box's own, at margin 0)
+  leftTan() {
+    return this.margin === 0 ? (this.width / this.height) * Math.tan(this.halfFov()) : (this.width / 2 + this.margin) / this.focal();
+  }
+
+  rightTan() {
+    return this.leftTan();
   }
 
   // the direction of the ray from the eye through a point of the screen
   rayAt(px: number, py: number) {
     const a = this.axes();
-    const u = (px - this.width / 2) / this.focal();
-    const v = (this.height / 2 - py) / this.focal();
+    const u = (px - this.cx()) / this.focal();
+    const v = (this.cy() - py) / this.focal();
     const d = [0, 1, 2].map((k) => a.forward[k] + u * a.right[k] + v * a.up[k]);
     const length = Math.hypot(d[0], d[1], d[2]);
     return d.map((c) => c / length);
@@ -240,7 +308,7 @@ export class Camera {
 
   // the row of the horizon, in pixels from the top
   horizonY() {
-    return this.height / 2 + this.focal() * Math.tan(this.tilt());
+    return this.cy() + this.focal() * Math.tan(this.tilt());
   }
 
   // the height of the top of the highest view (the horizon 5% up the screen) at a distance along the
@@ -312,8 +380,25 @@ export class Camera {
     const f = this.mirrorFrame;
     const d = this.mirrorData;
     d.set(this.ubo.data);
-    ReflectionFrame.scaleViewProjection(this.viewProjection, f, this.mirrorViewProjection);
+    // the lens the picture carries: the view's, clamped to the picture's margin; the view-projection takes the difference (the off-axis term of the clamped lens instead of the view's)
+    const lens = ReflectionFrame.clampLens(f, this.lens.x, this.lens.y, this.mirrorLens);
+    let source = this.viewProjection;
+    if (lens[0] !== this.lens.x || lens[1] !== this.lens.y) {
+      const adjusted = this.mirrorAdjusted;
+      const offX = (2 * (lens[0] - this.lens.x)) / this.width;
+      const offY = (2 * (lens[1] - this.lens.y)) / this.height;
+      for (let c = 0; c < 4; c++) {
+        adjusted[c * 4] = source[c * 4] + offX * source[c * 4 + 3];
+        adjusted[c * 4 + 1] = source[c * 4 + 1] + offY * source[c * 4 + 3];
+        adjusted[c * 4 + 2] = source[c * 4 + 2];
+        adjusted[c * 4 + 3] = source[c * 4 + 3];
+      }
+      source = adjusted;
+    }
+    ReflectionFrame.scaleViewProjection(source, f, this.mirrorViewProjection);
     d.set(this.mirrorViewProjection, 0);
+    d[36] = lens[0];
+    d[37] = lens[1];
     d[31] = f.marginX;
     d[32] = f.width;
     d[33] = f.height;
@@ -332,7 +417,7 @@ export class Camera {
     const gl = this.gl;
     let block = this.mirrorBlock;
     if (!block) {
-      block = this.mirrorBlock = new M.UniformBlock(gl, "Camera", 36);
+      block = this.mirrorBlock = new M.UniformBlock(gl, "Camera", 40);
       block.data.set(this.mirrorData);
       block.upload();
     }
@@ -361,6 +446,8 @@ Camera.prototype.yaw = 0;
 Camera.prototype.pitchShift = 0;
 Camera.prototype.eyeX = 0;
 Camera.prototype.eyeShift = 0;
+Camera.prototype.lens = { x: 0, y: 0 };
+Camera.prototype.margin = 0;
 Camera.prototype.baseVersion = 0;
 Camera.SPAN = 1.0;
 Camera.EYE = EYE;

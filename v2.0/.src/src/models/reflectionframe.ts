@@ -12,7 +12,10 @@
 // - marginFor: the margin a measured lookup displacement needs, the PERCENTILE-th percentile of the displacement in pixels (per axis) times 1 + HEADROOM over the view's size, the larger
 //   axis's: the test that measures the displacements (scenetest reflectionlookup) reports it, and Reflection.MARGIN is set from it.
 //
+// - clampLens: the lens (the camera's image centre shift, pixels) limited to the margin: |x| <= marginX, |y| <= marginY, so a lens never moves a lookup past what the picture holds.
+//
 // Changelog:
+// 2026-11-18: clampLens.
 // 2026-11-12: new.
 import { M } from "../engine/core";
 
@@ -70,6 +73,13 @@ function fogMargin(volumeMargin: number, frame: ReflectionFrameOf): number {
   return (volumeMargin - m) / (1 + 2 * m);
 }
 
+// a lens (x, y pixels) limited to the margin on each axis, into out
+function clampLens(frame: ReflectionFrameOf, x: number, y: number, out: number[]): number[] {
+  out[0] = Math.max(-frame.marginX, Math.min(frame.marginX, x));
+  out[1] = Math.max(-frame.marginY, Math.min(frame.marginY, y));
+  return out;
+}
+
 // the p-th percentile (0 to 100, nearest rank) of values
 function percentile(values: ArrayLike<number>, p: number): number {
   const n = values.length;
@@ -99,6 +109,6 @@ function scaleViewProjection(vp: ArrayLike<number>, frame: ReflectionFrameOf, ou
   return out;
 }
 
-export const ReflectionFrame = { of, toUv, fromUv, pictureOf, fogMargin, percentile, marginFor, scaleViewProjection, PERCENTILE, HEADROOM };
+export const ReflectionFrame = { of, toUv, fromUv, pictureOf, fogMargin, percentile, marginFor, scaleViewProjection, clampLens, PERCENTILE, HEADROOM };
 
 (M as unknown as Record<string, unknown>).ReflectionFrame = ReflectionFrame;

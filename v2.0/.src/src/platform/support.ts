@@ -128,12 +128,10 @@ export interface MusicFollowerReport {
 }
 
 // Debug mode's OLED readout's values (renewed once a second): OLED Pixel Shift, the most a shift
-// may reach across or down, and the shifts in pixels (the scene's across only)
+// may reach across or down, and the shift in pixels (the scene's, which the clock and the message ride, across and down)
 export interface OledReport {
   limit: number;
-  scene: { x: number };
-  clock: { x: number; y: number };
-  message: { x: number; y: number };
+  scene: { x: number; y: number };
 }
 
 // what the HDR probe found (platform/hdr.ts): the display's dynamic range as the page sees it (high,

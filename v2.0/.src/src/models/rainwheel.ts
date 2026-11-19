@@ -22,6 +22,7 @@
 //   (plain data, the typed arrays copied), event(payload) a live input (the view, the shares, the music's light, whether a layout is pending) applied before the next step.
 //
 // Changelog:
+// 2026-11-18: the view's topAngle and bottomAngle (the angles from the optical axis of the rows of the window extended by the OLED margin, halfFov at margin 0; never the lens's): topAt, the screen floor (floorAt), restart; layoutAngle (the bottom angle the layout was made for); boxTopAngle, boxBottomAngle, boxLeftTan, boxRightTan (the spawn box's extended window; a tangent of 0: the window's own).
 // 2026-11-12: `pending` (the fall each drop in the wheel is waiting to land): runStep, rescheduleAll and the watch use it, never the layout's guess of the fall, so a table coming or going or a restart adopted never lands a fall twice or loses one.
 // 2026-11-12: adopt looks the landings at early again while a table is in force.
 // 2026-11-12: the water's heights (setMeets, meetOf, the watch window meetLead, rescheduleAll, slotOf): a landing ends where the head meets the surface, a crest earlier, a trough later.
@@ -59,6 +60,9 @@ export interface RainView {
   tilt: number;
   halfFov: number;
   yaw: number;
+  // the angles from the optical axis of the top and bottom rows of the window extended by the OLED margin (halfFov at margin 0): the top of the view for the falls, the bottom for the screen floor
+  topAngle: number;
+  bottomAngle: number;
 }
 
 // the whole state of a wheel (RainWheel.snapshot): plain data, the arrays copies
@@ -141,8 +145,8 @@ const waveScreen = (): number => {
 // the scalar state a snapshot keeps (every number, flag and string a next step depends on)
 const SCALARS = [
   "time", "lastStep", "width", "height", "density", "fontMin", "fontMax", "trail", "steady", "custom", "wave", "waveSpeed", "waveWidth", "wavePhase", "waveStep", "wavePerStep",
-  "tiltResponsiveness", "layoutFloor", "layoutPitch", "layoutEye", "layoutDirty", "layoutPending", "dirtyFirst", "dirtyLast", "active", "reach", "wanted", "inView", "wokenCount", "fillPart",
-  "fillFor", "musicCredit", "meanFall", "musicAt", "staticAt", "wrongLandings", "appliedSeq", "boxPitch", "boxEyeHeight", "boxYaw", "boxPitchReach", "boxReachX", "boxReachY", "meetCount",
+  "tiltResponsiveness", "layoutFloor", "layoutPitch", "layoutEye", "layoutAngle", "layoutDirty", "layoutPending", "dirtyFirst", "dirtyLast", "active", "reach", "wanted", "inView", "wokenCount", "fillPart",
+  "fillFor", "musicCredit", "meanFall", "musicAt", "staticAt", "wrongLandings", "appliedSeq", "boxPitch", "boxEyeHeight", "boxYaw", "boxPitchReach", "boxReachX", "boxReachY", "boxTopAngle", "boxBottomAngle", "boxLeftTan", "boxRightTan", "meetCount",
 ] as const;
 
 export class RainWheel {
@@ -185,6 +189,11 @@ export class RainWheel {
   boxPitchReach: number;
   boxReachX: number;
   boxReachY: number;
+  // the angles of the extended window's top and bottom rows (halfFov at margin 0) and the tangents of its left and right columns (0: tanH, the window's own)
+  boxTopAngle: number;
+  boxBottomAngle: number;
+  boxLeftTan: number;
+  boxRightTan: number;
   // the box made from them (box()), what it was made from, and its density factor
   boxData: SpawnBoxData | null;
   boxKey: number[];
@@ -194,6 +203,8 @@ export class RainWheel {
   layoutFloor: FloorKind;
   layoutPitch: number;
   layoutEye: number;
+  // the shown window's bottom row's angle the screen floor's layout was made for
+  layoutAngle: number;
   layoutDirty: boolean;
   // a layout from the worker is waited for (the music's scan waits)
   layoutPending: boolean;
@@ -254,7 +265,7 @@ export class RainWheel {
   constructor(clock: StepClock, onLand: (drop: DropState, time: number) => void) {
     this.clock = clock;
     this.onLand = onLand;
-    this.view = { eyeX: 0, eyeY: 0, tilt: 0, halfFov: M.Camera.halfFov(), yaw: 0 };
+    this.view = { eyeX: 0, eyeY: 0, tilt: 0, halfFov: M.Camera.halfFov(), yaw: 0, topAngle: M.Camera.halfFov(), bottomAngle: M.Camera.halfFov() };
     this.time = 0;
     this.lastStep = 0;
     this.width = 800;
@@ -279,6 +290,10 @@ export class RainWheel {
     this.boxPitchReach = 0;
     this.boxReachX = 0;
     this.boxReachY = 0;
+    this.boxTopAngle = M.Camera.halfFov();
+    this.boxBottomAngle = M.Camera.halfFov();
+    this.boxLeftTan = 0;
+    this.boxRightTan = 0;
     this.boxData = null;
     this.boxKey = [];
     this.boxFactor = 1;
@@ -286,6 +301,7 @@ export class RainWheel {
     this.layoutFloor = "water";
     this.layoutPitch = 0;
     this.layoutEye = 0;
+    this.layoutAngle = M.Camera.halfFov();
     this.layoutDirty = false;
     this.layoutPending = false;
     // each drop's life (its first fall shown, the fall it ends before, a fall it shows again from; NONE: none), and the drops whose layout or life changed since the last upload
@@ -337,13 +353,13 @@ export class RainWheel {
     const far = this.furthest();
     const halfFov = M.Camera.halfFov();
     const same =
-      this.boxData !== null && key.length === 10 && key[0] === aspect && key[1] === halfFov && key[2] === this.boxPitch && key[3] === this.boxEyeHeight && key[4] === this.boxYaw &&
-      key[5] === this.boxPitchReach && key[6] === this.boxReachX && key[7] === this.boxReachY && key[8] === near && key[9] === far;
+      this.boxData !== null && key.length === 14 && key[0] === aspect && key[1] === halfFov && key[2] === this.boxPitch && key[3] === this.boxEyeHeight && key[4] === this.boxYaw &&
+      key[5] === this.boxPitchReach && key[6] === this.boxReachX && key[7] === this.boxReachY && key[8] === near && key[9] === far && key[10] === this.boxTopAngle && key[11] === this.boxBottomAngle && key[12] === this.boxLeftTan && key[13] === this.boxRightTan;
     if (!same || !this.boxData) {
-      this.boxData = M.SpawnBox.make({ aspect, halfFov, pitch: this.boxPitch, eyeHeight: this.boxEyeHeight, yaw: this.boxYaw, pitchReach: this.boxPitchReach, eyeX: this.boxReachX, eyeY: this.boxReachY, near, far }, this.boxData || undefined);
+      this.boxData = M.SpawnBox.make({ aspect, halfFov, pitch: this.boxPitch, eyeHeight: this.boxEyeHeight, yaw: this.boxYaw, pitchReach: this.boxPitchReach, eyeX: this.boxReachX, eyeY: this.boxReachY, near, far, topAngle: this.boxTopAngle, bottomAngle: this.boxBottomAngle, leftTan: this.boxLeftTan > 0 ? this.boxLeftTan : undefined, rightTan: this.boxRightTan > 0 ? this.boxRightTan : undefined }, this.boxData || undefined);
       this.boxFactor = M.SpawnBox.densityFactor(this.boxData);
       key.length = 0;
-      key.push(aspect, halfFov, this.boxPitch, this.boxEyeHeight, this.boxYaw, this.boxPitchReach, this.boxReachX, this.boxReachY, near, far);
+      key.push(aspect, halfFov, this.boxPitch, this.boxEyeHeight, this.boxYaw, this.boxPitchReach, this.boxReachX, this.boxReachY, near, far, this.boxTopAngle, this.boxBottomAngle, this.boxLeftTan, this.boxRightTan);
     }
     return this.boxData;
   }
@@ -358,12 +374,13 @@ export class RainWheel {
   }
 
   // a layout in place: the trail, the floor, the pitch and the eye's height it was made for (the upload owed), and a new wheel's slots when their number is given
-  installLayout(layout: Float32Array, trail: number, floor: FloorKind, pitch: number, eye: number, slots: number | null) {
+  installLayout(layout: Float32Array, trail: number, floor: FloorKind, pitch: number, eye: number, slots: number | null, angle: number = M.Camera.halfFov()) {
     this.trail = trail;
     this.layout = layout;
     this.layoutFloor = floor;
     this.layoutPitch = pitch;
     this.layoutEye = eye;
+    this.layoutAngle = angle;
     this.layoutDirty = true;
     if (this.trace) {
       // (the phases changed in the layout before are gone with it)
@@ -857,7 +874,9 @@ export class RainWheel {
       lastStep: this.lastStep,
       eyeHeight: view.eyeY,
       pitch: view.tilt,
-      halfFov: view.halfFov,
+      // (the bottom row's angle for the screen floor, the top row's for the first fall past the view's top)
+      halfFov: view.bottomAngle,
+      topAngle: view.topAngle,
       floor: this.layoutFloor,
     };
     this.adopt(RL.restartOf(params, this));
@@ -874,7 +893,7 @@ export class RainWheel {
   // the height of the top of the view at a distance (the view now, with the mouse parallax's shifts)
   topAt(distance: number) {
     const view = this.view;
-    return view.eyeY + distance * Math.tan(view.tilt + view.halfFov);
+    return view.eyeY + distance * Math.tan(view.tilt + view.topAngle);
   }
 
   // the first of drop i's falls whose head comes down past the top of the view from a step on: the fall now if its head is above the view, else the next
@@ -927,7 +946,7 @@ export class RainWheel {
 
   // the height of the floor at a distance for the layout in use
   floorAt(distance: number) {
-    return this.layoutFloor === "screen" ? M.Floor.heightAt("screen", distance, this.layoutEye, this.view.halfFov, this.layoutPitch) : 0;
+    return this.layoutFloor === "screen" ? M.Floor.heightAt("screen", distance, this.layoutEye, this.layoutAngle, this.layoutPitch) : 0;
   }
 
   // how far drop i has fallen at a step, counted in rows since the start (in 32 bits, as the shader: (step / 16) x speed + (step % 16) x speed / 16, exactly step x speed / 16)

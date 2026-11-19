@@ -15,6 +15,7 @@
 // each unit's level depends only on its own values and the inputs, so any split of a range gives the whole's result.
 //
 // Changelog:
+// 2026-11-18: QualityInputs.lensX and lensY (the camera's lens, for the fog job's rays).
 // 2026-11-12: QualityInputs.mirror (the mirrored view's larger frustum).
 // 2026-11-06: new.
 import { M } from "../../engine/core";
@@ -49,6 +50,10 @@ export interface QualityInputs {
   focal: number;
   width: number;
   height: number;
+  // the camera's lens in pixels (Camera.lens: the image centre is (width / 2 + lensX, height / 2 - lensY) from the top left); absent: 0. The fog job's rays read it; the units' frustum
+  // tests go through viewProjection, which carries it
+  lensX?: number;
+  lensY?: number;
   // the fog's clouds' density per metre at their densest (Fog.sigma()) and the air's extinction per metre
   sigma: number;
   air: number;

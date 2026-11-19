@@ -87,6 +87,7 @@
 //   `QualityFog.Lod`) the refresh period grows to 32 sweeps and more octaves are read as their mean (`uDrop`). With lod off none applies.
 //
 // Changelog:
+// 2026-11-18: the plan's input carries the camera's lens and the lens the volume was built for (builtLens, kept with builtFor): a lens step is a move of the view.
 // 2026-11-12: compile time: skyShadeMarched one march loop for the sky and the moon (i = -1 the sky), moonThrough folded into it; gather one density call site (densityFar's `far` flag, false = density).
 // 2026-11-12: planInput: no grid framebuffers (no float render targets) gives 0 draws instead of reading their length (the frame threw with the extensions missing).
 // 2026-11-12: readMargin: the volume's margin as the mirrored picture's pixels read it (the picture larger than the view).
@@ -385,6 +386,8 @@ export class Fog extends M.Effect {
   // the camera's base version and parallax offsets the volume and the shade were last built for (the view moved: a base change, or the offsets past MouseParallax.TOLERANCE)
   baseSeen: number;
   builtFor: ParallaxOffsets;
+  // the camera's lens the volume and the shade were last built for
+  builtLens: { x: number; y: number };
   lastTime: number;
   gatheredAt: Float64Array;
   // the quality job's result: the slices some column holds (1), whether any, the camera version it was made for, and what
@@ -478,6 +481,7 @@ export class Fog extends M.Effect {
     this.cameraVersion = -1;
     this.baseSeen = -1;
     this.builtFor = { yaw: 0, pitchShift: 0, eyeX: 0, eyeShift: 0 };
+    this.builtLens = { x: 0, y: 0 };
     this.sliceNext = 0;
     this.sliceCredit = 0;
     this.shadePart = 0;
@@ -1162,6 +1166,8 @@ export class Fog extends M.Effect {
       this.builtFor.pitchShift = camera.pitchShift;
       this.builtFor.eyeX = camera.eyeX;
       this.builtFor.eyeShift = camera.eyeShift;
+      this.builtLens.x = camera.lens ? camera.lens.x : 0;
+      this.builtLens.y = camera.lens ? camera.lens.y : 0;
     }
     if (moved || this.boxes.length === 0) {
       this.boxes = this.viewBoxes();
@@ -1327,6 +1333,11 @@ export class Fog extends M.Effect {
       baseChanged: c.baseVersion !== this.baseSeen,
       offsets: offsets(c),
       builtFor: offsets(this.builtFor),
+      // (a camera without a lens, as a stand-in's, counts as lens 0)
+      lensX: c.lens ? c.lens.x : 0,
+      lensY: c.lens ? c.lens.y : 0,
+      builtLensX: this.builtLens.x,
+      builtLensY: this.builtLens.y,
       gap: REFRESH_GAP,
       // (the grids' framebuffers exist only with float pictures: none, the plan is not built)
       draws: this.shadeDraws ? this.shadeDraws.length : 0,

@@ -3,11 +3,9 @@ precision highp float;
 precision highp int;
 ${OUTPUT}
 ${M.Camera.GLSL}
-// the stamps (screen pixels): their colour and their ink; the scene's shift across (device
-// pixels: the scene's x shows at the screen's x + uShift)
+// the stamps (screen pixels): their colour and their ink
 uniform sampler2D uStampColor;
 uniform sampler2D uStampInk;
-uniform int uShift;
 #ifdef SCENE
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec4 outReflected;
@@ -47,7 +45,7 @@ layout(location = 0) out vec4 outColor;
 // the stamps over the scene: its light times (1 - ink), plus their colour (blended: SCENE the
 // scene's picture and its second attachment, else the characters' picture)
 void main() {
-  ivec2 at = ivec2(gl_FragCoord.xy) + ivec2(uShift, 0);
+  ivec2 at = ivec2(gl_FragCoord.xy);
   float ink = 0.0;
   vec3 color = vec3(0.0);
   if (at.x >= 0 && at.x < textureSize(uStampInk, 0).x) {
