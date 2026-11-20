@@ -98,7 +98,7 @@
 // 2026-11-07: level of detail: the dense tail, the refresh by distance and the far octaves (Effect.lod).
 // 2026-11-06: the quality job "fog" (the slices are its units): slices past the water along a column's rays are held, not
 //   gathered; SLICES, SLICE_NEAR and FOG_FAR owned by models/quality/fog.ts.
-// 2026-11-05: the sky's and the moon's light settable (Sky and moon brightness, Sky tone, Moon tone):
+// 2026-11-05: the sky's and the moon's light settable (Sky/Orb brightness, Sky tone, Orb tone):
 //   SKY and MOON are SKY_BASE and MOON_BASE times the block's gains (models/skylight.ts), a change
 //   restarting the whole volume.
 // 2026-11-04: TypeScript, a module of src/effects/ (was effects/fog.js); the medium's and the
@@ -128,6 +128,7 @@ import SEED_FRAGMENT_SOURCE from "../shaders/fog/seed_fragment.glsl";
 import BLUR_FRAGMENT_SOURCE from "../shaders/fog/blur_fragment.glsl";
 import FINISH_FRAGMENT_SOURCE from "../shaders/fog/finish_fragment.glsl";
 import FOG_SOURCE from "../shaders/fog/fog.glsl";
+import ATMOSPHERE_SOURCE from "../shaders/fog/atmosphere.glsl";
 import MEDIUM_SOURCE from "../shaders/fog/medium.glsl";
 import SHADE_SOURCE from "../shaders/fog/shade.glsl";
 import TEST_SOURCE from "../shaders/fog/test.glsl";
@@ -332,6 +333,9 @@ export class Fog extends M.Effect {
   static SHADE_GLSL: string;
   static MEDIUM_GLSL: string;
   static GLSL: string;
+  // the shared fog text and the shade text of a flag: the atmosphere prototype's lookups and uniform block added (off: the committed text exactly)
+  static glslFor: (on: boolean) => string;
+  static shadeFor: (on: boolean) => string;
   static COPY_FRAGMENT: string;
   static FINISH_FRAGMENT: string;
   static BLUR_FRAGMENT: string;
@@ -430,6 +434,10 @@ export class Fog extends M.Effect {
   skyMoonBrightness: number;
   skyTone: string;
   moonTone: string;
+  // the atmosphere prototype (M.ATMOSPHERE): its tables' uniform block (aSH, aSky, aInfo, aOrb: 203 vec4), and the milliseconds the last build took
+  atmosphere: boolean;
+  atmosphereMs: number;
+  atmosphereBlock: UniformBlock | null;
   constructor(context: EffectContext) {
     super(context);
     const gl = this.gl;
@@ -440,6 +448,9 @@ export class Fog extends M.Effect {
     this.moonTone = M.SkyLight.DEFAULT_MOON_TONE;
     this.skyGain = new Float32Array(3);
     this.moonGain = new Float32Array(3);
+    this.atmosphere = M.ATMOSPHERE;
+    this.atmosphereMs = 0;
+    this.atmosphereBlock = M.ATMOSPHERE ? this.block("Atmosphere", ATMOSPHERE_FLOATS) : null;
     this.setLight();
     this.colorMain = M.color(MAIN_DEFAULT);
     this.colorSecondary = M.color(SECONDARY_DEFAULT);
@@ -636,7 +647,7 @@ export class Fog extends M.Effect {
         fog.colorSecondary = M.color(v);
         fog.stale = true;
       },
-      p201_setting_SkyMoonBrightness: (fog: Fog, v: number) => {
+      p201_setting_SkyOrbBrightness: (fog: Fog, v: number) => {
         fog.skyMoonBrightness = v;
         fog.setLight();
       },
@@ -658,6 +669,27 @@ export class Fog extends M.Effect {
     this.skyGain.set(g.sky);
     this.moonGain.set(g.moon);
     this.stale = true;
+    if (this.atmosphereBlock) this.buildAtmosphere();
+  }
+
+  // the atmosphere's tables for the Orb (MOON x its gain at the ground), into the block in its std140 layout (aSH 0, aSky 36, aInfo 804, aOrb 808) and uploaded: only when the light
+  // changes, never per frame
+  buildAtmosphere() {
+    const block = this.atmosphereBlock!;
+    const start = performance.now();
+    const tables = M.Atmosphere.build({ orbDir: MOON_DIR, orbIrradiance: [MOON[0]! * this.moonGain[0]!, MOON[1]! * this.moonGain[1]!, MOON[2]! * this.moonGain[2]!] });
+    const data = block.data;
+    data.set(tables.sh, 0);
+    data.set(tables.sky, 36);
+    data.set(tables.ambient, 804);
+    data[807] = 1;
+    const flat = Math.hypot(MOON_DIR[0]!, MOON_DIR[2]!);
+    data[808] = flat > 1e-6 ? MOON_DIR[0]! / flat : 1;
+    data[809] = flat > 1e-6 ? MOON_DIR[2]! / flat : 0;
+    data[810] = 0;
+    data[811] = 0;
+    block.upload();
+    this.atmosphereMs = performance.now() - start;
   }
 
   // the medium's density per metre at its densest (none without float pictures for its noise)
@@ -1481,7 +1513,20 @@ Fog.FINISH_FRAGMENT = fill(FINISH_FRAGMENT_SOURCE, { "STRETCH.toFixed(1)": STRET
 
 // the uniform block, the light around (the sky's and the moon's, and the strikes' color), and
 // the volumes read at a place of the screen and a distance (after Camera.GLSL)
-Fog.GLSL = fill(FOG_SOURCE, { "FOG_FAR.toFixed(1)": FOG_FAR.toFixed(1), "AIR": AIR, 'SKY.join(", ")': SKY.join(", "), 'MOON.map((v) => v.toFixed(2)).join(", ")': MOON.map((v) => v.toFixed(2)).join(", "), 'MOON_DIR.map((v) => v.toFixed(2)).join(", ")': MOON_DIR.map((v) => v.toFixed(2)).join(", "), "MOON_RADIUS.toFixed(6)": MoonDisc.RADIUS.toFixed(6), "MOON_SOLID_ANGLE.toExponential(6)": MoonDisc.SOLID_ANGLE.toExponential(6), "SLICES.toFixed(1)": SLICES.toFixed(1), "SLICE_NEAR.toFixed(1)": SLICE_NEAR.toFixed(1), "Math.log(1 + FOG_FAR / SLICE_NEAR).toFixed(6)": Math.log(1 + FOG_FAR / SLICE_NEAR).toFixed(6), "STRIKE_SCALE.toFixed(1)": STRIKE_SCALE.toFixed(1), "SLOTS": SLOTS, "strikeTerms": Array.from({ length: SLOTS }, (v, k) => fill(STRIKE_TERM_SOURCE, { "s": "xyzw"[k], "k": k })).join("\n") });
+// the atmosphere block's size: aSH 9 + aSky 192 + aInfo 1 + aOrb 1 vec4
+const ATMOSPHERE_FLOATS = (9 + 192 + 2) * 4;
+
+const FOG_GLSL_OFF = fill(FOG_SOURCE, { "FOG_FAR.toFixed(1)": FOG_FAR.toFixed(1), "AIR": AIR, 'SKY.join(", ")': SKY.join(", "), 'MOON.map((v) => v.toFixed(2)).join(", ")': MOON.map((v) => v.toFixed(2)).join(", "), 'MOON_DIR.map((v) => v.toFixed(2)).join(", ")': MOON_DIR.map((v) => v.toFixed(2)).join(", "), "MOON_RADIUS.toFixed(6)": MoonDisc.RADIUS.toFixed(6), "MOON_SOLID_ANGLE.toExponential(6)": MoonDisc.SOLID_ANGLE.toExponential(6), "SLICES.toFixed(1)": SLICES.toFixed(1), "SLICE_NEAR.toFixed(1)": SLICE_NEAR.toFixed(1), "Math.log(1 + FOG_FAR / SLICE_NEAR).toFixed(6)": Math.log(1 + FOG_FAR / SLICE_NEAR).toFixed(6), "STRIKE_SCALE.toFixed(1)": STRIKE_SCALE.toFixed(1), "SLOTS": SLOTS, "strikeTerms": Array.from({ length: SLOTS }, (v, k) => fill(STRIKE_TERM_SOURCE, { "s": "xyzw"[k], "k": k })).join("\n") });
+// the atmosphere's variant of the text: the block and the lookups before the sky box's light, which reads the spherical harmonics instead of SKY x (1 + n.y) / 2
+const SKY_LIGHT_MARK = "// the sky box's light on a surface with the unit normal n";
+const SKY_LIGHT_OLD = "  return SKY * ((1.0 + n.y) * 0.5) * skyShade;";
+Fog.glslFor = (on) => {
+  if (!on) return FOG_GLSL_OFF;
+  if (FOG_GLSL_OFF.indexOf(SKY_LIGHT_MARK) < 0 || FOG_GLSL_OFF.indexOf(SKY_LIGHT_OLD) < 0) throw new Error("fog.glsl: the sky light's lines moved");
+  return FOG_GLSL_OFF.replace(SKY_LIGHT_MARK, () => ATMOSPHERE_SOURCE + SKY_LIGHT_MARK).replace(SKY_LIGHT_OLD, "  return atmosDiffuse(n) * skyShade;");
+};
+Fog.GLSL = Fog.glslFor(M.ATMOSPHERE);
+
 
 // the moon kernel's directions as GLSL constants (MOON_K0 ...: MoonDisc.directions over the disc round MOON_DIR, nine decimals), the centre first
 function moonKernelConstants(): string {
@@ -1500,7 +1545,13 @@ Fog.MEDIUM_GLSL = fill(MEDIUM_SOURCE, { "MULTIPLE": MULTIPLE, "PHASE_G": PHASE_G
 
 // the baked shadows read, and the clouds' light (after MEDIUM_GLSL). marched: the shadows
 // marched, not baked
-Fog.SHADE_GLSL = SHADE_SOURCE;
+// (the atmosphere's variant: the clouds' light reads the upper hemisphere's mean radiance where it read SKY)
+Fog.shadeFor = (on) => {
+  if (!on) return SHADE_SOURCE;
+  if (SHADE_SOURCE.indexOf("SKY") < 0) throw new Error("shade.glsl: no SKY to replace");
+  return SHADE_SOURCE.replace(/\bSKY\b/g, "atmosAmbient()");
+};
+Fog.SHADE_GLSL = Fog.shadeFor(M.ATMOSPHERE);
 
 // the tests' value: every shadow marched (none in the wallpaper)
 Fog.TEST_GLSL = TEST_SOURCE;

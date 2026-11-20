@@ -4,15 +4,16 @@
 //   gain = (brightness / DEFAULT_BRIGHTNESS) x linear(picked) / linear(default tone), channel by
 //   channel, so at the defaults it is exactly 1 (the same float operations on the same strings),
 //   a darker pick dims its light, black gives none, and brightness scales both lights in
-//   proportion (0: no light, 10: twice, 100: twenty times).
+//   proportion (0: no light, 50: the defaults, 100: twice).
 // - The tones are Wallpaper Engine's colors ("r g b", sRGB), made linear by M.color.
 //
 // Changelog:
 // 2026-11-05: new, a module of src/models/.
+// 2026-11-19: the slider's default 50 (was 5), its range 0 to 100 now the earlier 0 to 10: gain = brightness / 50.
 import { M } from "../engine/core";
 
-// the defaults of Sky and moon brightness, Sky tone and Moon tone (project.json's)
-const DEFAULT_BRIGHTNESS = 5;
+// the defaults of Sky/Orb brightness, Sky tone and Orb tone (project.json's)
+const DEFAULT_BRIGHTNESS = 50;
 const DEFAULT_SKY_TONE = "0.050980392156862744 0.043137254901960784 0.08627450980392157";
 const DEFAULT_MOON_TONE = "0.5843137254901961 0.6 0.6352941176470588";
 

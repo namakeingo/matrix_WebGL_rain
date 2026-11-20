@@ -17,7 +17,7 @@ import type { GpuGuard } from "./guard";
 export const ATTRIBUTES = { aCorner: 0, aPlace: 1, aInfo: 2, aImpact: 3, aColor: 4, aDrop: 5 };
 
 // the uniform blocks and their binding points
-export const BLOCKS = { Camera: 0, Fog: 1, Lightning: 2, Waves: 3 };
+export const BLOCKS = { Camera: 0, Fog: 1, Lightning: 2, Waves: 3, Atmosphere: 4 };
 
 M.ATTRIBUTES = ATTRIBUTES;
 M.BLOCKS = BLOCKS;

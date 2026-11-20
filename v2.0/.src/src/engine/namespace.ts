@@ -43,6 +43,7 @@ import type { GlyphAtlas } from "./glyphs";
 import type { RainLayout } from "../models/rainlayout";
 import type { RainWheel } from "../models/rainwheel";
 import type { SkyLight } from "../models/skylight";
+import type { Atmosphere } from "../models/atmosphere";
 import type { SkyBox, MoonDisc } from "../materials/sky";
 import type { StrikeBias } from "../models/strikebias";
 import type { HdrOutput } from "../models/hdroutput";
@@ -130,10 +131,14 @@ export interface Matrix3DTestOptions {
   frameWorker?: string;
   textLayoutWorker?: string;
   qualityWorker?: string;
+  // the atmosphere prototype on (M.ATMOSPHERE)
+  atmosphere?: boolean;
 }
 
 export interface Matrix3DNamespace {
   TEST: boolean;
+  // the atmosphere prototype's flag (engine/core.ts): false in the shipped bundle
+  ATMOSPHERE: boolean;
   hash: (v: number) => number;
   HASH_GLSL: string;
   HASH_WGSL: string;
@@ -205,6 +210,7 @@ export interface Matrix3DNamespace {
   RainWheel: typeof RainWheel;
   SkyLight: typeof SkyLight;
   SkyBox: typeof SkyBox;
+  Atmosphere: typeof Atmosphere;
   MoonDisc: typeof MoonDisc;
   StrikeBias: typeof StrikeBias;
   HdrOutput: typeof HdrOutput;

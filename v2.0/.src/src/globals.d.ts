@@ -25,6 +25,8 @@ export interface WallpaperPropertyListener {
 }
 
 declare global {
+  // the build's definition of the atmosphere prototype's flag (webpack DefinePlugin: --env atmosphere=on); absent in a build that does not define it
+  const __ATMOSPHERE__: boolean | undefined;
   interface Window {
     Matrix3D: Matrix3DNamespace;
     Matrix3DTest?: boolean | Matrix3DTestOptions;

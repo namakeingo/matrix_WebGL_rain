@@ -52,6 +52,7 @@ import "./models/floor";
 import "./models/rainlayout";
 import "./models/rainwheel";
 import "./models/skylight";
+import "./models/atmosphere";
 import "./models/strikebias";
 import "./models/hdroutput";
 import "./models/hdrpack";

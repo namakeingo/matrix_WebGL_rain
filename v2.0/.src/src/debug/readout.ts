@@ -248,8 +248,8 @@ export class SupportReadout {
   // down, in pixels
   static oledLines(o: OledReport): string[] {
     return [
-      `OLED Pixel Shift: at most ${o.limit} px from where they started, across or down${o.limit === 0 ? " (off)" : ""}`,
-      `  shift ${o.scene.x} px across, ${o.scene.y} px down (the scene, the clock and the message together)`,
+      `OLED Pixel Shift: at most ${o.limit} px from where it started, across or down${o.limit === 0 ? " (off)" : ""}`,
+      `  wallpaper shift ${o.scene.x} px across, ${o.scene.y} px down`,
     ];
   }
 

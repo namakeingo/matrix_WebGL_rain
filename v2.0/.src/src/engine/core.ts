@@ -27,6 +27,9 @@ export const testOptions = (): Matrix3DTestOptions => {
   return typeof t === "object" && t ? t : {};
 };
 
+// the atmosphere prototype (off): on only with the tests' option atmosphere: true (the pages' ?atmosphere=on) or a bundle built with --env atmosphere=on (__ATMOSPHERE__)
+M.ATMOSPHERE = (M.TEST && testOptions().atmosphere === true) || (typeof __ATMOSPHERE__ !== "undefined" && __ATMOSPHERE__ === true);
+
 // a 32-bit integer hash (PCG)
 M.hash = (v: number): number => {
   const s = (Math.imul(v, 747796405) + 2891336453) >>> 0;

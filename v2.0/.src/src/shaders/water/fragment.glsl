@@ -238,7 +238,7 @@ vec3 mirroredAt(vec2 at, vec2 major, float minor, out vec3 emitted, out vec3 sce
     vec3 share;
     vec4 fog = fogAt(i == 0 ? clamp(at, -edge, cScreen.xy + edge) : at, i == 0 ? FOG_FAR : NEAR_SCALE / near, true, share);
     if (i == 0) {
-      sky = SKY * fog.a + fog.rgb;
+      sky = ${skyMirrored} * fog.a + fog.rgb;
       strike = share;
     } else {
       front = fog.rgb;
@@ -556,7 +556,7 @@ void main() {
     outColor = vec4(mix(vec3(grey), vec3(1.0, 0.0, 0.0), line), 1.0);
     return;
   }
-  vec3 color = unseen ? vec3(0.0) : SKY;
+  vec3 color = unseen ? vec3(0.0) : ${skySeen};
   vec3 reflected = vec3(0.0);
   if (water && !unseen) {
     vec3 s = cEye.xyz + hit * d;

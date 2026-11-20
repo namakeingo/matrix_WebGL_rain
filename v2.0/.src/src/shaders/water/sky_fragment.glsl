@@ -18,7 +18,7 @@ void main() {
   outCrest = CREST_FAR;
   vec3 strike = vec3(0.0);
   vec4 fog = vec4(0.0, 0.0, 0.0, 1.0);
-  vec3 color = unseen ? vec3(0.0) : SKY;
+  vec3 color = unseen ? vec3(0.0) : ${skySeen};
   vec3 reflected = vec3(0.0);
   float end = FOG_FAR;
   vec2 fogPixel = gl_FragCoord.xy;
