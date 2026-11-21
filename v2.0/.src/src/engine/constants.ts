@@ -65,6 +65,9 @@ export const UNITS = {
   // reflectionDistance: that picture is read only by the water's pass and let go (Reflection.done) before the crest picture is bound for the glyph passes (index.ts), and no glyph program
   // declares a sampler on it
   crest: 6,
+  // the atmosphere's seen-sky picture (Fog.skyTexture, read by the water's two programs): it shares the unit of the pass inputs bound before their reads (bloomFrom: the bloom's passes, the
+  // strikes' bakes, which Fog and Water bind there first); Fog.bindSky binds it there before the water is drawn
+  sky: 21,
 };
 
 export type TextureUnit = keyof typeof UNITS;

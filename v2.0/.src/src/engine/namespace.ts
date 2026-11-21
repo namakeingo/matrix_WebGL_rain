@@ -12,6 +12,9 @@ import type { Floor } from "../models/floor";
 import type { WaterTone } from "../models/watertone";
 import type { RippleSpeed } from "../models/ripplespeed";
 import type { WaveSteps } from "../models/wavesteps";
+import type { WaveGrid } from "../models/wavegrid";
+import type { WaveResample } from "../models/waveresample";
+import type { WaveDissolve } from "../models/wavedissolve";
 import type { WaveLift } from "../models/wavelift";
 import type { WaveHit } from "../models/wavehit";
 import type { CrestHide } from "../models/crest";
@@ -44,7 +47,7 @@ import type { RainLayout } from "../models/rainlayout";
 import type { RainWheel } from "../models/rainwheel";
 import type { SkyLight } from "../models/skylight";
 import type { Atmosphere } from "../models/atmosphere";
-import type { SkyBox, MoonDisc } from "../materials/sky";
+import type { MoonDisc } from "../materials/sky";
 import type { StrikeBias } from "../models/strikebias";
 import type { HdrOutput } from "../models/hdroutput";
 import type { HdrPack } from "../models/hdrpack";
@@ -63,6 +66,9 @@ import type { StrikePlan } from "../models/strikeplan";
 import type { StrikePlanWorker } from "../workers/strikeplanworker";
 import type { FogPlan } from "../models/fogplan";
 import type { FogPlanWorker } from "../workers/fogplanworker";
+import type { QualityAtmosphere } from "../models/quality/atmosphere";
+import type { AtmosphereWorker } from "../workers/atmosphereworker";
+import type { Debounce } from "../models/debounce";
 import type { BoltList } from "../models/boltlist";
 import type { BoltListWorker } from "../workers/boltlistworker";
 import type { Frame } from "../models/frame";
@@ -127,18 +133,17 @@ export interface Matrix3DTestOptions {
   splashWorker?: string;
   strikePlanWorker?: string;
   fogPlanWorker?: string;
+  atmosphereWorker?: string;
   boltListWorker?: string;
   frameWorker?: string;
   textLayoutWorker?: string;
   qualityWorker?: string;
-  // the atmosphere prototype on (M.ATMOSPHERE)
-  atmosphere?: boolean;
+  // the waves start on the full 2048 x 1024 grid and ignore the brightness choice (?waves=full in the test pages)
+  wavesFull?: boolean;
 }
 
 export interface Matrix3DNamespace {
   TEST: boolean;
-  // the atmosphere prototype's flag (engine/core.ts): false in the shipped bundle
-  ATMOSPHERE: boolean;
   hash: (v: number) => number;
   HASH_GLSL: string;
   HASH_WGSL: string;
@@ -153,6 +158,9 @@ export interface Matrix3DNamespace {
   StrikePlanWorker: typeof StrikePlanWorker;
   FogPlan: typeof FogPlan;
   FogPlanWorker: typeof FogPlanWorker;
+  QualityAtmosphere: typeof QualityAtmosphere;
+  AtmosphereWorker: typeof AtmosphereWorker;
+  Debounce: typeof Debounce;
   BoltList: typeof BoltList;
   BoltListWorker: typeof BoltListWorker;
   Frame: typeof Frame;
@@ -177,6 +185,9 @@ export interface Matrix3DNamespace {
   WaterTone: typeof WaterTone;
   RippleSpeed: typeof RippleSpeed;
   WaveSteps: typeof WaveSteps;
+  WaveGrid: typeof WaveGrid;
+  WaveResample: typeof WaveResample;
+  WaveDissolve: typeof WaveDissolve;
   WaveLift: typeof WaveLift;
   WaveHit: typeof WaveHit;
   CrestHide: typeof CrestHide;
@@ -209,7 +220,6 @@ export interface Matrix3DNamespace {
   RainLayout: typeof RainLayout;
   RainWheel: typeof RainWheel;
   SkyLight: typeof SkyLight;
-  SkyBox: typeof SkyBox;
   Atmosphere: typeof Atmosphere;
   MoonDisc: typeof MoonDisc;
   StrikeBias: typeof StrikeBias;

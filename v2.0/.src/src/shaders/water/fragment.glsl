@@ -152,8 +152,8 @@ bool flatWater(vec2 xz, vec2 foot, float t) {
   return false;
 }
 
-// the light the water reflects diffusely at s (normal n): its albedo lit by the sky box and the moon (the one light term of the fog's shared text: the sky box's
-// SKY x (1 + n.y) / 2 x the clouds' transmittance, which for an upward normal is SKY x shade.x, and MOON x max(n.m, 0) / PI x the moon's)
+// the light the water reflects diffusely at s (normal n): its albedo lit by the atmosphere and the Orb (the one light term of the fog's shared text: the atmosphere's
+// harmonics x the clouds' transmittance (shade.x), and MOON x max(n.m, 0) / PI x the Orb's (shade.y))
 vec3 waterOwnShaded(vec2 shade, vec3 n) {
   return WATER_ALBEDO * uTone * glyphSkyMoonLight(n, shade);
 }
@@ -233,12 +233,14 @@ vec3 mirroredAt(vec2 at, vec2 major, float minor, out vec3 emitted, out vec3 sce
   vec3 strike = vec3(0.0);
   vec3 front = vec3(0.0);
   vec3 frontStrike = vec3(0.0);
+  // (the mirrored sky's radiance is read here, once, before the loop: read inside the loop's `if (i == 0)` branch it cost the water program about 50 ms of compile time)
+  vec3 seenMirror = atmosSeenMirror(clamp(at, -edge, cScreen.xy + edge));
   for (int i = 0; i < 2; i++) {
     if (i == 1 && !covered) break;
     vec3 share;
     vec4 fog = fogAt(i == 0 ? clamp(at, -edge, cScreen.xy + edge) : at, i == 0 ? FOG_FAR : NEAR_SCALE / near, true, share);
     if (i == 0) {
-      sky = ${skyMirrored} * fog.a + fog.rgb;
+      sky = seenMirror * fog.a + fog.rgb;
       strike = share;
     } else {
       front = fog.rgb;
@@ -556,7 +558,7 @@ void main() {
     outColor = vec4(mix(vec3(grey), vec3(1.0, 0.0, 0.0), line), 1.0);
     return;
   }
-  vec3 color = unseen ? vec3(0.0) : ${skySeen};
+  vec3 color = unseen ? vec3(0.0) : atmosSeen(d);
   vec3 reflected = vec3(0.0);
   if (water && !unseen) {
     vec3 s = cEye.xyz + hit * d;

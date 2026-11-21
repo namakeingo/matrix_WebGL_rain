@@ -1,5 +1,5 @@
 // The waves: the water's surface, simulated on the water in the world: every step the waves need,
-// on a grid of 1024 x 512 cells.
+// on a grid of 2048 x 1024 cells.
 // - The grid lies on the water, fixed in the world (not on the view: a change of Plane height or
 //   of the window keeps every wave where it is): across by x / Z over the world's width
 //   (Camera.SPAN), down evenly by 1 / Z, from 0.9 of the nearest distance the camera sees the
@@ -59,8 +59,11 @@
 // 2026-11-06: calm flag from the highest wave read back without stalling (highest, readings, readEvery).
 // 2026-11-06: the impact queue grows when full (array and buffer doubled), none dropped; the
 //             impacts drawn in batches of at most 65536 instances, a guard piece after each
+// 2026-11-20: a switch of the grid resamples the waves' state (shaders/waves/resample_fragment.glsl, models/waveresample.ts) instead of clearing it; each grid keeps its own targets (`sets`, made once on first use).
+// 2026-11-20: the grid is `cells`: 1024 x 512, or 2048 x 1024 while `full` (setFullGrid, chosen by the coordinator from the effective brightness: models/wavegrid.ts), the targets and the state made again by `regrid`.
+// 2026-11-20: a switch of the grid starts a dissolve of 1 s (models/wavedissolve.ts, the resample program with a mix): the picture the water reads is the old state's cells or the new state's by an ordered dither, composed each frame into the state's other texture; the water program is not touched.
 // 2026-11-12: CALM_HEIGHT is WaveLift.CALM (one constant for the calm flag and the landings' lift).
-import { M } from "../engine/core";
+import { M, testOptions } from "../engine/core";
 import { fill } from "../engine/glsl";
 import GRID_SOURCE from "../shaders/waves/grid.glsl";
 import IMPACT_VERTEX_SOURCE from "../shaders/waves/impact_vertex.glsl";
@@ -68,10 +71,12 @@ import IMPACT_FRAGMENT_SOURCE from "../shaders/waves/impact_fragment.glsl";
 import STEP_FRAGMENT_SOURCE from "../shaders/waves/step_fragment.glsl";
 import STEP_FUSED_SOURCE from "../shaders/waves/step_fused_fragment.glsl";
 import MAX_FRAGMENT_SOURCE from "../shaders/waves/max_fragment.glsl";
+import RESAMPLE_FRAGMENT_SOURCE from "../shaders/waves/resample_fragment.glsl";
 import WAVES_SOURCE from "../shaders/waves/waves.glsl";
 import { QualityWater } from "../models/quality/water";
 import { QualityWaves } from "../models/quality/waves";
 import { WaveSteps } from "../models/wavesteps";
+import { WaveDissolve } from "../models/wavedissolve";
 import { WaveLift } from "../models/wavelift";
 import { WaveMax } from "../models/quality/wavemax";
 import { WaveFuse } from "../models/quality/wavefuse";
@@ -97,8 +102,10 @@ interface Impact {
   weight: number;
 }
 
-const { ACROSS, DOWN, STABLE, STABLE_REF } = WaveSteps;
+const { STABLE, STABLE_REF } = WaveSteps;
 const IMPACT_SIZE = 0.05;
+// the steps the young impacts' summed peak is kept for after a switch of the grid (above the longest young window of either grid: 3 to 4 x 0.3 m / cdt + 4 at most about 300)
+const REGRID_YOUNG_STEPS = 1024;
 const IMPACT_PUSH = 0.4;
 // the cells along each side where the waves die out (the most they lose a step there: WaveSteps.edgeLossFor)
 const { EDGE } = WaveSteps;
@@ -126,7 +133,10 @@ export class Waves extends M.Effect {
   setHeights!: (shape: ((x: number, z: number) => number) | null) => void;
   bench!: (name: string, fused: number, single: number) => void;
   read!: () => { width: number; height: number; data: Float32Array<ArrayBuffer> };
+  readShown!: () => { width: number; height: number; data: Float32Array<ArrayBuffer> };
+  holdDissolve!: (mix: number | null) => void;
   maxProgram!: ShaderProgram;
+  resampleProgram!: ShaderProgram;
   stepProgram!: ShaderProgram;
   fusedProgram!: ShaderProgram;
   // two steps to a draw when the level of detail is on (starts as FUSE_ENABLED; the tests set it), and the frame's draws (kept: no allocation in a frame)
@@ -138,10 +148,23 @@ export class Waves extends M.Effect {
   impactProgram!: ShaderProgram;
   static MAX_FRAGMENT: string;
   static STEP_FRAGMENT: string;
+  static RESAMPLE_FRAGMENT: string;
   static STEP_FUSED_FRAGMENT: string;
   static IMPACT_FRAGMENT: string;
   static IMPACT_VERTEX: string;
   grid: Grid;
+  // the dissolve of a grid switch (models/wavedissolve.ts) and the old state it shows: the target that held the state at the switch (in the other grid's set, frozen: nothing draws
+  // into it while the dissolve runs). While it runs the picture the water reads is the active set's other state texture (`shown()`), composed each frame from the frozen state and
+  // the new one (`composeShown`); the step draws into that texture too, so it is composed again after the frame's steps and never read between
+  dissolve: WaveDissolve;
+  frozen: RenderTarget | null;
+  // the full 2048 x 1024 grid is in use (the production grid is 1024 x 512), and whether a test option fixed it (the choice is then ignored)
+  full: boolean;
+  fixedFull: boolean;
+  // whether the targets, the uniform block and the step were made for the full grid, and each grid's own targets (the production grid's, then the full grid's: made on first
+  // use and kept, so a switch makes no GPU object): the two states, the picture of pushes and the chain of maxima
+  tunedFull!: boolean;
+  sets: ({ states: RenderTarget[]; impulse: RenderTarget; maxes: RenderTarget[] } | null)[];
   // the level of detail the grid's step was made for, and the edge loss a step at it
   tunedLod!: boolean;
   edgeLoss!: number;
@@ -218,6 +241,11 @@ export class Waves extends M.Effect {
     super(context);
     const gl = this.gl;
     this.skippedSearches = 0;
+    this.dissolve = new WaveDissolve();
+    this.frozen = null;
+    this.fixedFull = M.TEST && testOptions().wavesFull === true;
+    this.full = this.fixedFull;
+    this.sets = [null, null];
     this.fuse = FUSE_ENABLED;
     this.fuseMin = WaveFuse.FUSE_MIN_STEPS;
     this.fuseAnyLod = false;
@@ -287,17 +315,11 @@ export class Waves extends M.Effect {
       return t;
     };
     if (this.caps.floats) {
-      this.states = [target(gl.RG32F, ACROSS, DOWN), target(gl.RG32F, ACROSS, DOWN)];
-      this.impulse = target(gl.R16F, ACROSS, DOWN);
+      const set = this.setFor(this.full);
+      this.states = set.states;
+      this.impulse = set.impulse;
+      this.maxes = set.maxes;
       this.bounded = target(gl.R32F, 1, 1);
-      this.maxes = [];
-      let w = ACROSS;
-      let h = DOWN;
-      while (w > 1 || h > 1) {
-        w = Math.max(1, Math.ceil(w / 4));
-        h = Math.max(1, Math.ceil(h / 4));
-        this.maxes.push(target(gl.R32F, w, h));
-      }
     } else {
       // (no float pictures to draw into: still water)
       const flat = target(gl.RGBA8, 1, 1);
@@ -310,12 +332,163 @@ export class Waves extends M.Effect {
     this.reset();
   }
 
+  // the targets of a grid (the full one or the production one), made on first use and kept: the two states, the picture of pushes and the chain of maxima (each a quarter
+  // of the one before, down to 1 x 1)
+  setFor(full: boolean) {
+    const k = full ? 1 : 0;
+    let set = this.sets[k];
+    if (!set) {
+      const gl = this.gl;
+      const { across, down } = WaveSteps.cellsFor(full);
+      const target = (format: GLenum, width: number, height: number) => {
+        const t = this.target({ format });
+        t.resize(width, height);
+        return t;
+      };
+      const maxes: RenderTarget[] = [];
+      let w = across;
+      let h = down;
+      while (w > 1 || h > 1) {
+        w = Math.max(1, Math.ceil(w / 4));
+        h = Math.max(1, Math.ceil(h / 4));
+        maxes.push(target(gl.R32F, w, h));
+      }
+      set = { states: [target(gl.RG32F, across, down), target(gl.RG32F, across, down)], impulse: target(gl.R16F, across, down), maxes };
+      this.sets[k] = set;
+    }
+    return set;
+  }
+
+  // the grid in use: 1024 x 512 cells, or 2048 x 1024 while `full`
+  get cells(): { across: number; down: number } {
+    return WaveSteps.cellsFor(this.full);
+  }
+
+  // the coordinator's choice of the grid (models/wavegrid.ts); a test option that fixed the grid ignores it
+  setFullGrid(on: boolean) {
+    if (this.fixedFull || this.full === on) {
+      return;
+    }
+    this.full = on;
+    this.regrid();
+  }
+
+  // the grid changed: the waves' state is resampled to the new grid's targets in one pass (height as it is, the velocity scaled by the new step's way over the old: models/waveresample.ts),
+  // the block and the step made again, the highest-wave search forced; the simulation's clock, the impacts waiting and the calm flag go on. The young impacts' ledger (peaks
+  // and expiry steps in the old grid's steps and constants) is replaced by one entry holding their summed peak for REGRID_YOUNG_STEPS of the new steps: the bound stays above
+  // what they can still add whichever way the step's length changed. Nothing is made when the cells are the same, and no GPU object at a switch to a grid used before.
+  regrid() {
+    if (!this.grid || this.tunedFull === this.full || !this.caps.floats) {
+      return;
+    }
+    const gl = this.gl;
+    const from = this.states[this.current]!;
+    const next = this.setFor(this.full);
+    const { across, down } = this.cells;
+    const oldCdt = this.grid.cdt;
+    this.tune();
+    this.guard.begin("waves resample", "step");
+    gl.disable(gl.BLEND);
+    next.states[0]!.bind();
+    const u = this.resampleProgram.use();
+    gl.uniform2f(u.uFrom, from.width, from.height);
+    gl.uniform2f(u.uTo, across, down);
+    gl.uniform1f(u.uVelocityScale, this.grid.cdt / oldCdt);
+    gl.uniform1f(u.uMix, -1);
+    gl.activeTexture(gl.TEXTURE0 + M.UNITS.waves);
+    gl.bindTexture(gl.TEXTURE_2D, from.texture);
+    // (the program's other sampler, read only in the dissolve's mode, is kept on a texture that is not the one drawn into)
+    gl.activeTexture(gl.TEXTURE0 + M.UNITS.work);
+    gl.bindTexture(gl.TEXTURE_2D, from.texture);
+    this.quad.drawFull();
+    this.guard.piece();
+    this.guard.end();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.states = next.states;
+    this.impulse = next.impulse;
+    this.maxes = next.maxes;
+    this.current = 0;
+    const young = this.young.sum(this.chainStep);
+    this.young = new WaveMax.Young();
+    if (young > 0) {
+      this.young.add(this.stepCount, young, REGRID_YOUNG_STEPS);
+    }
+    this.qualitySentGrid = null;
+    this.uploadGrid();
+    // (the maxima targets of this grid hold what they did when it was last in use: the chain runs at the next update)
+    const calm = this.calm;
+    this.setMoving();
+    this.calm = calm;
+    this.stepped = true;
+    // the old state, frozen where it is, dissolves into the new one over the next second (a switch while one runs begins again, from the true state of the grid left, not from the picture shown)
+    this.frozen = from;
+    this.dissolve.start();
+    this.composeShown();
+  }
+
+  // the picture the water and the other readers take the heights from: the state's own texture, or while a dissolve runs the other one, composed by `composeShown`
+  shown(): RenderTarget {
+    return this.states[this.dissolve.active ? 1 - this.current : this.current]!;
+  }
+
+  // the dissolve's picture of this frame into the active set's other state texture: the frozen old state (resampled to this grid) where the cell's dither threshold is at or
+  // above the mix, the new state's height where it is under (shaders/waves/resample_fragment.glsl with uMix of 0 or more; the resample program, so the compile total gains no program);
+  // the maxima chain runs on it (`stepped`), and it is what the units read. Never reads the texture it writes: the new state is the other one of the pair
+  composeShown() {
+    const frozen = this.frozen;
+    if (!this.dissolve.active || !frozen || !this.caps.floats) {
+      return;
+    }
+    const gl = this.gl;
+    const { across, down } = this.cells;
+    this.guard.begin("waves dissolve", "step");
+    gl.disable(gl.BLEND);
+    this.states[1 - this.current]!.bind();
+    const u = this.resampleProgram.use();
+    gl.uniform2f(u.uFrom, frozen.width, frozen.height);
+    gl.uniform2f(u.uTo, across, down);
+    gl.uniform1f(u.uVelocityScale, 1);
+    gl.uniform1f(u.uMix, this.dissolve.mix);
+    gl.activeTexture(gl.TEXTURE0 + M.UNITS.waves);
+    gl.bindTexture(gl.TEXTURE_2D, frozen.texture);
+    gl.activeTexture(gl.TEXTURE0 + M.UNITS.work);
+    gl.bindTexture(gl.TEXTURE_2D, this.states[this.current]!.texture);
+    this.quad.drawFull();
+    this.guard.piece();
+    this.guard.end();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.stepped = true;
+    this.bind();
+  }
+
+  // the clock of the dissolve moves on by a frame's seconds; at its end the water reads the state's own texture again (the picture without the feature, bit for bit) and the
+  // maxima are taken of it at the next update
+  tickDissolve(passed: number) {
+    if (!this.dissolve.active) {
+      return;
+    }
+    this.dissolve.advance(passed);
+    if (!this.dissolve.active) {
+      this.endDissolve();
+    }
+  }
+
+  // the dissolve over (it ended, or the state was cleared): nothing is composed and the water binds the state's texture
+  endDissolve() {
+    this.dissolve.stop();
+    this.frozen = null;
+    this.stepped = true;
+    this.framesSince = 1e9;
+    this.bind();
+  }
+
   static programs(): ProgramSources {
     return {
       waveImpact: [Waves.IMPACT_VERTEX, Waves.IMPACT_FRAGMENT],
       waveStep: [M.FULL_VERTEX, Waves.STEP_FRAGMENT],
       waveStepFused: [M.FULL_VERTEX, Waves.STEP_FUSED_FRAGMENT],
       waveMax: [M.FULL_VERTEX, Waves.MAX_FRAGMENT],
+      waveResample: [M.FULL_VERTEX, Waves.RESAMPLE_FRAGMENT],
     };
   }
 
@@ -335,10 +508,11 @@ export class Waves extends M.Effect {
   qualityStatics(): QualityStatics | null {
     const g = this.grid;
     const sent = this.qualitySentGrid;
-    if (sent && sent[0] === g.near && sent[1] === g.far && sent[2] === g.span) {
+    const { across, down } = WaveSteps.cellsFor(!!this.full);
+    if (sent && sent[0] === g.near && sent[1] === g.far && sent[2] === g.span && sent[3] === across) {
       return null;
     }
-    const grid = QualityWaves.gridStatics(g);
+    const grid = QualityWaves.gridStatics(g, across, down);
     this.qualitySentGrid = grid;
     return { grid };
   }
@@ -367,10 +541,11 @@ export class Waves extends M.Effect {
   }
 
   init(programs: Programs) {
-    [this.impactProgram, this.stepProgram, this.fusedProgram, this.maxProgram] = this.ownPrograms(programs, ["waveImpact", "waveStep", "waveStepFused", "waveMax"]);
+    [this.impactProgram, this.stepProgram, this.fusedProgram, this.maxProgram, this.resampleProgram] = this.ownPrograms(programs, ["waveImpact", "waveStep", "waveStepFused", "waveMax", "waveResample"]);
     this.stepProgram.samplers({ uState: M.UNITS.waves, uImpulse: M.UNITS.work });
     this.fusedProgram.samplers({ uState: M.UNITS.waves, uImpulse: M.UNITS.work });
     this.maxProgram.samplers({ uFrom: M.UNITS.work });
+    this.resampleProgram.samplers({ uOld: M.UNITS.waves, uNew: M.UNITS.work });
     this.uploadGrid();
     this.stepped = true;
     this.warm();
@@ -394,6 +569,14 @@ export class Waves extends M.Effect {
     this.quad.drawFull();
     const f = this.fusedProgram.use();
     gl.uniform1i(f.uWithImpulse, 0);
+    this.quad.drawFull();
+    const r = this.resampleProgram.use();
+    gl.uniform2f(r.uFrom, this.cells.across, this.cells.down);
+    gl.uniform2f(r.uTo, this.cells.across, this.cells.down);
+    gl.uniform1f(r.uVelocityScale, 1);
+    gl.uniform1f(r.uMix, -1);
+    gl.activeTexture(gl.TEXTURE0 + M.UNITS.work);
+    gl.bindTexture(gl.TEXTURE_2D, this.states[this.current].texture);
     this.quad.drawFull();
     this.impulse.bind();
     const at = this.impactData.subarray(0, 3);
@@ -426,25 +609,29 @@ export class Waves extends M.Effect {
     const far = 1.5 * this.furthest;
     const span = M.Camera.SPAN;
     const stable = M.TEST && this.stableOverride ? this.stableOverride : this.lod ? STABLE : STABLE_REF;
-    const cdt = WaveSteps.cdtFor(near, far, span, stable);
+    const { across, down } = this.cells;
+    const cdt = WaveSteps.cdtFor(near, far, span, stable, across, down);
     this.tunedLod = this.lod;
     this.tunedOverride = this.stableOverride;
-    this.edgeLoss = WaveSteps.edgeLossFor(near, far, span, stable);
+    this.tunedFull = this.full;
+    this.edgeLoss = WaveSteps.edgeLossFor(near, far, span, stable, across, down);
     return { near, far, span, cdt, rate: WaveSteps.rateFor(cdt) };
   }
 
   // the step's way, its rate and the edge loss for the level of detail (STABLE with it, STABLE_REF, the earlier physics, without): made again, in place,
   // when the level changed; the waves' state goes on as it is (the same wave speed, only the steps' size changes)
   tune() {
-    if (this.tunedLod === this.lod && this.tunedOverride === this.stableOverride) {
+    if (this.tunedLod === this.lod && this.tunedOverride === this.stableOverride && this.tunedFull === this.full) {
       return;
     }
     const g = this.grid;
     const stable = M.TEST && this.stableOverride ? this.stableOverride : this.lod ? STABLE : STABLE_REF;
+    const { across, down } = this.cells;
     this.tunedOverride = this.stableOverride;
-    g.cdt = WaveSteps.cdtFor(g.near, g.far, g.span, stable);
+    g.cdt = WaveSteps.cdtFor(g.near, g.far, g.span, stable, across, down);
     g.rate = WaveSteps.rateFor(g.cdt);
-    this.edgeLoss = WaveSteps.edgeLossFor(g.near, g.far, g.span, stable);
+    this.edgeLoss = WaveSteps.edgeLossFor(g.near, g.far, g.span, stable, across, down);
+    this.tunedFull = this.full;
     this.tunedLod = this.lod;
   }
 
@@ -452,14 +639,16 @@ export class Waves extends M.Effect {
   gridOf(x: number, z: number) {
     const g = this.grid;
     const distance = -z;
-    return [((x / distance + g.span) / (2 * g.span)) * ACROSS - 0.5, ((1 / g.near - 1 / distance) / (1 / g.near - 1 / g.far)) * DOWN - 0.5];
+    const { across, down } = this.cells;
+    return [((x / distance + g.span) / (2 * g.span)) * across - 0.5, ((1 / g.near - 1 / distance) / (1 / g.near - 1 / g.far)) * down - 0.5];
   }
 
   // the middle of a cell in the world: [x, z]
   worldOf(i: number, j: number) {
     const g = this.grid;
-    const u = (i + 0.5) / ACROSS;
-    const v = (j + 0.5) / DOWN;
+    const { across, down } = this.cells;
+    const u = (i + 0.5) / across;
+    const v = (j + 0.5) / down;
     const distance = 1 / (1 / g.near - v * (1 / g.near - 1 / g.far));
     return [(u * 2 - 1) * g.span * distance, -distance];
   }
@@ -468,7 +657,8 @@ export class Waves extends M.Effect {
   cellArea(i: number, j: number) {
     const g = this.grid;
     const distance = -this.worldOf(i, j)[1];
-    return ((distance * 2 * g.span) / ACROSS) * ((distance * distance * (1 / g.near - 1 / g.far)) / DOWN);
+    const { across, down } = this.cells;
+    return ((distance * 2 * g.span) / across) * ((distance * distance * (1 / g.near - 1 / g.far)) / down);
   }
 
   add(x: number, z: number, weight: number) {
@@ -520,7 +710,7 @@ export class Waves extends M.Effect {
       if (QualityWater.skips(this.qualityResult, this.qualityFor, this.camera.version, this.camera.dirty)) {
         // (no water in view: nothing reads the highest wave; the search stays pending for the first frame that does)
         this.skippedSearches++;
-      } else if (!this.lod || WaveMax.due(this.framesSince, this.refresh, this.blocksNeeded)) {
+      } else if (!this.lod || this.dissolve.active || WaveMax.due(this.framesSince, this.refresh, this.blocksNeeded)) {
         this.stepped = false;
         this.findMax();
         this.chainStep = this.stepCount;
@@ -616,8 +806,8 @@ export class Waves extends M.Effect {
     d[0] = g.near;
     d[1] = g.far;
     d[2] = g.span;
-    d[3] = ACROSS;
-    d[4] = DOWN;
+    d[3] = this.cells.across;
+    d[4] = this.cells.down;
     this.ubo.upload();
   }
 
@@ -625,6 +815,7 @@ export class Waves extends M.Effect {
   advance(time: number) {
     const passed = time - this.lastTime;
     this.lastTime = time;
+    this.tickDissolve(passed);
     this.run(passed, false);
   }
 
@@ -633,6 +824,9 @@ export class Waves extends M.Effect {
     const slice = M.RippleSpeed.stepsIn(this.time + Math.max(0, seconds), this.stepRate, STEPS_MOST, all);
     this.time = slice.left;
     this.step(slice.steps);
+    if (this.dissolve.active) {
+      this.composeShown();
+    }
   }
 
   // the impacts waiting, into the picture of pushes, then steps (the pushes taken in the first)
@@ -732,7 +926,7 @@ export class Waves extends M.Effect {
   bind() {
     const gl = this.gl;
     gl.activeTexture(gl.TEXTURE0 + M.UNITS.waves);
-    gl.bindTexture(gl.TEXTURE_2D, this.states[this.current].texture);
+    gl.bindTexture(gl.TEXTURE_2D, this.shown().texture);
     gl.activeTexture(gl.TEXTURE0 + M.UNITS.waveBlocks);
     gl.bindTexture(gl.TEXTURE_2D, this.maxes[0].texture);
     gl.activeTexture(gl.TEXTURE0 + M.UNITS.waveMax);
@@ -744,8 +938,9 @@ export class Waves extends M.Effect {
   feedLedger(count: number) {
     const g = this.grid;
     const data = this.impactData;
-    const along = (2 * g.span) / ACROSS;
-    const down = (1 / g.near - 1 / g.far) / DOWN;
+    const cells = this.cells;
+    const along = (2 * g.span) / cells.across;
+    const down = (1 / g.near - 1 / g.far) / cells.down;
     for (let k = 0; k < count; k++) {
       const z = -data[k * 3 + 1]!;
       if (!(z > 0)) {
@@ -754,7 +949,7 @@ export class Waves extends M.Effect {
       const size = IMPACT_SIZE * this.intensity * data[k * 3 + 2]!;
       const cellX = z * along;
       const cellZ = z * z * down;
-      this.young.add(this.stepCount, WaveMax.peakOf(size, cellX, cellZ), WaveMax.youngSteps(g.cdt, size, cellX, cellZ));
+      this.young.add(this.stepCount, WaveMax.peakOf(size, cellX, cellZ, this.full), WaveMax.youngSteps(g.cdt, size, cellX, cellZ, this.full));
     }
   }
 
@@ -784,7 +979,7 @@ export class Waves extends M.Effect {
     this.bounded.bind();
     gl.uniform1i(u.uFirst, 0);
     gl.uniform1f(u.uAdd, this.young.sum(this.chainStep));
-    gl.uniform1f(u.uGrow, WaveMax.growth(this.stepCount - this.chainStep) - 1);
+    gl.uniform1f(u.uGrow, WaveMax.growth(this.stepCount - this.chainStep, this.full) - 1);
     this.quad.drawFull();
     gl.uniform1f(u.uAdd, 0);
     gl.uniform1f(u.uGrow, 0);
@@ -800,7 +995,7 @@ export class Waves extends M.Effect {
       return;
     }
     const u = this.maxProgram.use();
-    let from = this.states[this.current].texture;
+    let from = this.shown().texture;
     gl.activeTexture(gl.TEXTURE0 + M.UNITS.waveMax);
     gl.bindTexture(gl.TEXTURE_2D, null);
     gl.activeTexture(gl.TEXTURE0 + M.UNITS.waveBlocks);
@@ -835,6 +1030,8 @@ export class Waves extends M.Effect {
 
   clearGrid() {
     const gl = this.gl;
+    this.dissolve.stop();
+    this.frozen = null;
     for (const t of this.caps.floats ? [this.states[0], this.states[1], this.impulse] : this.states) {
       t.bind();
       gl.clearColor(0, 0, 0, 0);
@@ -853,6 +1050,8 @@ export class Waves extends M.Effect {
     this.dropped = 0;
     this.log = [];
     this.logNext = 0;
+    this.dissolve.stop();
+    this.frozen = null;
     for (const t of this.caps.floats ? [this.states[0], this.states[1], this.impulse] : this.states) {
       t.bind();
       gl.clearColor(0, 0, 0, 0);
@@ -880,16 +1079,35 @@ if (M.TEST) {
 
   Waves.prototype.read = function (this: Waves) {
     const gl = this.gl;
-    const data = new Float32Array(ACROSS * DOWN * 4);
+    const { across, down } = this.cells;
+    const data = new Float32Array(across * down * 4);
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.states[this.current].framebuffer);
-    gl.readPixels(0, 0, ACROSS, DOWN, gl.RGBA, gl.FLOAT, data);
+    gl.readPixels(0, 0, across, down, gl.RGBA, gl.FLOAT, data);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    return { width: ACROSS, height: DOWN, data };
+    return { width: across, height: down, data };
+  };
+
+  // for the tests: the heights of the picture the water reads (the dissolve's while one runs), a blocking read like `read`
+  Waves.prototype.readShown = function (this: Waves) {
+    const gl = this.gl;
+    const { across, down } = this.cells;
+    const data = new Float32Array(across * down * 4);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.shown().framebuffer);
+    gl.readPixels(0, 0, across, down, gl.RGBA, gl.FLOAT, data);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return { width: across, height: down, data };
+  };
+
+  // for the tests: the dissolve's mix held at a value (null: the clock's again) and its picture composed at it
+  Waves.prototype.holdDissolve = function (this: Waves, mix: number | null) {
+    this.dissolve.hold = mix;
+    this.composeShown();
   };
 
   // for the tests: the heights set by a function of the place (x, z), still; null: flat
   Waves.prototype.setHeights = function (this: Waves, shape) {
     const gl = this.gl;
+    const { across: ACROSS, down: DOWN } = this.cells;
     const data = new Float32Array(ACROSS * DOWN * 2);
     if (shape) {
       for (let j = 0; j < DOWN; j++) {
@@ -902,6 +1120,8 @@ if (M.TEST) {
     gl.activeTexture(gl.TEXTURE0 + M.UNITS.waves);
     gl.bindTexture(gl.TEXTURE_2D, this.states[this.current].texture);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, ACROSS, DOWN, gl.RG, gl.FLOAT, data);
+    this.dissolve.stop();
+    this.frozen = null;
     this.stepped = true;
     this.setMoving();
   };
@@ -922,6 +1142,9 @@ Waves.STEP_FUSED_FRAGMENT = fill(STEP_FUSED_SOURCE, { "GRID_GLSL": GRID_GLSL, "E
 
 // the highest wave (by its size) in each block of 4 x 4
 Waves.MAX_FRAGMENT = MAX_FRAGMENT_SOURCE;
+
+// the state moved to the other grid at a switch
+Waves.RESAMPLE_FRAGMENT = RESAMPLE_FRAGMENT_SOURCE;
 
 // the heights at any place (bilinear between the cells' middles, 0 off the grid), and the
 // water's normal from the waves' real slopes

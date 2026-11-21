@@ -5,12 +5,16 @@
 // it), so a longer step means fewer steps. The edge loss a step (EDGE_LOSS at STABLE_REF) is proportional to cdt: the loss per metre stays. Pure: no GL, no page.
 //
 // Changelog:
+// 2026-11-20: the cell counts are parameters of cdtFor and edgeLossFor (the defaults the production grid), FULL_ACROSS and FULL_DOWN (the full grid: cells half as wide and deep, so a stable step half as long and twice the steps a second), cellsFor.
 // 2026-11-18: the grid 1024 x 512 cells, was 2048 x 1024 (cells twice as wide, so cdt doubles and the steps a second halve: about an eighth of the wave work)
 // 2026-11-08: new (STABLE 0.8 as the level of detail's constant, STABLE_REF 0.45 the earlier one).
 import { M } from "../engine/core";
 
 const ACROSS = 1024;
 const DOWN = 512;
+// the full grid (Waves.full): cells half as wide and deep, so a stable step half as long and twice the steps a second
+const FULL_ACROSS = 2048;
+const FULL_DOWN = 1024;
 // the waves' speed at Ripples speed 75 (m/s)
 const SPEED = 0.25;
 // the share of the stability limit a step uses: with the level of detail, and without it (the earlier value)
@@ -21,9 +25,9 @@ const EDGE = 32;
 const EDGE_LOSS = 0.1;
 
 // the way a step goes (m) from the nearest cells' sizes
-function cdtFor(near: number, far: number, span: number, stable: number = STABLE): number {
-  const across = (near * 2 * span) / ACROSS;
-  const down = (near * near * (1 / near - 1 / far)) / DOWN;
+function cdtFor(near: number, far: number, span: number, stable: number = STABLE, cellsAcross: number = ACROSS, cellsDown: number = DOWN): number {
+  const across = (near * 2 * span) / cellsAcross;
+  const down = (near * near * (1 / near - 1 / far)) / cellsDown;
   return Math.sqrt(stable / (1 / (across * across) + 1 / (down * down)));
 }
 
@@ -33,10 +37,15 @@ function rateFor(cdt: number): number {
 }
 
 // the edge loss a step: proportional to the step's way, so the loss per metre does not change with the constant
-function edgeLossFor(near: number, far: number, span: number, stable: number = STABLE): number {
-  return (EDGE_LOSS * cdtFor(near, far, span, stable)) / cdtFor(near, far, span, STABLE_REF);
+function edgeLossFor(near: number, far: number, span: number, stable: number = STABLE, cellsAcross: number = ACROSS, cellsDown: number = DOWN): number {
+  return (EDGE_LOSS * cdtFor(near, far, span, stable, cellsAcross, cellsDown)) / cdtFor(near, far, span, STABLE_REF, cellsAcross, cellsDown);
 }
 
-export const WaveSteps = { ACROSS, DOWN, SPEED, STABLE, STABLE_REF, EDGE, EDGE_LOSS, cdtFor, rateFor, edgeLossFor };
+// the grid's cell counts: the full grid or the production one
+function cellsFor(full: boolean): { across: number; down: number } {
+  return full ? { across: FULL_ACROSS, down: FULL_DOWN } : { across: ACROSS, down: DOWN };
+}
+
+export const WaveSteps = { ACROSS, DOWN, FULL_ACROSS, FULL_DOWN, cellsFor, SPEED, STABLE, STABLE_REF, EDGE, EDGE_LOSS, cdtFor, rateFor, edgeLossFor };
 
 M.WaveSteps = WaveSteps;

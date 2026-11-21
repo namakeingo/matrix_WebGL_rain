@@ -27,6 +27,7 @@
 // - The flat path's tolerance grows as the light falls: flatPx(T) = FLAT_PX / T, at most 1 pixel, so T x flatPx stays FLAT_PX.
 //
 // Changelog:
+// 2026-11-20: the grid's cell counts are the effect's (1024 x 512, or the full 2048 x 1024): WavesGrid.across, gridStatics(grid, across, down); the map stays 256 x 128 blocks, a block 4 x 4 cells or 8 x 8.
 // 2026-11-18: the waves' grid 1024 x 512 cells (was 2048 x 1024): the map 256 x 128 blocks of 4 x 4 cells in 512 units, the block size in cells derived (CELLS_PER_BLOCK).
 // 2026-11-07: the map in units of 8 x 8 blocks (2048 units, no kept map: a recompute is cheap).
 // 2026-11-07: the block map job ("waves"), the shadow march's cut and stride, flatPx by transmittance.
@@ -124,6 +125,8 @@ interface WavesGrid {
   near: number;
   far: number;
   span: number;
+  // the grid's cells across (the production CELLS_ACROSS when unset): the map's 256 blocks across span them, so a block is across / 256 cells wide
+  across?: number;
 }
 interface WavesView {
   viewProjection: ArrayLike<number>;
@@ -185,7 +188,7 @@ function blockCellPixels(grid: WavesGrid, view: WavesView, bx: number, by: numbe
       edge = l;
     }
   }
-  return edge / CELLS_PER_BLOCK;
+  return edge / ((grid.across || CELLS_ACROSS) / BLOCKS_ACROSS);
 }
 
 // an upper bound of the fog's transmittance to the block: the distance to its nearest point (exact: in distance z and bearing r = x / z the
@@ -269,8 +272,8 @@ function sameView(a: WavesView, b: WavesView): boolean {
 }
 
 // the grid's static numbers: near, far, span, its cells across and down
-function gridStatics(grid: WavesGrid): Float32Array {
-  return Float32Array.of(grid.near, grid.far, grid.span, CELLS_ACROSS, CELLS_DOWN);
+function gridStatics(grid: WavesGrid, across: number = CELLS_ACROSS, down: number = CELLS_DOWN): Float32Array {
+  return Float32Array.of(grid.near, grid.far, grid.span, across, down);
 }
 
 // the map's units: a unit is SUPER x SUPER blocks (32 x 16 units), so a whole map is a few hundred bounds and any change of the view
@@ -319,7 +322,7 @@ function superLevel(grid: WavesGrid, view: WavesView, sx: number, sy: number): n
 function process(statics: Record<string, Float32Array>, params: { inputs: WavesView; lod?: boolean }, from: number, to: number, out: Uint8Array): void {
   const g = statics.grid!;
   const view = params.inputs;
-  const grid: WavesGrid = { near: g[0]!, far: g[1]!, span: g[2]! };
+  const grid: WavesGrid = { near: g[0]!, far: g[1]!, span: g[2]!, across: g[3]! };
   const lod = params.lod !== false;
   setPlanes(view.viewProjection);
   for (let i = from; i < to; i++) {
@@ -327,7 +330,7 @@ function process(statics: Record<string, Float32Array>, params: { inputs: WavesV
   }
 }
 
-export const QualityWaves = { FLAT_PX, FLAT_STRIKE, epsilon, pixelsPerRadian, limit, isFlat, withinBlocks, BLOCKS_ACROSS, BLOCKS_DOWN, BLOCKS, SUPER, UNITS_ACROSS, UNITS_DOWN, UNITS, superLevel, TABLE_SIZE, STRIKES_MOST, LIGHT_TOL, CUT_T, STRIDE_LEVELS, shadowStride, shadowSteps, shadowCut, flatPx, blockCorner, blockCellPixels, blockTransmittance, blockLevel, sameView, gridStatics, process };
+export const QualityWaves = { FLAT_PX, FLAT_STRIKE, epsilon, pixelsPerRadian, limit, isFlat, withinBlocks, BLOCKS_ACROSS, BLOCKS_DOWN, BLOCKS, CELLS_PER_BLOCK, SUPER, UNITS_ACROSS, UNITS_DOWN, UNITS, superLevel, TABLE_SIZE, STRIKES_MOST, LIGHT_TOL, CUT_T, STRIDE_LEVELS, shadowStride, shadowSteps, shadowCut, flatPx, blockCorner, blockCellPixels, blockTransmittance, blockLevel, sameView, gridStatics, process };
 
 QualityJobs.register("waves", (statics, params, from, to, out) => {
   process(statics, params as unknown as { inputs: WavesView; lod?: boolean }, from, to, out);

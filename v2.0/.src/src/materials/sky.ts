@@ -1,14 +1,9 @@
-// The light around: the night sky's and the moon's. Plain data and pure functions (no GL, no page): read by effects/fog.ts (Fog.GLSL's
+// The light around: the Orb's (the moon's). Plain data and pure functions (no GL, no page): read by effects/fog.ts (Fog.GLSL's
 // constants, their text as before, and the moon kernel's directions), which every shader seen through the fog or lit by the sky
 // includes (the water's among them), and by models/quality/fogshade.ts (the CPU twin of the shade bake).
 //
-// The sky box: a box whose walls are one flat colour, the sky tone's radiance (SKY, times the Sky tone and brightness gains where it is read). The walls
-// receive no shadows and no highlights, so every direction above the horizon has the same radiance L, and a surface with the unit normal n (y up) receives
-//   E(n) = L x (the integral over the directions w above the horizon of max(n.w, 0) dw) = pi L (1 + n.y) / 2
-// (n up: pi L; horizontal: pi L / 2; down: 0). The box's size and shape do not enter (a flat colour is the same from any distance). The light a unit-albedo
-// Lambertian surface sends back is E / pi = L (1 + n.y) / 2 (SkyBox.diffuse; the shaders' skyIrradiance(n, skyShade) with the baked cloud transmittance): the
-// moon's term is written the same way (MOON x max(n.m, 0) / pi), and for an upward normal it is today's SKY, so flat water does not change. The seen sky is
-// the walls' colour through the fog, as before.
+// The sky is the atmosphere's (models/atmosphere.ts: the Orb's light scattered by an Earth-like air; the shaders' atmosSeen and atmosDiffuse): no flat sky is kept here. What is
+// left is the Orb's side: MOON, MOON_DIR and the MoonDisc.
 //
 // The moon disc: a source with a direction (MOON_DIR), the real moon's angular radius (0.26 degrees) and a soft edge, in place of a bare direction.
 //   radius r = 0.0046 rad; solid angle pi r^2 = 6.6476e-5 sr; its radiance = the irradiance MOON over that solid angle (0.3 / 6.6476e-5 = 4,513 in the red channel,
@@ -30,44 +25,18 @@
 //   their values unchanged.
 // 2026-11-12: SkyBox (the sky as a flat-coloured box: its irradiance, one definition for every lighting term) and MoonDisc (the moon's radius, solid angle,
 //   radiance, the penumbra kernel's directions, the glint), registered as M.SkyBox and M.MoonDisc.
+// 2026-11-20: SkyBox, SKY and the flat sky's functions removed (Feature S1, story A2): the sky is the atmosphere's.
 // 2026-11-12: MOON_KERNEL 1 (the kernel of 3 changed the pictures by at most 1 level in four scenarios of scenetest ?test=moonkernel: under qualitylod's bounds, so the
 //   bake does not pay for it).
 import { M } from "../engine/core";
 
-// the night sky's radiance, linear RGB (seen, and lighting the fog and the water)
-export const SKY: readonly number[] = [0.004, 0.0035, 0.008];
 // the moonlight's irradiance through the cloud cover, linear RGB, from MOON_DIR
 export const MOON: readonly number[] = [0.3, 0.32, 0.36];
 // the direction towards the moon (world space, y up, -z ahead; normalized where it is read)
 export const MOON_DIR: readonly number[] = [0.24, 0.91, -0.34];
 
-// the sky box's half edge (m): its walls lie beyond the fog's far distance, so they are seen only through the fog; the irradiance does not depend on it
-const SKY_BOX_HALF_SIZE = 1000;
-
-// the irradiance of the box's flat walls on a surface with the unit normal n (y up): pi L (1 + n.y) / 2 per channel
-function irradiance(n: ArrayLike<number>): number[] {
-  const k = (Math.PI * (1 + n[1])) / 2;
-  return [SKY[0] * k, SKY[1] * k, SKY[2] * k];
-}
-
-// the light a unit-albedo Lambertian surface sends back: the irradiance over pi, L (1 + n.y) / 2
-function diffuse(n: ArrayLike<number>): number[] {
-  const k = (1 + n[1]) / 2;
-  return [SKY[0] * k, SKY[1] * k, SKY[2] * k];
-}
-
 const moonLength = Math.hypot(MOON_DIR[0], MOON_DIR[1], MOON_DIR[2]);
 const MOON_UNIT: readonly number[] = [MOON_DIR[0] / moonLength, MOON_DIR[1] / moonLength, MOON_DIR[2] / moonLength];
-
-// the sky's and the moon's baked light per unit albedo at a surface with the unit normal n, from the shade bake's two channels (the cloud transmittance
-// towards the sky and towards the moon): the shaders' glyphSkyMoonLight(n, shade)
-function glyphLight(n: ArrayLike<number>, shade: ArrayLike<number>): number[] {
-  const sky = diffuse(n);
-  const toward = Math.max(n[0] * MOON_UNIT[0] + n[1] * MOON_UNIT[1] + n[2] * MOON_UNIT[2], 0) / Math.PI;
-  return [sky[0] * shade[0] + MOON[0] * toward * shade[1], sky[1] * shade[0] + MOON[1] * toward * shade[1], sky[2] * shade[0] + MOON[2] * toward * shade[1]];
-}
-
-export const SkyBox = { RADIANCE: SKY, HALF_SIZE: SKY_BOX_HALF_SIZE, irradiance, diffuse, glyphLight };
 
 // the real moon's angular radius (0.26 degrees)
 const MOON_RADIUS = 0.0046;
@@ -127,5 +96,4 @@ function glint(r: ArrayLike<number>, footprint: number): number[] {
 
 export const MoonDisc = { RADIUS: MOON_RADIUS, SOLID_ANGLE: MOON_SOLID_ANGLE, RADIANCE: MOON_RADIANCE, KERNEL: MOON_KERNEL, KERNEL_MAX: MOON_KERNEL_MAX, EDGE_SOFT, DIR: MOON_DIR, directions, glint };
 
-M.SkyBox = SkyBox;
 M.MoonDisc = MoonDisc;

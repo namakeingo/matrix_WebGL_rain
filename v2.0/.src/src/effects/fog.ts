@@ -5,7 +5,7 @@
 //   billows the noise between 0.4 and 0.6, with a haze of a fifth between them; as dense as Fog
 //   intensity sets it; thinning out within about 4 m above the water. The air itself scatters and
 //   takes away light too (AIR per metre: about 1 km of visibility).
-// - Their light, single scattering: the night sky's (SKY, the same radiance the sky is seen with)
+// - Their light, single scattering: the atmosphere's (the mean radiance of its sky, atmosAmbient(): the same sky the sky is seen as)
 //   and diffuse moonlight from above (MOON, from MOON_DIR: materials/sky.ts), each through the
 //   clouds between, scattered by the clouds' albedo (the two fog colors, linear, mixed by a noise
 //   of its own: albedoAt); a little more for light scattered more than once (MULTIPLE). The
@@ -98,6 +98,11 @@
 // 2026-11-07: level of detail: the dense tail, the refresh by distance and the far octaves (Effect.lod).
 // 2026-11-06: the quality job "fog" (the slices are its units): slices past the water along a column's rays are held, not
 //   gathered; SLICES, SLICE_NEAR and FOG_FAR owned by models/quality/fog.ts.
+// 2026-11-20: the atmosphere's tables and the sky's picture built off the main thread (Feature S1, story A4): setLight moves the gains at once and starts a 100 ms debounce (M.Debounce),
+//   its end asks the atmosphere's JobTask (models/quality/atmosphere.ts, workers/atmosphereworker.ts) and a later update uploads the answer; the first build, a flush (reset, the first
+//   update, the tests' frames) and a missing task build here with the same function.
+// 2026-11-20: the atmosphere is the only sky (Feature S1, stories A2 and A5): no flag (Fog.GLSL and Fog.SHADE_GLSL are built once, always with the Atmosphere block), no flat SKY
+//   and no sky gain (the Fog block is 28 floats: fMoonGain at 24), the Air tone (p202_setting_AirTone, was Sky tone) into the atmosphere's tables.
 // 2026-11-05: the sky's and the moon's light settable (Sky/Orb brightness, Sky tone, Orb tone):
 //   SKY and MOON are SKY_BASE and MOON_BASE times the block's gains (models/skylight.ts), a change
 //   restarting the whole volume.
@@ -109,7 +114,7 @@ import type { ShaderProgram, UniformBlock, Uniforms, Programs, ProgramSources } 
 import type { EffectContext, SharedGlsl } from "../engine/effect";
 import type { Capabilities } from "../engine/namespace";
 import { DENSITY_FULL, MAIN_DEFAULT, SECONDARY_DEFAULT, AIR, MULTIPLE, PHASE_G } from "../materials/fog";
-import { SKY, MOON, MOON_DIR, MoonDisc } from "../materials/sky";
+import { MOON, MOON_DIR, MoonDisc } from "../materials/sky";
 import { QualityFog } from "../models/quality/fog";
 import { QualityFogShade } from "../models/quality/fogshade";
 import { QualityStrikeShade } from "../models/quality/strikeshade";
@@ -124,6 +129,8 @@ import { ReflectionFrame } from "../models/reflectionframe";
 import type { ReflectionFrameOf } from "../models/reflectionframe";
 import type { FogPlanInput, FogPlanOutput } from "../models/fogplan";
 import type { JobTask } from "../platform/jobtask";
+import type { AtmosphereJob } from "../models/quality/atmosphere";
+import type { Debounce } from "../models/debounce";
 import SEED_FRAGMENT_SOURCE from "../shaders/fog/seed_fragment.glsl";
 import BLUR_FRAGMENT_SOURCE from "../shaders/fog/blur_fragment.glsl";
 import FINISH_FRAGMENT_SOURCE from "../shaders/fog/finish_fragment.glsl";
@@ -161,6 +168,9 @@ const SLICE_NEAR = QualityFog.SLICE_NEAR;
 const COLUMNS_MOST = 28800;
 const TILE_LEAST = 8;
 const MARGIN = 0.1;
+// the wait after the last change of the Sky/Orb settings before the atmosphere's tables are built, and how many main-thread task times are kept
+const ATMOSPHERE_DEBOUNCE_MS = 100;
+const ATMOSPHERE_TASKS_KEPT = 256;
 // the shadow grid (fixed in the world): its cells, its top (m: the densest medium there is
 // 0.3 e^(-12) per metre) and its nearest distance (m)
 const SHADE_ACROSS = 128;
@@ -333,9 +343,6 @@ export class Fog extends M.Effect {
   static SHADE_GLSL: string;
   static MEDIUM_GLSL: string;
   static GLSL: string;
-  // the shared fog text and the shade text of a flag: the atmosphere prototype's lookups and uniform block added (off: the committed text exactly)
-  static glslFor: (on: boolean) => string;
-  static shadeFor: (on: boolean) => string;
   static COPY_FRAGMENT: string;
   static FINISH_FRAGMENT: string;
   static BLUR_FRAGMENT: string;
@@ -427,38 +434,70 @@ export class Fog extends M.Effect {
   intensity: number;
   // Distance fog (p215): off removes every aspect of the fog: no volume or bake is drawn, and every reader finds the air clear (fParams.z -1)
   on: boolean;
-  // the sky's and the moon's gains per channel (linear), as the uniform block holds them
-  skyGain: Float32Array;
+  // the Orb's gain per channel (linear), as the uniform block holds it, and the Air tone (linear), as the atmosphere's tables are built with it
   moonGain: Float32Array;
+  airTone: Float32Array;
   // the settings behind them
   skyMoonBrightness: number;
-  skyTone: string;
+  airToneSetting: string;
   moonTone: string;
-  // the atmosphere prototype (M.ATMOSPHERE): its tables' uniform block (aSH, aSky, aInfo, aOrb: 203 vec4), and the milliseconds the last build took
-  atmosphere: boolean;
+  // the atmosphere's tables' uniform block (aSH, aInfo, aOrb: 11 vec4), the seen sky's picture (Atmosphere.skyTexture: SKY_W x SKY_H RGBA16F, read by the water's programs as uSkyTable), and the
+  // milliseconds the last build took
   atmosphereMs: number;
-  atmosphereBlock: UniformBlock | null;
+  // the tables built off the main thread: the task (src/index.ts gives it; null: built here), the wait that follows the settings (100 ms after the last change), whether tables are owed
+  // for the values held, the id of the request whose answer is awaited (0: none), the requests made, the main-thread tasks' ms (the last ATMOSPHERE_TASKS_KEPT), whether an update has
+  // run (the first applies a pending change at once) and whether every update does (the tests' build)
+  atmosphereTask: JobTask<AtmosphereJob, Float32Array> | null;
+  atmosphereDebounce: Debounce;
+  atmosphereOwed: boolean;
+  atmosphereWanted: number;
+  atmosphereRequests: number;
+  atmosphereTasks: number[];
+  atmosphereUpdated: boolean;
+  settleAtmosphere: boolean;
+  atmosphereBlock: UniformBlock;
+  skyTexture: WebGLTexture;
   constructor(context: EffectContext) {
     super(context);
     const gl = this.gl;
     this.intensity = 0.1;
     this.on = true;
     this.skyMoonBrightness = M.SkyLight.DEFAULT_BRIGHTNESS;
-    this.skyTone = M.SkyLight.DEFAULT_SKY_TONE;
+    this.airToneSetting = M.SkyLight.DEFAULT_AIR_TONE;
     this.moonTone = M.SkyLight.DEFAULT_MOON_TONE;
-    this.skyGain = new Float32Array(3);
     this.moonGain = new Float32Array(3);
-    this.atmosphere = M.ATMOSPHERE;
+    this.airTone = new Float32Array([1, 1, 1]);
     this.atmosphereMs = 0;
-    this.atmosphereBlock = M.ATMOSPHERE ? this.block("Atmosphere", ATMOSPHERE_FLOATS) : null;
-    this.setLight();
+    this.atmosphereTask = null;
+    this.atmosphereOwed = false;
+    this.atmosphereWanted = 0;
+    this.atmosphereRequests = 0;
+    this.atmosphereTasks = [];
+    this.atmosphereUpdated = false;
+    this.settleAtmosphere = !!M.TEST;
+    this.atmosphereDebounce = new M.Debounce(ATMOSPHERE_DEBOUNCE_MS, () => this.requestAtmosphere());
+    this.atmosphereBlock = this.block("Atmosphere", ATMOSPHERE_FLOATS);
+    // (the picture's storage made once on its own unit: the builds only fill it)
+    this.skyTexture = this.createTexture();
+    gl.activeTexture(gl.TEXTURE0 + M.UNITS.sky);
+    gl.bindTexture(gl.TEXTURE_2D, this.skyTexture);
+    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA16F, M.Atmosphere.SKY_W, M.Atmosphere.SKY_H);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    // (the first build, at once and here: the defaults' tables are there from the first frame; the settings of the start follow through setLight, flushed by the first update)
+    const g = M.SkyLight.gains({ brightness: this.skyMoonBrightness, airTone: this.airToneSetting, moonTone: this.moonTone });
+    this.moonGain.set(g.moon);
+    this.airTone.set(g.air);
+    this.buildAtmosphere();
     this.colorMain = M.color(MAIN_DEFAULT);
     this.colorSecondary = M.color(SECONDARY_DEFAULT);
     // (std140: the density's scale, the time, whether the volume is there, whether the strikes'
     // light is; the two colors; the volume's columns across and down, a column's width in
-    // pixels, its margin; each slot's light over STRIKE_SCALE; the strikes' color; the sky's and
-    // the moon's gains)
-    this.ubo = this.block("Fog", 32);
+    // pixels, its margin; each slot's light over STRIKE_SCALE; the strikes' color; the Orb's
+    // gain: 7 vec4, 28 floats)
+    this.ubo = this.block("Fog", 28);
     this.noise = null;
     this.passes = null;
     this.columns = [0, 0, 0];
@@ -651,8 +690,8 @@ export class Fog extends M.Effect {
         fog.skyMoonBrightness = v;
         fog.setLight();
       },
-      p202_setting_SkyTone: (fog: Fog, v: string) => {
-        fog.skyTone = v;
+      p202_setting_AirTone: (fog: Fog, v: string) => {
+        fog.airToneSetting = v;
         fog.setLight();
       },
       p203_setting_MoonTone: (fog: Fog, v: string) => {
@@ -662,34 +701,110 @@ export class Fog extends M.Effect {
     };
   }
 
-  // the sky's and the moon's gains from their settings (the volume is gathered again in the next
-  // update: the light it holds changed)
+  // the Orb's gain and the air's tone from their settings, at once (the uniform values are cheap), and the atmosphere's tables built with them after the settings stop moving: the
+  // build waits ATMOSPHERE_DEBOUNCE_MS after the last change (the tables are asked of the atmosphere's task, or built here with no task) and the volume is gathered again when they
+  // land (atmosphereOwed: they are owed until then; the first update, a reset and the tests' frames flush them: flushAtmosphere)
   setLight() {
-    const g = M.SkyLight.gains({ brightness: this.skyMoonBrightness, skyTone: this.skyTone, moonTone: this.moonTone });
-    this.skyGain.set(g.sky);
+    const g = M.SkyLight.gains({ brightness: this.skyMoonBrightness, airTone: this.airToneSetting, moonTone: this.moonTone });
     this.moonGain.set(g.moon);
-    this.stale = true;
-    if (this.atmosphereBlock) this.buildAtmosphere();
+    this.airTone.set(g.air);
+    this.atmosphereOwed = true;
+    this.atmosphereDebounce.touch();
   }
 
-  // the atmosphere's tables for the Orb (MOON x its gain at the ground), into the block in its std140 layout (aSH 0, aSky 36, aInfo 804, aOrb 808) and uploaded: only when the light
-  // changes, never per frame
+  // the seen sky's picture bound on its unit (M.UNITS.sky, shared with the pass inputs that bind before they read): the coordinator calls it before the water is drawn
+  bindSky() {
+    const gl = this.gl;
+    gl.activeTexture(gl.TEXTURE0 + M.UNITS.sky);
+    gl.bindTexture(gl.TEXTURE_2D, this.skyTexture);
+  }
+
+  // the atmosphere's tables and the seen sky's picture for the Orb and the Air tone the fog holds now, built HERE (models/quality/atmosphere.ts: the same function the worker runs,
+  // so the array is the worker's bit for bit) and uploaded: the constructor's first build, a flush (a clean start, the tests' frames, the first frame) and the fallback of a wait that
+  // ends with no task. The time it took (build and upload) is `atmosphereMs` and one main-thread task of `atmosphereTasks`
   buildAtmosphere() {
-    const block = this.atmosphereBlock!;
     const start = performance.now();
-    const tables = M.Atmosphere.build({ orbDir: MOON_DIR, orbIrradiance: [MOON[0]! * this.moonGain[0]!, MOON[1]! * this.moonGain[1]!, MOON[2]! * this.moonGain[2]!] });
-    const data = block.data;
-    data.set(tables.sh, 0);
-    data.set(tables.sky, 36);
-    data.set(tables.ambient, 804);
-    data[807] = 1;
-    const flat = Math.hypot(MOON_DIR[0]!, MOON_DIR[2]!);
-    data[808] = flat > 1e-6 ? MOON_DIR[0]! / flat : 1;
-    data[809] = flat > 1e-6 ? MOON_DIR[2]! / flat : 0;
-    data[810] = 0;
-    data[811] = 0;
-    block.upload();
+    this.uploadAtmosphere(M.QualityAtmosphere.run(this.atmosphereInput()));
     this.atmosphereMs = performance.now() - start;
+    this.logAtmosphereTask(this.atmosphereMs);
+  }
+
+  // the function's input for the gains the fog holds now
+  atmosphereInput(): AtmosphereJob {
+    return M.QualityAtmosphere.inputOf(this.moonGain, this.airTone);
+  }
+
+  // the array of M.QualityAtmosphere.run into the block (aSH, aInfo, aOrb: std140, uploaded) and the picture (RGBA16F from the floats); the volume is gathered again (it holds the
+  // tables' ambient light); the tables are still owed while a change waits in the debounce or a request is in flight
+  uploadAtmosphere(tables: Float32Array) {
+    const block = this.atmosphereBlock;
+    block.data.set(tables.subarray(0, M.QualityAtmosphere.BLOCK_FLOATS));
+    block.upload();
+    const gl = this.gl;
+    gl.activeTexture(gl.TEXTURE0 + M.UNITS.sky);
+    gl.bindTexture(gl.TEXTURE_2D, this.skyTexture);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, M.Atmosphere.SKY_W, M.Atmosphere.SKY_H, gl.RGBA, gl.FLOAT, tables.subarray(M.QualityAtmosphere.BLOCK_FLOATS));
+    this.stale = true;
+    this.atmosphereOwed = this.atmosphereDebounce.pending || this.atmosphereWanted !== 0;
+  }
+
+  // one main-thread task of the atmosphere (ms): the last ATMOSPHERE_TASKS_KEPT are kept
+  logAtmosphereTask(ms: number) {
+    this.atmosphereTasks.push(ms);
+    if (this.atmosphereTasks.length > ATMOSPHERE_TASKS_KEPT) {
+      this.atmosphereTasks.shift();
+    }
+  }
+
+  // the debounce's end: the tables for the values now asked of the task (a worker answers at a later update), or built here when there is no task
+  requestAtmosphere() {
+    const task = this.atmosphereTask;
+    this.atmosphereRequests++;
+    if (!task) {
+      this.buildAtmosphere();
+      return;
+    }
+    const start = performance.now();
+    this.atmosphereWanted = task.request(this.atmosphereInput());
+    this.logAtmosphereTask(performance.now() - start);
+    // (no worker alive: the task ran the function in the request and the answer is there)
+    this.pollAtmosphere();
+  }
+
+  // the answer to the newest request applied (an older request's answer is dropped), a request lost with its worker asked again; every update, before anything reads the tables
+  pollAtmosphere() {
+    const task = this.atmosphereTask;
+    if (!task) {
+      return;
+    }
+    const answer = task.take();
+    if (this.atmosphereWanted === 0) {
+      return;
+    }
+    if (answer && answer.id === this.atmosphereWanted) {
+      this.atmosphereWanted = 0;
+      const start = performance.now();
+      this.uploadAtmosphere(answer.output);
+      this.logAtmosphereTask(performance.now() - start);
+      return;
+    }
+    if (!task.pending().includes(this.atmosphereWanted)) {
+      this.atmosphereRequests++;
+      this.atmosphereWanted = task.request(this.atmosphereInput());
+    }
+  }
+
+  // the tables owed built here at once for the values now: the wait cancelled and a request in flight forgotten (its answer is dropped)
+  flushAtmosphere() {
+    if (!this.atmosphereOwed) {
+      return;
+    }
+    this.atmosphereDebounce.cancel();
+    this.atmosphereWanted = 0;
+    if (this.atmosphereTask) {
+      this.atmosphereTask.take();
+    }
+    this.buildAtmosphere();
   }
 
   // the medium's density per metre at its densest (none without float pictures for its noise)
@@ -1091,6 +1206,8 @@ export class Fog extends M.Effect {
   }
 
   destroy() {
+    this.atmosphereDebounce.cancel();
+    this.atmosphereWanted = 0;
     if (this.light) {
       this.light.drop();
       this.strikeLight.drop();
@@ -1126,6 +1243,9 @@ export class Fog extends M.Effect {
 
   // a clean start: no strike's bakes waiting, none shown
   reset() {
+    // (the tables owed built now: a clean start has the tables of its settings)
+    this.atmosphereDebounce.cancel();
+    this.flushAtmosphere();
     for (let slot = 0; slot < SLOTS; slot++) {
       this.strikeDrop(slot);
     }
@@ -1163,6 +1283,12 @@ export class Fog extends M.Effect {
   // its values for this frame, and its pictures refreshed (after the camera's values)
   update(time: number) {
     const gl = this.gl;
+    // (the atmosphere's tables: an answer landed, or owed tables built here at once at the first update and in the tests' build; before anything reads them)
+    this.pollAtmosphere();
+    if (this.atmosphereOwed && (this.settleAtmosphere || !this.atmosphereUpdated)) {
+      this.flushAtmosphere();
+    }
+    this.atmosphereUpdated = true;
     // the frame's plan (models/fogplan.ts): the answer its fork asked of the worker when it is for exactly these values, else the function run here
     const input = this.planInput(time, false);
     const answered = this.answer;
@@ -1357,7 +1483,6 @@ export class Fog extends M.Effect {
       boltColor: arrays(this.boltColor),
       // (the tests' march's segments, given at run time: a loop of a constant count is unrolled by Direct3D's compiler through ANGLE)
       marchSegments: MARCH_SEGMENTS,
-      skyGain: arrays(this.skyGain),
       moonGain: arrays(this.moonGain),
       lod: this.lod,
       hasSched: this.shadeSched !== null,
@@ -1513,19 +1638,11 @@ Fog.FINISH_FRAGMENT = fill(FINISH_FRAGMENT_SOURCE, { "STRETCH.toFixed(1)": STRET
 
 // the uniform block, the light around (the sky's and the moon's, and the strikes' color), and
 // the volumes read at a place of the screen and a distance (after Camera.GLSL)
-// the atmosphere block's size: aSH 9 + aSky 192 + aInfo 1 + aOrb 1 vec4
-const ATMOSPHERE_FLOATS = (9 + 192 + 2) * 4;
+// the atmosphere block's size: aSH 9 + aInfo 1 + aOrb 1 vec4
+const ATMOSPHERE_FLOATS = (9 + 2) * 4;
 
-const FOG_GLSL_OFF = fill(FOG_SOURCE, { "FOG_FAR.toFixed(1)": FOG_FAR.toFixed(1), "AIR": AIR, 'SKY.join(", ")': SKY.join(", "), 'MOON.map((v) => v.toFixed(2)).join(", ")': MOON.map((v) => v.toFixed(2)).join(", "), 'MOON_DIR.map((v) => v.toFixed(2)).join(", ")': MOON_DIR.map((v) => v.toFixed(2)).join(", "), "MOON_RADIUS.toFixed(6)": MoonDisc.RADIUS.toFixed(6), "MOON_SOLID_ANGLE.toExponential(6)": MoonDisc.SOLID_ANGLE.toExponential(6), "SLICES.toFixed(1)": SLICES.toFixed(1), "SLICE_NEAR.toFixed(1)": SLICE_NEAR.toFixed(1), "Math.log(1 + FOG_FAR / SLICE_NEAR).toFixed(6)": Math.log(1 + FOG_FAR / SLICE_NEAR).toFixed(6), "STRIKE_SCALE.toFixed(1)": STRIKE_SCALE.toFixed(1), "SLOTS": SLOTS, "strikeTerms": Array.from({ length: SLOTS }, (v, k) => fill(STRIKE_TERM_SOURCE, { "s": "xyzw"[k], "k": k })).join("\n") });
-// the atmosphere's variant of the text: the block and the lookups before the sky box's light, which reads the spherical harmonics instead of SKY x (1 + n.y) / 2
-const SKY_LIGHT_MARK = "// the sky box's light on a surface with the unit normal n";
-const SKY_LIGHT_OLD = "  return SKY * ((1.0 + n.y) * 0.5) * skyShade;";
-Fog.glslFor = (on) => {
-  if (!on) return FOG_GLSL_OFF;
-  if (FOG_GLSL_OFF.indexOf(SKY_LIGHT_MARK) < 0 || FOG_GLSL_OFF.indexOf(SKY_LIGHT_OLD) < 0) throw new Error("fog.glsl: the sky light's lines moved");
-  return FOG_GLSL_OFF.replace(SKY_LIGHT_MARK, () => ATMOSPHERE_SOURCE + SKY_LIGHT_MARK).replace(SKY_LIGHT_OLD, "  return atmosDiffuse(n) * skyShade;");
-};
-Fog.GLSL = Fog.glslFor(M.ATMOSPHERE);
+// the shared fog text: the Atmosphere block and its lookups (shaders/fog/atmosphere.glsl) inside it, always
+Fog.GLSL = fill(FOG_SOURCE, { "ATMOSPHERE_GLSL": ATMOSPHERE_SOURCE, "FOG_FAR.toFixed(1)": FOG_FAR.toFixed(1), "AIR": AIR, 'MOON.map((v) => v.toFixed(2)).join(", ")': MOON.map((v) => v.toFixed(2)).join(", "), 'MOON_DIR.map((v) => v.toFixed(2)).join(", ")': MOON_DIR.map((v) => v.toFixed(2)).join(", "), "MOON_RADIUS.toFixed(6)": MoonDisc.RADIUS.toFixed(6), "MOON_SOLID_ANGLE.toExponential(6)": MoonDisc.SOLID_ANGLE.toExponential(6), "SLICES.toFixed(1)": SLICES.toFixed(1), "SLICE_NEAR.toFixed(1)": SLICE_NEAR.toFixed(1), "Math.log(1 + FOG_FAR / SLICE_NEAR).toFixed(6)": Math.log(1 + FOG_FAR / SLICE_NEAR).toFixed(6), "STRIKE_SCALE.toFixed(1)": STRIKE_SCALE.toFixed(1), "SLOTS": SLOTS, "strikeTerms": Array.from({ length: SLOTS }, (v, k) => fill(STRIKE_TERM_SOURCE, { "s": "xyzw"[k], "k": k })).join("\n") });
 
 
 // the moon kernel's directions as GLSL constants (MOON_K0 ...: MoonDisc.directions over the disc round MOON_DIR, nine decimals), the centre first
@@ -1545,13 +1662,8 @@ Fog.MEDIUM_GLSL = fill(MEDIUM_SOURCE, { "MULTIPLE": MULTIPLE, "PHASE_G": PHASE_G
 
 // the baked shadows read, and the clouds' light (after MEDIUM_GLSL). marched: the shadows
 // marched, not baked
-// (the atmosphere's variant: the clouds' light reads the upper hemisphere's mean radiance where it read SKY)
-Fog.shadeFor = (on) => {
-  if (!on) return SHADE_SOURCE;
-  if (SHADE_SOURCE.indexOf("SKY") < 0) throw new Error("shade.glsl: no SKY to replace");
-  return SHADE_SOURCE.replace(/\bSKY\b/g, "atmosAmbient()");
-};
-Fog.SHADE_GLSL = Fog.shadeFor(M.ATMOSPHERE);
+// (the clouds' light reads the atmosphere's upper hemisphere's mean radiance, atmosAmbient())
+Fog.SHADE_GLSL = SHADE_SOURCE;
 
 // the tests' value: every shadow marched (none in the wallpaper)
 Fog.TEST_GLSL = TEST_SOURCE;

@@ -1,29 +1,20 @@
-// The atmosphere prototype's tables (effects/fog.ts builds them from models/atmosphere.ts when M.ATMOSPHERE; the uniform block is uploaded when the Sky/Orb settings change):
-// aSH the sky's light on a surface per unit albedo as nine spherical-harmonics coefficients (rgb), aSky the seen sky's radiance by direction (16 elevations x 12 azimuths, the
-// elevation's square root and the azimuth from the Orb's side linear: index (j * 16 + i)), aInfo.xyz the upper hemisphere's mean radiance, aOrb.xy the Orb's horizontal unit direction (x, z)
+// The atmosphere's tables, the only sky (effects/fog.ts builds them from models/atmosphere.ts; the uniform block is uploaded when the Sky/Orb brightness, the Air tone or the Orb tone change):
+// aSH the sky's light on a surface per unit albedo as nine spherical-harmonics coefficients (rgb), aInfo.xyz the upper hemisphere's mean radiance, aOrb.xy the Orb's horizontal unit direction (x, z).
+// The seen sky's radiance by direction is the picture uSkyTable (256 x 128 RGBA16F, LINEAR, CLAMP_TO_EDGE; Atmosphere.skyTexture: the 16 x 12 table resampled over an octahedral map of the
+// direction in the Orb's frame), one filtered read with no trigonometry and no indexed table (the water program has three copies of the lookup, and their compile time was most of the sky's cost)
 layout(std140) uniform Atmosphere {
   vec4 aSH[9];
-  vec4 aSky[192];
   vec4 aInfo;
   vec4 aOrb;
 };
-// the seen sky's radiance in the unit direction dir (y up): bilinear in (sqrt(elevation / (pi / 2)) x 15, azimuth / pi x 11); the directions below the horizon read the horizon row
+uniform highp sampler2D uSkyTable;
+// the seen sky's radiance in the unit direction dir (y up): q = (dir.xz . aOrb.xy, |dir.xz x aOrb.xy|, max(dir.y, 0)) is the direction in the Orb's frame (the directions below the horizon read the
+// horizon row), p = q.xy / (|q.x| + q.y + q.z) its octahedral coordinates, and the picture at (p.x / 2 + 1 / 2, p.y); textureLod: the level 0 with no derivatives, whatever the flow around it
 vec3 atmosSeen(vec3 dir) {
-  float horizontal = length(dir.xz);
-  float elevation = atan(max(dir.y, 0.0), max(horizontal, 1e-6));
-  float azimuth = horizontal > 1e-5 ? acos(clamp(dot(dir.xz / horizontal, aOrb.xy), -1.0, 1.0)) : 0.0;
-  float fi = sqrt(elevation / 1.57079633) * 15.0;
-  float fj = azimuth / PI * 11.0;
-  int i = clamp(int(floor(fi)), 0, 14);
-  int j = clamp(int(floor(fj)), 0, 10);
-  float u = fi - float(i);
-  float v = fj - float(j);
-  vec3 low = mix(aSky[j * 16 + i].rgb, aSky[j * 16 + i + 1].rgb, u);
-  vec3 high = mix(aSky[(j + 1) * 16 + i].rgb, aSky[(j + 1) * 16 + i + 1].rgb, u);
-  return mix(low, high, v);
+  vec3 q = vec3(dot(dir.xz, aOrb.xy), abs(dir.x * aOrb.y - dir.z * aOrb.x), max(dir.y, 0.0));
+  vec2 p = q.xy / max(abs(q.x) + q.y + q.z, 1e-6);
+  return textureLod(uSkyTable, vec2(p.x * 0.5 + 0.5, p.y), 0.0).rgb;
 }
-// the view ray of the fragment being drawn (the sky-only water program reads the sky by it)
-#define ATMOS_FRAG_DIR rayOf(gl_FragCoord.xy)
 // the sky's light on a surface with the unit normal n, per unit albedo: the nine real spherical harmonics (order (0,0) (1,-1) (1,0) (1,1) (2,-2) (2,-1) (2,0) (2,1) (2,2)), clamped at 0
 vec3 atmosDiffuse(vec3 n) {
   vec3 c = aSH[0].rgb * 0.282095

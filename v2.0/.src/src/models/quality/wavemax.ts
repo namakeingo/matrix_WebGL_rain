@@ -24,6 +24,8 @@
 //
 // Changelog:
 // 2026-11-08: new.
+// 2026-11-20: both grids: growth, bound, peakOf and youngSteps take a trailing `full` (the 2048 x 1024 grid, default false = the 1024 x 512 production grid); the full grid keeps its earlier constants
+//             (FULL_GROWTH_PER_STEP 0.04, FULL_GROWTH_CAP 2, PEAK_RATIO 1, YOUNG_RATIO 4: its replica, see below), the 1024 x 512 grid's are those of 2026-11-18.
 // 2026-11-18: recalibrated on the 1024 x 512 grid (was 2048 x 1024): GROWTH_PER_STEP 0.08 (was 0.04), GROWTH_CAP 1.8 (was 2), PEAK_RATIO 0.8 (was 1), YOUNG_RATIO 3 (was 4)
 import { M } from "../../engine/core";
 
@@ -31,6 +33,12 @@ import { M } from "../../engine/core";
 const PERIOD = 1 / 30;
 const GROWTH_PER_STEP = 0.08;
 const GROWTH_CAP = 1.8;
+// the full 2048 x 1024 grid's constants (the replica of the scheme on that grid: the highest wave after n steps over the one at 0 at most 1.036 after 1 step, 1.122 after 4, 1.234 after 8,
+// 1.382 after 24, the largest single ratio 1.737; one impact's peak at most 0.75 P min(spread) / cdt, by 2.7 min(spread) / cdt steps)
+const FULL_GROWTH_PER_STEP = 0.04;
+const FULL_GROWTH_CAP = 2;
+const FULL_PEAK_RATIO = 1;
+const FULL_YOUNG_RATIO = 4;
 const IMPACT_PUSH = 0.4;
 const PEAK_RATIO = 0.8;
 const YOUNG_RATIO = 3;
@@ -55,27 +63,28 @@ function due(framesSince: number, every: number, blocksNeeded: boolean): boolean
   return blocksNeeded || framesSince >= every;
 }
 
-function growth(steps: number): number {
-  const g = 1 + GROWTH_PER_STEP * steps;
-  return g < GROWTH_CAP ? g : GROWTH_CAP;
+function growth(steps: number, full: boolean = false): number {
+  const g = 1 + (full ? FULL_GROWTH_PER_STEP : GROWTH_PER_STEP) * steps;
+  const cap = full ? FULL_GROWTH_CAP : GROWTH_CAP;
+  return g < cap ? g : cap;
 }
 
-function bound(measured: number, stepsSince: number, newPush: number): number {
-  return (measured + newPush) * growth(stepsSince);
+function bound(measured: number, stepsSince: number, newPush: number, full: boolean = false): number {
+  return (measured + newPush) * growth(stepsSince, full);
 }
 
 // the most one impact's waves reach (m)
-function peakOf(size: number, cellX: number, cellZ: number): number {
+function peakOf(size: number, cellX: number, cellZ: number, full: boolean = false): number {
   const a = Math.max(size, cellX * 0.7);
   const b = Math.max(size, cellZ * 0.7);
-  return PEAK_RATIO * IMPACT_PUSH * (size / a) * (size / b) * (a < b ? a : b);
+  return (full ? FULL_PEAK_RATIO : PEAK_RATIO) * IMPACT_PUSH * (size / a) * (size / b) * (a < b ? a : b);
 }
 
 // the steps after which an impact's height is past its peak
-function youngSteps(cdt: number, size: number, cellX: number, cellZ: number): number {
+function youngSteps(cdt: number, size: number, cellX: number, cellZ: number, full: boolean = false): number {
   const a = Math.max(size, cellX * 0.7);
   const b = Math.max(size, cellZ * 0.7);
-  return Math.ceil((YOUNG_RATIO * (a < b ? a : b)) / cdt) + 4;
+  return Math.ceil(((full ? FULL_YOUNG_RATIO : YOUNG_RATIO) * (a < b ? a : b)) / cdt) + 4;
 }
 
 // The young impacts' ledger: a ring indexed by the step an impact stops being young, and the running total of those still young; allocation-free (the
@@ -144,6 +153,6 @@ class Young {
   }
 }
 
-export const WaveMax = { PERIOD, GROWTH_PER_STEP, GROWTH_CAP, refreshEvery, due, growth, bound, peakOf, youngSteps, Young };
+export const WaveMax = { PERIOD, GROWTH_PER_STEP, GROWTH_CAP, FULL_GROWTH_PER_STEP, FULL_GROWTH_CAP, refreshEvery, due, growth, bound, peakOf, youngSteps, Young };
 
 M.WaveMax = WaveMax;

@@ -32,18 +32,27 @@
 //
 // - Atmosphere.EL, Atmosphere.AZ: the table's size (16 x 12)
 // - Atmosphere.elevationAt(i), azimuthAt(j): the directions of the nodes
-// - Atmosphere.build({ orbDir, orbIrradiance, observerHeight? }): { sky, sh, ambient }
-// - Atmosphere.skyAt(t, dir, orbDir): the CPU twin of the shader's lookup (bilinear in sqrt(el / (pi / 2)) (EL - 1) and az / pi (AZ - 1); below the horizon, the horizon row)
+// - Atmosphere.build({ orbDir, orbIrradiance, observerHeight?, tone? }): { sky, sh, ambient }; tone (linear rgb, default [1, 1, 1], the Air tone) multiplies the Rayleigh and Mie
+//   scattering coefficients per channel (the absorption is unchanged): white is Earth's air and gives the tables of no tone bit for bit, a channel's tables depend on its own tone only,
+//   a tone of 0 gives no scattering: the tables are exactly 0
+// - Atmosphere.multipleShare(p, dir): per channel (radiance - single-scattering radiance) / single-scattering radiance in the direction dir, 0 without light
+// - Atmosphere.skyAt(t, dir, orbDir): the CPU twin of the table's lookup (the picture is made from it) (bilinear in sqrt(el / (pi / 2)) (EL - 1) and az / pi (AZ - 1); below the horizon, the horizon row)
+// - Atmosphere.SKY_W, SKY_H, skyUv(dir, orbDir), skyTexture(t, orbDir), skyRead(texture, uv): the table resampled as the picture the shader reads (below), and the CPU model of its filtered read
 // - Atmosphere.diffuseAt(t, n), shBasis(n), uniformSky(L)
 //
 // Changelog:
 // 2026-11-19: new (prototype P0 of the atmosphere).
+// 2026-11-20: multipleShare (the multiple scattering's share of the sky, for the model's validation against a reference).
+// 2026-11-20: SKY_W, SKY_H, skyUv, skyTexture, skyRead: the seen sky as a 256 x 128 octahedral picture (Feature S1, story A3: the water's compile time).
+// 2026-11-20: AtmosphereInput.tone, the Air tone (Feature S1, story A5): per-channel scale of the scattering coefficients.
 import { M } from "../engine/core";
 
 export interface AtmosphereInput {
   orbDir: ArrayLike<number>;
   orbIrradiance: ArrayLike<number>;
   observerHeight?: number;
+  // the Air tone (linear rgb, default [1, 1, 1]): the per-channel multiplier of the Rayleigh and Mie scattering coefficients (the absorption is unchanged); white is Earth's air
+  tone?: ArrayLike<number>;
 }
 export interface AtmosphereTables {
   sky: Float32Array;
@@ -62,6 +71,7 @@ const BR0 = 5.802e-6, BR1 = 13.558e-6, BR2 = 33.1e-6;
 const BMS = 3.996e-6;
 const BME = 8.436e-6;
 const BO0 = 0.650e-6, BO1 = 1.881e-6, BO2 = 0.085e-6;
+const BMA = 4.44e-6;
 const HR = 8000;
 const HM = 1200;
 const MIE_G = 0.8;
@@ -83,8 +93,21 @@ function ozone(h: number): number {
   return h <= 10000 || h >= 40000 ? 0 : h < 25000 ? (h - 10000) / 15000 : (40000 - h) / 15000;
 }
 
+// the air's coefficients per channel for an Air tone: the Rayleigh scattering, the Mie scattering, the Mie extinction (its scattering and its absorption) and the ozone's absorption.
+// A tone of 1 keeps the literal coefficients, so white gives the tables of no tone bit for bit; a negative or missing tone channel is 0 or 1 (missing: 1)
+interface Coefficients { br: number[]; bms: number[]; bme: number[]; bo: number[] }
+function coefficients(tone: ArrayLike<number> | undefined): Coefficients {
+  const t = [0, 1, 2].map((c) => (tone && typeof tone[c] == "number" && isFinite(tone[c]!) ? Math.max(tone[c]!, 0) : 1));
+  return {
+    br: [BR0 * t[0]!, BR1 * t[1]!, BR2 * t[2]!],
+    bms: [BMS * t[0]!, BMS * t[1]!, BMS * t[2]!],
+    bme: t.map((x) => (x === 1 ? BME : BMS * x + BMA)),
+    bo: [BO0, BO1, BO2],
+  };
+}
+
 // the transmittance (rgb) from p along the unit o to the top of the air, `n` steps spaced as a square; 0 where the ray meets the planet. Written into `out`.
-function towardsOrb(px: number, py: number, pz: number, ox: number, oy: number, oz: number, n: number, out: Float64Array): void {
+function towardsOrb(px: number, py: number, pz: number, ox: number, oy: number, oz: number, n: number, out: Float64Array, air: Coefficients): void {
   const b = px * ox + py * oy + pz * oz;
   const r2 = px * px + py * py + pz * pz;
   const disc = b * b - (r2 - PLANET * PLANET);
@@ -105,15 +128,15 @@ function towardsOrb(px: number, py: number, pz: number, ox: number, oy: number, 
     sm += Math.exp(-h / HM) * ds;
     so += ozone(h) * ds;
   }
-  out[0] = Math.exp(-(BR0 * sr + BME * sm + BO0 * so));
-  out[1] = Math.exp(-(BR1 * sr + BME * sm + BO1 * so));
-  out[2] = Math.exp(-(BR2 * sr + BME * sm + BO2 * so));
+  out[0] = Math.exp(-(air.br[0]! * sr + air.bme[0]! * sm + air.bo[0]! * so));
+  out[1] = Math.exp(-(air.br[1]! * sr + air.bme[1]! * sm + air.bo[1]! * so));
+  out[2] = Math.exp(-(air.br[2]! * sr + air.bme[2]! * sm + air.bo[2]! * so));
 }
 
 const TSUN = new Float64Array(3);
 
 // the multiple-scattering radiance Psi (rgb, per unit irradiance at the top of the air) at the altitudes of the table: [altitude][channel]
-function multipleScattering(h0: number, ox: number, oy: number): Float64Array {
+function multipleScattering(h0: number, ox: number, oy: number, air: Coefficients): Float64Array {
   const out = new Float64Array(MS_ALTITUDES * 3);
   const golden = Math.PI * (3 - Math.sqrt(5));
   for (let a = 0; a < MS_ALTITUDES; a++) {
@@ -143,11 +166,11 @@ function multipleScattering(h0: number, ox: number, oy: number): Float64Array {
         const dr = Math.exp(-hh / HR), dm = Math.exp(-hh / HM), dz = ozone(hh);
         const hr = dr * ds, hm = dm * ds, hz = dz * ds;
         // the view transmittance to the middle of the step
-        const t0 = Math.exp(-(BR0 * (sr + hr / 2) + BME * (sm + hm / 2) + BO0 * (so + hz / 2)));
-        const t1 = Math.exp(-(BR1 * (sr + hr / 2) + BME * (sm + hm / 2) + BO1 * (so + hz / 2)));
-        const t2 = Math.exp(-(BR2 * (sr + hr / 2) + BME * (sm + hm / 2) + BO2 * (so + hz / 2)));
-        towardsOrb(qx, qy, qz, ox, oy, 0, MS_ORB_STEPS, TSUN);
-        const s0 = BR0 * dr + BMS * dm, s1 = BR1 * dr + BMS * dm, s2 = BR2 * dr + BMS * dm;
+        const t0 = Math.exp(-(air.br[0]! * (sr + hr / 2) + air.bme[0]! * (sm + hm / 2) + air.bo[0]! * (so + hz / 2)));
+        const t1 = Math.exp(-(air.br[1]! * (sr + hr / 2) + air.bme[1]! * (sm + hm / 2) + air.bo[1]! * (so + hz / 2)));
+        const t2 = Math.exp(-(air.br[2]! * (sr + hr / 2) + air.bme[2]! * (sm + hm / 2) + air.bo[2]! * (so + hz / 2)));
+        towardsOrb(qx, qy, qz, ox, oy, 0, MS_ORB_STEPS, TSUN, air);
+        const s0 = air.br[0]! * dr + air.bms[0]! * dm, s1 = air.br[1]! * dr + air.bms[1]! * dm, s2 = air.br[2]! * dr + air.bms[2]! * dm;
         f[0]! += t0 * s0 * ds; f[1]! += t1 * s1 * ds; f[2]! += t2 * s2 * ds;
         l2[0]! += t0 * s0 * TSUN[0]! * INV_4PI * ds;
         l2[1]! += t1 * s1 * TSUN[1]! * INV_4PI * ds;
@@ -250,7 +273,8 @@ function emptyTables(): AtmosphereTables {
   return { sky: new Float32Array(EL * AZ * 4), sh: new Float32Array(9 * 4), ambient: new Float32Array(3) };
 }
 
-function build(p: AtmosphereInput): AtmosphereTables {
+// `withMs` false: the single scattering only (the multiple-scattering source Psi is 0), for multipleShare
+function buildWith(p: AtmosphereInput, withMs: boolean): AtmosphereTables {
   const t = emptyTables();
   const h0 = Math.max(p.observerHeight === undefined ? 2 : p.observerHeight, 0);
   const l = Math.hypot(p.orbDir[0]!, p.orbDir[1]!, p.orbDir[2]!);
@@ -259,12 +283,13 @@ function build(p: AtmosphereInput): AtmosphereTables {
   const ox = Math.sqrt(1 - oy * oy);
   const orb = [ox, oy, 0];
   const px = 0, py = PLANET + h0, pz = 0;
-  towardsOrb(px, py, pz, ox, oy, 0, TG_STEPS, TSUN);
+  const air = coefficients(p.tone);
+  towardsOrb(px, py, pz, ox, oy, 0, TG_STEPS, TSUN, air);
   const etop = [0, 0, 0];
   for (let c = 0; c < 3; c++) etop[c] = p.orbIrradiance[c]! / Math.max(TSUN[c]!, 1e-9) * (TSUN[c]! > 0 ? 1 : 0);
   if (!(etop[0]! > 0 || etop[1]! > 0 || etop[2]! > 0)) return t;
 
-  const psi = multipleScattering(h0, ox, oy);
+  const psi = withMs ? multipleScattering(h0, ox, oy, air) : new Float64Array(MS_ALTITUDES * 3);
   const tmp = new Float64Array(3);
   const dv = [0, 0, 0];
   const L = [0, 0, 0];
@@ -295,17 +320,18 @@ function build(p: AtmosphereInput): AtmosphereTables {
         const h = Math.sqrt(qx * qx + qy * qy + qz * qz) - PLANET;
         const dr = Math.exp(-h / HR), dm = Math.exp(-h / HM), dz = ozone(h);
         const hr = dr * ds, hm = dm * ds, hz = dz * ds;
-        towardsOrb(qx, qy, qz, ox, oy, 0, ORB_STEPS, tmp);
+        towardsOrb(qx, qy, qz, ox, oy, 0, ORB_STEPS, tmp, air);
         // the multiple-scattering table's altitude index (the altitudes spaced as a square from the observer's)
         const fa = Math.sqrt(Math.max(h - h0, 0) / (TOP_HEIGHT - h0)) * (MS_ALTITUDES - 1);
         const a0 = Math.min(Math.floor(fa), MS_ALTITUDES - 2), ta = Math.min(fa - a0, 1);
-        const rayleigh = dr * pr, mie = dm * BMS * pm;
+        const rayleigh = dr * pr;
         for (let c = 0; c < 3; c++) {
-          const br = c == 0 ? BR0 : c == 1 ? BR1 : BR2;
-          const bo = c == 0 ? BO0 : c == 1 ? BO1 : BO2;
-          const tview = Math.exp(-(br * (sr + hr / 2) + BME * (sm + hm / 2) + bo * (so + hz / 2)));
+          const br = air.br[c]!, bms = air.bms[c]!;
+          const bo = air.bo[c]!;
+          const mie = dm * bms * pm;
+          const tview = Math.exp(-(br * (sr + hr / 2) + air.bme[c]! * (sm + hm / 2) + bo * (so + hz / 2)));
           const ps = psi[a0 * 3 + c]! * (1 - ta) + psi[(a0 + 1) * 3 + c]! * ta;
-          const sigma = br * dr + BMS * dm;
+          const sigma = br * dr + bms * dm;
           const source = (br * rayleigh + mie) * tmp[c]! + sigma * ps;
           L[c]! += tview * source * ds;
         }
@@ -321,6 +347,20 @@ function build(p: AtmosphereInput): AtmosphereTables {
   return t;
 }
 
+function build(p: AtmosphereInput): AtmosphereTables {
+  return buildWith(p, true);
+}
+
+// the multiple-scattering share per channel in the view direction dir (as skyAt's): (the model's radiance - its single-scattering radiance) / its single-scattering
+// radiance; 0 where the single scattering is 0 (an Orb of 0 irradiance or below the horizon)
+function multipleShare(p: AtmosphereInput, dir: ArrayLike<number>): number[] {
+  const full = skyAt(buildWith(p, true), dir, p.orbDir);
+  const single = skyAt(buildWith(p, false), dir, p.orbDir);
+  const out = [0, 0, 0];
+  for (let c = 0; c < 3; c++) out[c] = single[c]! > 0 ? (full[c]! - single[c]!) / single[c]! : 0;
+  return out;
+}
+
 function uniformSky(radiance: ArrayLike<number>): AtmosphereTables {
   const t = emptyTables();
   for (let q = 0; q < EL * AZ; q++) for (let c = 0; c < 3; c++) t.sky[q * 4 + c] = radiance[c]!;
@@ -332,6 +372,78 @@ function uniformSky(radiance: ArrayLike<number>): AtmosphereTables {
   return t;
 }
 
-export const Atmosphere = { EL, AZ, elevationAt, azimuthAt, build, skyAt, diffuseAt, shBasis, uniformSky };
+// The seen sky as a picture (the water programs' lookup: one filtered read, no trigonometry): SKY_W x SKY_H texels over an octahedral map of the direction in the Orb's frame. With e the
+// Orb's horizontal unit direction ((1, 0) when it is straight up, as the uniform block's aOrb), q = (c, s, y) = (dir.xz . e, |dir.xz x e|, max(dir.y, 0)) (a direction below the horizon reads
+// the horizon's row) and p = (q.x, q.y) / (|q.x| + q.y + q.z): the picture's coordinates are (u, v) = (p.x / 2 + 1 / 2, p.y) in the half octahedron |p.x| + p.y <= 1 (the zenith (1 / 2, 0), the
+// horizon on the Orb's side (1, 0), away from it (0, 0), 90 degrees to the side (1 / 2, 1); the bottom edge is the Orb's meridian plane, the sky's two sides of it being one).
+const SKY_W = 256;
+const SKY_H = 128;
+
+// the Orb's horizontal unit direction (x, z); (1, 0) when it is straight up
+function orbFlat(orbDir: ArrayLike<number>): [number, number] {
+  const flat = Math.hypot(orbDir[0]!, orbDir[2]!);
+  return flat > 1e-6 ? [orbDir[0]! / flat, orbDir[2]! / flat] : [1, 0];
+}
+
+// the picture's coordinates of a unit direction (the shader's atmosSeen computes the same)
+function skyUv(dir: ArrayLike<number>, orbDir: ArrayLike<number>): number[] {
+  const e = orbFlat(orbDir);
+  const c = dir[0]! * e[0] + dir[2]! * e[1];
+  const s = Math.abs(dir[0]! * e[1] - dir[2]! * e[0]);
+  const y = Math.max(dir[1]!, 0);
+  const sum = Math.max(Math.abs(c) + s + y, 1e-6);
+  return [(c / sum) * 0.5 + 0.5, s / sum];
+}
+
+// the picture's RGBA floats (row j from v = 0 up): each texel the table's lookup (skyAt) in the direction its middle's coordinates name; a middle outside the half octahedron holds the horizon
+// its p projects to. Nothing in the tables gives zeros, alpha is 1
+function skyTexture(t: AtmosphereTables, orbDir: ArrayLike<number>): Float32Array {
+  const out = new Float32Array(SKY_W * SKY_H * 4);
+  const e = orbFlat(orbDir);
+  const dir = [0, 0, 0];
+  for (let j = 0; j < SKY_H; j++) {
+    const v = (j + 0.5) / SKY_H;
+    for (let i = 0; i < SKY_W; i++) {
+      let px = ((i + 0.5) / SKY_W) * 2 - 1;
+      let py = v;
+      const n = Math.abs(px) + py;
+      if (n > 1) {
+        px /= n;
+        py /= n;
+      }
+      const y = Math.max(1 - Math.abs(px) - py, 0);
+      const length = Math.hypot(px, py, y);
+      dir[0] = (px * e[0] - py * e[1]) / length;
+      dir[1] = y / length;
+      dir[2] = (px * e[1] + py * e[0]) / length;
+      const radiance = skyAt(t, dir, orbDir);
+      const at = (j * SKY_W + i) * 4;
+      out[at] = radiance[0]!;
+      out[at + 1] = radiance[1]!;
+      out[at + 2] = radiance[2]!;
+      out[at + 3] = 1;
+    }
+  }
+  return out;
+}
+
+// the GPU's read of the picture at (u, v): bilinear between the four texels around, the coordinates clamped to the edge (LINEAR, CLAMP_TO_EDGE)
+function skyRead(texture: Float32Array, uv: ArrayLike<number>): number[] {
+  const x = uv[0]! * SKY_W - 0.5;
+  const y = uv[1]! * SKY_H - 0.5;
+  const x0 = Math.floor(x), y0 = Math.floor(y);
+  const fx = x - x0, fy = y - y0;
+  const xa = Math.min(Math.max(x0, 0), SKY_W - 1), xb = Math.min(Math.max(x0 + 1, 0), SKY_W - 1);
+  const ya = Math.min(Math.max(y0, 0), SKY_H - 1), yb = Math.min(Math.max(y0 + 1, 0), SKY_H - 1);
+  const out = [0, 0, 0];
+  for (let c = 0; c < 3; c++) {
+    const a = texture[(ya * SKY_W + xa) * 4 + c]!, b = texture[(ya * SKY_W + xb) * 4 + c]!;
+    const d = texture[(yb * SKY_W + xa) * 4 + c]!, f = texture[(yb * SKY_W + xb) * 4 + c]!;
+    out[c] = (a * (1 - fx) + b * fx) * (1 - fy) + (d * (1 - fx) + f * fx) * fy;
+  }
+  return out;
+}
+
+export const Atmosphere = { EL, AZ, SKY_W, SKY_H, elevationAt, azimuthAt, build, multipleShare, skyAt, skyUv, skyTexture, skyRead, diffuseAt, shBasis, uniformSky };
 
 M.Atmosphere = Atmosphere;

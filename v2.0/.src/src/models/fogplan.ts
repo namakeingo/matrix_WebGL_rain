@@ -5,6 +5,7 @@
 // run here) or with the answer its fork asked of the worker in the same frame, so the picture does not depend on where the plan ran.
 //
 // Changelog:
+// 2026-11-20: the block is 28 floats: no sky gain, the Orb's gain at 24 (Feature S1, story A2).
 // 2026-11-18: the lens (lensX, lensY, builtLensX, builtLensY): a lens other than the one the volume was built for is a move of the view; the periods' view carries the lens.
 // 2026-11-10: new, from Fog.update, Fog.setEvery, Fog.due and Fog.buildDue.
 // 2026-11-11: same() tells an array from a typed array or a non-array, compares key sets both ways by own property, and takes objects that are not plain data by reference only.
@@ -15,7 +16,8 @@ import { MouseParallax } from "./mouseparallax";
 import type { ParallaxOffsets } from "./mouseparallax";
 
 // the length of the uniform block's data (floats)
-export const FOG_UBO_LENGTH = 32;
+// (7 vec4: the flat sky's gain vec4 is gone with the flat sky; the Orb's gain is at 24)
+export const FOG_UBO_LENGTH = 28;
 
 export interface FogPlanInput {
   // the frame's time, the time of the last frame planned, whether a setting changed since (Fog.stale), whether the passes are made and the fog on (the schedule is only worked out then)
@@ -36,7 +38,6 @@ export interface FogPlanInput {
   strikeScale: number;
   boltColor: ArrayLike<number>;
   marchSegments: number;
-  skyGain: ArrayLike<number>;
   moonGain: ArrayLike<number>;
   // the view's decisions: the level of detail, whether the workers' shade schedule exists, the path the last frame took, whether the camera's base changed since the volume was
   // built, the camera's parallax offsets now and those the volume was built for
@@ -154,8 +155,7 @@ function plan(input: FogPlanInput): FogPlanOutput {
   }
   d.set(input.boltColor, 20);
   d[23] = input.marchSegments;
-  d.set(input.skyGain, 24);
-  d.set(input.moonGain, 28);
+  d.set(input.moonGain, 24);
   const every = input.every.slice();
   const drop = input.drop.slice();
   const out: FogPlanOutput = {

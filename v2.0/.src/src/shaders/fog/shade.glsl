@@ -19,6 +19,7 @@ vec3 fogLight(vec3 p, vec3 view, float lod, bool marched) {
   vec3 albedo = albedoAt(p, lod);
   vec3 moon = normalize(MOON_DIR);
   vec2 shade = skyShade(p, lod, marched);
-  vec3 single = SKY * shade.x + MOON * shade.y * phaseHG(dot(moon, view));
-  return albedo * (single + MULTIPLE * (SKY + MOON / FOUR_PI));
+  vec3 sky = atmosAmbient();
+  vec3 single = sky * shade.x + MOON * shade.y * phaseHG(dot(moon, view));
+  return albedo * (single + MULTIPLE * (sky + MOON / FOUR_PI));
 }

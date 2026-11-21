@@ -51,8 +51,6 @@ class RegisterBundle implements WebpackPluginInstance {
 
 export default (env: BuildEnv = {}): Configuration => {
   const plugins: WebpackPluginInstance[] = [new RegisterBundle()];
-  // (the atmosphere prototype's flag: M.ATMOSPHERE; off unless built with --env atmosphere=on)
-  plugins.push(new webpack.DefinePlugin({ __ATMOSPHERE__: JSON.stringify(env.atmosphere === "on" || env.atmosphere === true) }));
   if (env.swap) {
     const [from, to] = String(env.swap).split("=");
     const target = path.resolve(SRC, from);

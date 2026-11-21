@@ -362,6 +362,10 @@ const makeTestApi = (wallpaper: Wallpaper, ready: Promise<void>) => {
     get fogPlanTask() {
       return wallpaper.fogPlanTask;
     },
+    // the atmosphere's tables task (the kill spec asks it with a fixed input)
+    get atmosphereTask() {
+      return wallpaper.atmosphereTask;
+    },
     taskInfo: (name: string) => {
       const task = name === "hdr" ? wallpaper.hdrPath && wallpaper.hdrPath.task : wallpaper.tasks[name];
       return task ? { state: task.state, alive: task.alive, inline: task.inline, attempts: task.attempts, restarts: task.restarts, why: task.why, events: task.events.slice() } : null;

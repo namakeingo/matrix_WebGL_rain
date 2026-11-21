@@ -1,7 +1,7 @@
 // QualityWaterBands: which of the guard's bands of rows of the water pass hold no water, pure: no GL, no page.
 // A pixel is water when its ray from the eye points down (the shader's `d.y < 0`, d = rayOf(gl_FragCoord.xy), the pixel's centre); the
 // sign of d.y depends on the row only (not the column or the width): d.y has the sign of (height / 2 - py) / focal cos(pitch) + sin(pitch),
-// py the centre's row from the top. A pixel above the horizon gets, from the water program, SKY * fog.a + fog.rgb with the fog read at the
+// py the centre's row from the top. A pixel above the horizon gets, from the water program, atmosSeen(d) * fog.a + fog.rgb with the fog read at the
 // pixel to FOG_FAR and the strikes' share as the second output: nothing of the waves, the reflection or the strike grids, and no derivative
 // is used by it, so the sky-only program (Water.skyFragment: the water's source without the water's parts) draws the same values there.
 // A band is drawn with it when every one of its rows lies above the last row that holds water by MARGIN_ROWS rows more (against float32

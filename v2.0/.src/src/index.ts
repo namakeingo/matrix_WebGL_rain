@@ -60,6 +60,9 @@ import "./models/waterstate";
 import "./models/watertone";
 import "./models/ripplespeed";
 import "./models/wavesteps";
+import "./models/wavegrid";
+import "./models/waveresample";
+import "./models/wavedissolve";
 import "./models/wavelift";
 import "./models/wavehit";
 import "./models/crest";
@@ -104,6 +107,9 @@ import "./models/strikeplan";
 import "./workers/strikeplanworker";
 import "./models/fogplan";
 import "./workers/fogplanworker";
+import "./models/debounce";
+import "./models/quality/atmosphere";
+import "./workers/atmosphereworker";
 import "./models/boltlist";
 import "./workers/boltlistworker";
 import "./models/frame";
@@ -175,6 +181,7 @@ import type { SteppedTask } from "./platform/steppedtask";
 import type { RainSimPacket } from "./models/rainsimtick";
 import type { StrikePlanInput, StrikePlanOutput } from "./models/strikeplan";
 import type { FogPlanInput, FogPlanOutput } from "./models/fogplan";
+import type { AtmosphereJob } from "./models/quality/atmosphere";
 import type { BoltListInput, BoltListOutput } from "./models/boltlist";
 import type { FrameInput, FrameOutput } from "./models/frame";
 import type { MusicTask, MusicWorkerSettings } from "./workers/musicworker";
@@ -391,6 +398,9 @@ export class Wallpaper implements WallpaperControl {
   clock!: StepClock;
   fog!: Fog;
   waves!: Waves;
+  // the settings the waves' grid was last chosen for (Sky/Orb brightness and the Orb tone: models/wavegrid.ts); the choice is made again only when they change
+  waveGridBrightness = NaN;
+  waveGridTone = "";
   lightning!: Lightning;
   splashes!: Splashes;
   bolt!: Bolt;
@@ -409,6 +419,8 @@ export class Wallpaper implements WallpaperControl {
   strikePlanTask: JobTask<StrikePlanInput, StrikePlanOutput> | null = null;
   // the fog's frame plan task (workers/fogplanworker.ts), asked by Fog.fork
   fogPlanTask: JobTask<FogPlanInput, FogPlanOutput> | null = null;
+  // the atmosphere's tables task (workers/atmosphereworker.ts), asked by Fog.setLight's debounce and taken by Fog.update
+  atmosphereTask: JobTask<AtmosphereJob, Float32Array> | null = null;
   // the bolt's piece lists task (workers/boltlistworker.ts), asked by Bolt.fork
   boltListTask: JobTask<BoltListInput, BoltListOutput> | null = null;
   frameTask: JobTask<FrameInput, FrameOutput> | null = null;
@@ -1089,7 +1101,7 @@ export class Wallpaper implements WallpaperControl {
     // (the scene's one-off work in a Web Worker when one can be made, else here: the script's
     // hashes and their check, the rain's layouts, the characters)
     // (the tests may refuse a worker: window.Matrix3DTest { sceneWorker, boltWorker: "none" })
-    const refused = (name: "sceneWorker" | "boltWorker" | "musicWorker" | "parallaxWorker" | "textLayoutWorker" | "strikePlanWorker" | "fogPlanWorker" | "boltListWorker" | "frameWorker" | "splashWorker") => testOptions()[name] || "";
+    const refused = (name: "sceneWorker" | "boltWorker" | "musicWorker" | "parallaxWorker" | "textLayoutWorker" | "strikePlanWorker" | "fogPlanWorker" | "atmosphereWorker" | "boltListWorker" | "frameWorker" | "splashWorker") => testOptions()[name] || "";
     const scene = new M.SceneTask({
       base: this.platform.base,
       force: refused("sceneWorker"),
@@ -1212,6 +1224,21 @@ export class Wallpaper implements WallpaperControl {
     this.fogPlanTask = fogPlan;
     this.tasks.fogplan = fogPlan as unknown as ThreadedTask;
     fogPlan.start();
+    // (the atmosphere's tables and sky picture: a JobTask over models/quality/atmosphere.ts, asked by Fog.setLight when the Sky/Orb settings stop moving and taken by a later update; inline until its worker is made)
+    const atmosphere = new M.JobTask({
+      fn: M.QualityAtmosphere.run,
+      name: "atmosphere",
+      base: this.platform.base,
+      force: refused("atmosphereWorker"),
+      observe: (event) => {
+        if (event.name === "adopt") {
+          this.mark("atmosphereWorker");
+        }
+      },
+    });
+    this.atmosphereTask = atmosphere;
+    this.tasks.atmosphere = atmosphere as unknown as ThreadedTask;
+    atmosphere.start();
     // (the bolt's piece lists: a JobTask over models/boltlist.ts, asked in Bolt.fork with the frame's inputs and awaited by the draw; inline until its worker is made)
     const boltList = new M.JobTask({
       fn: M.BoltList.run,
@@ -1456,6 +1483,7 @@ export class Wallpaper implements WallpaperControl {
     // (a planned strike's flash known: the fog bakes its shadow grid ahead in the workers when the level of detail is on)
     this.lightning.planTask = this.strikePlanTask;
     this.fog.planTask = this.fogPlanTask;
+    this.fog.atmosphereTask = this.atmosphereTask;
     this.lightning.onPlanned = (s) => this.fog.announceStrike(s.uid!, s.start, s.flash!);
     // (an unexpected error in the lightning's asynchronous answers: reported as a failure of the wallpaper, as a frame's error is)
     this.lightning.onFailure = (error) => this.fail(error);
@@ -1804,6 +1832,12 @@ export class Wallpaper implements WallpaperControl {
       strikeAlive = strikeAlive || !!this.lightning.slots[k];
     }
     this.waves.blocksNeeded = strikeAlive;
+    // (the waves' grid follows the effective brightness of the Orb and the sky: the full grid from B >= 2, the production one under 1.8; only when the settings changed)
+    if (this.fog.skyMoonBrightness !== this.waveGridBrightness || this.fog.moonTone !== this.waveGridTone) {
+      this.waveGridBrightness = this.fog.skyMoonBrightness;
+      this.waveGridTone = this.fog.moonTone;
+      this.waves.setFullGrid(M.WaveGrid.choose(M.WaveGrid.brightnessOf({ brightness: this.waveGridBrightness, orbTone: this.waveGridTone }), this.waves.full));
+    }
     for (let i = 0; i < this.effects!.length; i++) {
       this.effects![i].update(this.time);
     }
@@ -1852,6 +1886,7 @@ export class Wallpaper implements WallpaperControl {
       // (the mirrored picture's margin, after the pass has made its frame)
       this.water.mirrorMargin[0] = this.reflection.frame.marginX;
       this.water.mirrorMargin[1] = this.reflection.frame.marginY;
+      this.fog.bindSky();
       this.water.draw(mode, this.test);
     }
     // (the crest picture the water's pass just wrote hides the glyphs behind a crest, in the direct pass only, while the wave hit's march is on: waveHitOn, once a frame. Off, calm water
@@ -2621,6 +2656,8 @@ if (inWorker()) {
     M.StrikePlanWorker.serve();
   } else if (name === "fogplan") {
     M.FogPlanWorker.serve();
+  } else if (name === "atmosphere") {
+    M.AtmosphereWorker.serve();
   } else if (name === "boltlist") {
     M.BoltListWorker.serve();
   } else if (name === "frame") {
