@@ -31,6 +31,7 @@
 // platform/renderlink.ts.
 //
 // Changelog:
+// 2026-11-20: followSpawnBox gives the camera the OLED margin (Camera.setMargin(text.limit)) before the box is made, and reset() calls it first: the rain's world follows the limit at once, not a frame later.
 // 2026-11-19: Camera.setMargin(text.limit) each frame before camera.update (the OLED margin: the rain's floor, top and spawn box are the window extended by it, whatever the lens).
 // 2026-11-18: the scene's OLED shift is the camera's lens each frame (Text.stepShift, OledShift.lensOf, Camera.setLens before camera.update); no Exposure.shiftX; the rain reuse's shift key is 0 (the lens is in the camera's version).
 // 2026-11-15: the crest picture (the scene picture's third attachment) bound after the water's pass and given to the rain, the splashes and the bolt's characters (crestHide: the wave hit's gate).
@@ -52,6 +53,7 @@ import "./models/floor";
 import "./models/rainlayout";
 import "./models/rainwheel";
 import "./models/skylight";
+import "./models/fogworld";
 import "./models/atmosphere";
 import "./models/strikebias";
 import "./models/hdroutput";
@@ -162,7 +164,7 @@ import type { QualityReport, QualityJob, QualityShared } from "./models/quality/
 import type { QualityPool, QualityPoolTask, QualityResults } from "./engine/qualitypool";
 import type { QualityFrame, QualityHost } from "./engine/qualityframe";
 import type { QualityStatics, QualityParams } from "./models/quality/jobs";
-import { AIR } from "./materials/fog";
+import { AIR_EXTINCTION } from "./materials/fog";
 import type { Programs, ProgramSources, Quad } from "./engine/gl";
 import type { GpuGuard } from "./engine/guard";
 import type { Camera } from "./engine/camera";
@@ -908,6 +910,12 @@ export class Wallpaper implements WallpaperControl {
       this.spawnMode = p.mode;
       this.spawnAmount = p.amount;
       this.spawnReach = p.on ? M.MouseParallax.reach(p.mode, p.amount, this.spawnLimits) : { yaw: 0, pitch: 0, eyeX: 0, eyeY: 0 };
+    }
+    // (the OLED margin before the box is made: the box is the window extended by it; it was set inside the frame, after the box, so the box and the layout followed it a frame late,
+    // and a reset before that frame laid the drops out in the previous margin's world; no text yet at the first call, before the first layout: margin 0)
+    const text = this.text as Text | undefined;
+    if (text) {
+      camera.setMargin(text.limit);
     }
     rain.setSpawnBox(camera.pitch, camera.eyeHeight, this.spawnReach, camera.topAngle(), camera.bottomAngle(), camera.leftTan(), camera.rightTan());
   }
@@ -1744,6 +1752,8 @@ export class Wallpaper implements WallpaperControl {
   }
 
   reset() {
+    // (the box for the settings now: the layout the effects make below is the world of the current OLED limit, whether or not a frame has run since it changed)
+    this.followSpawnBox();
     this.time = 0;
     this.clock.reset();
     this.effects!.forEach((effect) => effect.reset());
@@ -2310,7 +2320,7 @@ export class Wallpaper implements WallpaperControl {
       shared = this.qualityShared = {
         step: 0,
         time: 0,
-        inputs: { viewProjection: camera.viewProjection, eyeX: 0, eyeY: 0, eyeZ: 0, focal: 1, width: 1, height: 1, sigma: 0, air: AIR, waterDrawn: true, waterY: this.M.Floor.WATER_Y, margin: 0, blur: 1, occluders: new Float32Array(0), occluderCount: 0 },
+        inputs: { viewProjection: camera.viewProjection, eyeX: 0, eyeY: 0, eyeZ: 0, focal: 1, width: 1, height: 1, sigma: 0, air: AIR_EXTINCTION, waterDrawn: true, waterY: this.M.Floor.WATER_Y, margin: 0, blur: 1, occluders: new Float32Array(0), occluderCount: 0 },
       };
     }
     shared.step = this.clock.stepAt(this.time);

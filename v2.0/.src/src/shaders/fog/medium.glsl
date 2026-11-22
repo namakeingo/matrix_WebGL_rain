@@ -28,8 +28,13 @@ float density(vec3 p, float lod) {
 vec3 albedoAt(vec3 p, float lod) {
   return mix(fMain.rgb, fSecond.rgb, smoothstep(0.3, 0.7, noise3(p / 40.0 + vec3(0.37, 0.11, 0.53), 40.0, lod)));
 }
-// how much light gets from p to q through the clouds and the air (n places along the way, each
-// read at the level of their spacing at least)
+// the mist's mean extinction per metre over the stretch a to b of the ray o + t d (mirrored: the ray's image in the water, its height counted up from the water)
+float mistMean(vec3 o, vec3 d, float a, float b, bool mirrored) {
+  float side = mirrored ? -1.0 : 1.0;
+  return mistDepth(MIST_K, side * (o.y + a * d.y), side * (o.y + b * d.y), 1.0);
+}
+// how much light gets from p to q through the clouds, the mist and the air (n places along the way, each
+// read at the level of their spacing at least; the mist's by its closed form between the two places)
 float through(vec3 p, vec3 q, int n, float lod) {
   float len = length(q - p);
   float at = max(lod, lodOf(len / float(n)));
@@ -37,16 +42,13 @@ float through(vec3 p, vec3 q, int n, float lod) {
   for (int i = 0; i < n; i++) {
     depth += density(mix(p, q, (float(i) + 0.5) / float(n)), at);
   }
-  return exp(-(depth / float(n) + AIR) * len);
+  return exp(-(depth / float(n) + AIR_EXTINCTION) * len - mistDepth(MIST_K, p.y, q.y, len));
 }
 // how much light from a direction reaches p through the clouds (4 places over 8 m)
 float lightThrough(vec3 p, vec3 dir, float lod) {
   return through(p, p + dir * 8.0, 4, lod);
 }
-float phaseHG(float c) {
-  float g = ${PHASE_G};
-  return (1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * c, 1.5) / FOUR_PI;
-}
+${PHASE_GLSL}
 // a place of the world on the shadow grid (0 to 1 each way: x / distance across the world's
 // width, the height's square root, the distance's logarithm), as texture coordinates (its nodes,
 // the texels' middles, on 0 and 1); and node n of the grid (0 to its cells - 1) in the world

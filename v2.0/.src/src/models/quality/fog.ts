@@ -42,11 +42,13 @@
 //   density's scale).
 //
 // Changelog:
+// 2026-11-21: Lod: the perceptual level by the coverage of the fog in front (coverageLevel, fullLevel: Feature U1, story U7).
 // 2026-11-18: the columns' rays go through the image centre of the lens (inputs.lensX and lensY, 0 when absent: the window's centre); the lens is in both tables' keys.
 // 2026-11-07: Lod: the physical level of a slice (transmittance), the refresh and the octaves by level, whole slices held, the strikes' skip.
 // 2026-11-07: level of detail: the dense tail (level 0), the refresh periods and the far octaves.
 // 2026-11-06: new; the pool's job kind "fog" registered.
 import { M } from "../../engine/core";
+import { PHASE_MAX, mistDepth } from "../../materials/fog";
 import { QualityJobs } from "./jobs";
 import { QUALITY_LEVELS } from "./types";
 
@@ -86,7 +88,7 @@ const TOP_MIP = 7;
 
 // the view a job is made for: the shared inputs' eye, focal and screen, the water, and the volume's columns
 export interface FogQualityView {
-  inputs: { eyeY: number; focal: number; width: number; height: number; lensX?: number; lensY?: number; waterDrawn: boolean; sigma: number; air: number };
+  inputs: { eyeY: number; focal: number; width: number; height: number; lensX?: number; lensY?: number; waterDrawn: boolean; sigma: number; air: number; mist?: number };
   pitch: number;
   margin: number;
   across: number;
@@ -314,9 +316,8 @@ const LEVEL_REFRESH_MOST = 32;
 const OCTAVE_WEIGHTS = [0.55, 0.3, 0.15];
 // the density's change per unit of change of the noise: 0.8 x smoothstep's steepest slope 7.5
 const DENSITY_SLOPE = 6;
-// the Henyey-Greenstein phase's largest value (forward, g = PHASE_G of materials/fog.ts, 0.2)
-const PHASE_G = 0.2;
-const STRIKE_PHASE_MAX = (1 - PHASE_G * PHASE_G) / Math.pow(1 - PHASE_G, 3) / (4 * Math.PI);
+// the phase function's largest value (the mix of two Henyey-Greenstein lobes: its forward peak, materials/fog.ts PHASE_MAX)
+const STRIKE_PHASE_MAX = PHASE_MAX;
 
 // the 41 entries of the share of a froxel the clouds' drift may cover between two refreshes of a slice, by level: the by-distance
 // fraction at level 40, growing as 40 / level (the error is the transmittance's share of it) up to a whole froxel; level 0 a whole one
@@ -494,7 +495,61 @@ function processLevels(statics: Record<string, Float32Array>, view: FogQualityVi
   }
 }
 
-const Lod = { LEVELS: QUALITY_LEVELS, LEVEL_REFRESH_MOST, OCTAVE_WEIGHTS, DENSITY_SLOPE, STRIKE_PHASE_MAX, fractionTable, sliceTransmittance, sliceLevel, columnLevel, sliceHeld, levelRefresh, levelOctaves, strikeSkip, process: processLevels };
+// ---- The perceptual level, by the coverage of the fog in front (Feature U1, story U7) ----
+// A froxel is seen through the fog in front of it, so the detail it needs falls with how little that fog lets through, not only with the provable bound
+// (tailBound counts the clouds at their density's floor, DENSITY_FLOOR, along the view's highest ray). Tm is the MEAN transmittance in front over the view's sampled
+// columns, each along its own ray: the air, the clouds at COVERAGE_DENSITY of sigma (the density as the eye takes it: the whole of sigma, not the noise's mean 0.5 nor the floor 0.2 of
+// the provable bound; chosen by the picture's error, scenetest fogcoverage, at the ray's highest point) and the mist (mistDepth). The coverage level is
+// ceil(40 min(1, Tm / COVERAGE_KNEE)), at least 1: 40 while Tm is at or over the knee (the near slices of the default), falling in proportion below it. The level that
+// is used (fullLevel) is the smaller of it and the physical level: never above what the provable bound allows, and 0 only where that is 0.
+// (2026-11-21, by ?test=fogcoverage: knee 0.8 with density 0.5 gave a mean refresh period of 3.79 to 4.19 sweeps at Fog intensity 40, knee 0.9 with density 1 gives 7.6 at a mean difference of 0.035 levels)
+const COVERAGE_KNEE = 0.9;
+const COVERAGE_DENSITY = 1;
+
+// the coverage level for a mean transmittance in front
+function coverageOf(t: number): number {
+  const level = Math.ceil(QUALITY_LEVELS * Math.min(1, t / COVERAGE_KNEE) - 1e-9);
+  return level < 1 ? 1 : level > QUALITY_LEVELS ? QUALITY_LEVELS : level;
+}
+
+// the mean transmittance in front of slice k's start over the view's sampled columns (the grid makeTable samples: both edges included), each along its own ray
+// (the clouds at its highest point). A view that is half sky and half dense fog has the mean of the two: the share of the picture the fog covers
+function coverageT(view: FogQualityView, k: number): number {
+  const i = view.inputs;
+  const a = sliceStart(k);
+  const sin = Math.sin(view.pitch), cos = Math.cos(view.pitch);
+  const stepX = Math.max(1, Math.ceil(view.across / SAMPLE_ACROSS));
+  const stepY = Math.max(1, Math.ceil(view.down / SAMPLE_ACROSS));
+  let sum = 0, n = 0;
+  for (let iy = 0; iy < view.down + stepY - 1; iy += stepY) {
+    const y = Math.min(iy, view.down - 1);
+    for (let ix = 0; ix < view.across + stepX - 1; ix += stepX) {
+      const dy = rayY(view, sin, cos, Math.min(ix, view.across - 1), y);
+      const yHigh = i.eyeY + (dy > 0 ? dy * a : 0);
+      const clouds = i.sigma > 0 ? i.sigma * COVERAGE_DENSITY * Math.exp(-(yHigh > 0 ? yHigh : 0) / DENSITY_HEIGHT) : 0;
+      const mist = i.mist ? mistDepth(i.mist, i.eyeY, yHigh, a) : 0;
+      sum += Math.exp(-(i.air + clouds) * a - mist);
+      n++;
+    }
+  }
+  return sum / n;
+}
+
+function coverageLevel(view: FogQualityView, k: number): number {
+  return coverageOf(coverageT(view, k));
+}
+
+// the level the volume's detail follows: the smaller of the physical and the coverage level (0 where the physical one is 0)
+function fullLevel(view: FogQualityView, k: number): number {
+  const physical = sliceLevel(view, k);
+  if (physical === 0) {
+    return 0;
+  }
+  const coverage = coverageLevel(view, k);
+  return coverage < physical ? coverage : physical;
+}
+
+const Lod = { COVERAGE_KNEE, COVERAGE_DENSITY, coverageOf, coverageT, coverageLevel, fullLevel, LEVELS: QUALITY_LEVELS, LEVEL_REFRESH_MOST, OCTAVE_WEIGHTS, DENSITY_SLOPE, STRIKE_PHASE_MAX, fractionTable, sliceTransmittance, sliceLevel, columnLevel, sliceHeld, levelRefresh, levelOctaves, strikeSkip, process: processLevels };
 
 export const QualityFog = { SLICES, SLICE_NEAR, FOG_FAR, SLICE_LOG, CULL_BELOW, CULL_RELATIVE, TAIL_RADIANCE, TAIL_EXPOSURE, TAIL_SLOPE, TAIL_T, DRIFT_SPEED, REFRESH_FRACTION, REFRESH_MOST, SWEEP_SECONDS, OCTAVE_SIZES, TOP_MIP, NOISE_TEXELS, sliceStart, bounds, columnDy, columnCut, unread, tailBound, denseStart, denseHeld, sliceFootprint, refreshEvery, flatOctaves, process, Lod };
 

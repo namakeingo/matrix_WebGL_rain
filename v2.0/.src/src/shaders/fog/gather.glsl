@@ -25,10 +25,15 @@ vec4 gather(vec4 acc, vec3 o, vec3 d, float a, float b, bool mirrored, float lod
   if (mirrored) p.y = -p.y;
   vec3 view = mirrored ? vec3(d.x, -d.y, d.z) : d;
   float sigma = densityFar(p, lod, uFar > 0.5 && !marched);
-  float extinction = sigma + AIR;
-  vec3 source = sigma > 0.0 ? sigma * fogLight(p, view, lod, marched) : vec3(0.0);
+  // (the mist at the slice's middle like the clouds' density, one exponential: the closed form over the slice (mistMean, the tests' march's) cost the volume's full rebuild 7 ms; white scattering, so it is
+  // part of the source as well)
+  float mist = MIST_K * exp(-max(p.y, 0.0) / MIST_HEIGHT);
+  float extinction = sigma + AIR_EXTINCTION + mist;
+  vec3 source = sigma + mist > 1e-6 ? fogLight(p, view, lod, marched, sigma, mist) : vec3(0.0);
   float pass = exp(-extinction * dt);
-  acc.rgb += acc.a * source * (1.0 - pass) / extinction;
-  acc.a *= pass;
+  // acc.a is the optical depth so far, not the transmittance: the sums and the volume are half floats written rounded down, and a product of per-slice
+  // transmittances near 1 loses a whole step (1/2048) every slice (4.7% over 96 slices in clear air); a sum of optical depths loses at most a step of its own size
+  acc.rgb += exp(-acc.a) * source * (1.0 - pass) / extinction;
+  acc.a += extinction * dt;
   return acc;
 }

@@ -46,8 +46,10 @@ import type { GlyphAtlas } from "./glyphs";
 import type { RainLayout } from "../models/rainlayout";
 import type { RainWheel } from "../models/rainwheel";
 import type { SkyLight } from "../models/skylight";
+import type { FogWorld } from "../models/fogworld";
 import type { Atmosphere } from "../models/atmosphere";
 import type { MoonDisc } from "../materials/sky";
+import type { DENSITY_FULL, MIST, MIST_HEIGHT, MIST_RATIO, mistDepth, phaseLobe, phaseAt, phase, phaseGlsl } from "../materials/fog";
 import type { StrikeBias } from "../models/strikebias";
 import type { HdrOutput } from "../models/hdroutput";
 import type { HdrPack } from "../models/hdrpack";
@@ -65,6 +67,7 @@ import type { Mulberry } from "./core";
 import type { StrikePlan } from "../models/strikeplan";
 import type { StrikePlanWorker } from "../workers/strikeplanworker";
 import type { FogPlan } from "../models/fogplan";
+import type { FogAccum } from "../models/fogaccum";
 import type { FogPlanWorker } from "../workers/fogplanworker";
 import type { QualityAtmosphere } from "../models/quality/atmosphere";
 import type { AtmosphereWorker } from "../workers/atmosphereworker";
@@ -123,6 +126,21 @@ export interface Capabilities {
 
 // the tests' options: window.Matrix3DTest given as an object (true: the tests, with none)
 export interface Matrix3DTestOptions {
+  // the mist's strength as a multiple of MIST and its scale height in metres (materials/fog.ts), for the headed comparison of strengths and heights
+  // the world-fixed fog volume prototype (engine/fogworldbuild.ts; Feature U1, story U8): its text, programs and textures exist only with it
+  fogWorld?: boolean;
+  // with fogWorld: the world grid is the fog from the start (else `world` is false until set)
+  fogWorldOn?: boolean;
+  // with fogWorld: the world grid's march steps (1 to 96; default FogWorld.STEPS)
+  fogWorldSteps?: number;
+  mistStrength?: number;
+  mistHeight?: number;
+  // the fog volume's temporal accumulation (models/fogaccum.ts, engine/fogaccum.ts): the frames N of the average (a number or its text); "off" or nothing: off
+  fogAccum?: number | string;
+  // the fog's phase function: "single" (the old single lobe), the forward weight and the forward lobe's g (materials/fog.ts), for the comparison of the weights
+  phaseMode?: string;
+  phaseWeight?: number;
+  phaseForwardG?: number;
   // each program compiled on its own first, its time kept
   compileEach?: boolean;
   // a worker refused ("none") or made only from a Blob ("blob")
@@ -157,6 +175,7 @@ export interface Matrix3DNamespace {
   StrikePlan: typeof StrikePlan;
   StrikePlanWorker: typeof StrikePlanWorker;
   FogPlan: typeof FogPlan;
+  FogAccum: typeof FogAccum;
   FogPlanWorker: typeof FogPlanWorker;
   QualityAtmosphere: typeof QualityAtmosphere;
   AtmosphereWorker: typeof AtmosphereWorker;
@@ -220,8 +239,11 @@ export interface Matrix3DNamespace {
   RainLayout: typeof RainLayout;
   RainWheel: typeof RainWheel;
   SkyLight: typeof SkyLight;
+  FogWorld: typeof FogWorld;
   Atmosphere: typeof Atmosphere;
   MoonDisc: typeof MoonDisc;
+  FogPhase: { FORWARD_G: number; BACKWARD_G: number; FORWARD_W: number; SINGLE_G: number; MAX: number; hg: typeof phaseLobe; at: typeof phaseAt; phase: typeof phase; glsl: typeof phaseGlsl };
+  FogMist: { DENSITY_FULL: typeof DENSITY_FULL; MIST: typeof MIST; HEIGHT: typeof MIST_HEIGHT; RATIO: typeof MIST_RATIO; depth: typeof mistDepth };
   StrikeBias: typeof StrikeBias;
   HdrOutput: typeof HdrOutput;
   HdrPack: typeof HdrPack;

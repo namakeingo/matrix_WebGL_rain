@@ -1352,7 +1352,7 @@ Lightning.EMITTER_GLSL = fill(EMITTER_SOURCE, { "M.Flash.TEXELS_ACROSS": M.Flash
 // a strike's light scattered towards the eye at p (seen along view), per unit of its light and
 // of the medium's extinction there: each region's light through the clouds between (towards its
 // nearest point: the baked shadow, or marched with 3 places), scattered by the angle from its
-// light (needs Fog.SHADE_GLSL: through, phaseHG, strikeShadeAt, AIR; Lightning.EMITTER_GLSL)
+// light (needs Fog.SHADE_GLSL: through, phaseHG, strikeShadeAt, AIR_EXTINCTION; Lightning.EMITTER_GLSL)
 Lightning.SCATTER_GLSL = SCATTER_SOURCE;
 
 M.Lightning = Lightning;

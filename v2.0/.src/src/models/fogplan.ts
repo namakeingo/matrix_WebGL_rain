@@ -10,6 +10,7 @@
 // 2026-11-10: new, from Fog.update, Fog.setEvery, Fog.due and Fog.buildDue.
 // 2026-11-11: same() tells an array from a typed array or a non-array, compares key sets both ways by own property, and takes objects that are not plain data by reference only.
 import { M } from "../engine/core";
+import { MIST_HEIGHT } from "../materials/fog";
 import { QualityFog } from "./quality/fog";
 import type { FogQualityView } from "./quality/fog";
 import { MouseParallax } from "./mouseparallax";
@@ -28,6 +29,8 @@ export interface FogPlanInput {
   // the uniform block: sigma, whether the fog is on, whether a strike's light shines, the colors, the volume's columns, its margin, each strike slot's level when shown (0: not shown)
   // and the scale it is divided by, the bolt's color, the march's segments, the sky's and the moon's gains
   sigma: number;
+  // the mist's extinction at the water per metre (Fog.mist(): the slider's factor times MIST), written into the block's last float while the fog is on; absent: 0
+  mist?: number;
   on: boolean;
   shining: boolean;
   colorMain: ArrayLike<number>;
@@ -42,6 +45,8 @@ export interface FogPlanInput {
   // the view's decisions: the level of detail, whether the workers' shade schedule exists, the path the last frame took, whether the camera's base changed since the volume was
   // built, the camera's parallax offsets now and those the volume was built for
   lod: boolean;
+  // the tests' switch (M.TEST only, Fog.coverage): false leaves the perceptual level out of the level of detail (the physical level alone); absent or true: the shipped one
+  coverage?: boolean;
   hasSched: boolean;
   shadeCpu: boolean;
   baseChanged: boolean;
@@ -56,6 +61,8 @@ export interface FogPlanInput {
   gap: number;
   draws: number;
   shadeRate: number;
+  // the factor of VOLUME_RATE (the volume's slices a second) where a test changes it; undefined: 1
+  volumeScale?: number;
   shadeCredit: number;
   shadePart: number;
   // the volume's refresh: the credit of slices, the next slice, the sweeps done, the periods (and octaves dropped) of the slices and the view they were made for (the camera's
@@ -123,14 +130,14 @@ function periods(input: FogPlanInput, all: boolean, every: Uint8Array, drop: Uin
     return { everyVersion: input.everyVersion, everyAcross: input.everyAcross };
   }
   const view: FogQualityView = {
-    inputs: { eyeY: input.eyeY, focal: input.focal, width: input.width, height: input.height, lensX: input.lensX || 0, lensY: input.lensY || 0, waterDrawn: input.waterDrawn, sigma: input.sigma, air: input.air },
+    inputs: { eyeY: input.eyeY, focal: input.focal, width: input.width, height: input.height, lensX: input.lensX || 0, lensY: input.lensY || 0, waterDrawn: input.waterDrawn, sigma: input.sigma, air: input.air, mist: input.mist || 0 },
     pitch: input.tilt,
     margin: input.margin,
     across: input.columns[0],
     down: input.columns[1],
   };
   for (let k = 0; k < SLICES; k++) {
-    const level = QualityFog.Lod.sliceLevel(view, k);
+    const level = input.coverage === false ? QualityFog.Lod.sliceLevel(view, k) : QualityFog.Lod.fullLevel(view, k);
     const n = QualityFog.Lod.levelRefresh(view, k, level);
     every[k] = n > 0 ? n : QualityFog.Lod.LEVEL_REFRESH_MOST;
     drop[k] = QualityFog.Lod.levelOctaves(view, k, level);
@@ -156,6 +163,11 @@ function plan(input: FogPlanInput): FogPlanOutput {
   d.set(input.boltColor, 20);
   d[23] = input.marchSegments;
   d.set(input.moonGain, 24);
+  d[27] = input.on ? input.mist || 0 : 0;
+  // the mist at the eye's height (fMain.w, the colour's unused fourth float), for fogAt's no-volume case; an input without a mist leaves the colour's own fourth value as it is
+  if (input.mist !== undefined) {
+    d[7] = input.on ? input.mist * Math.exp(-Math.max(input.eyeY, 0) / MIST_HEIGHT) : 0;
+  }
   const every = input.every.slice();
   const drop = input.drop.slice();
   const out: FogPlanOutput = {
@@ -221,7 +233,7 @@ function plan(input: FogPlanInput): FogPlanOutput {
     out.shadePart = (from0 + owed) % draws;
   }
   // the volume's slices: the time passed owes them at the rate (from where the last frame stopped), all of them when the view changed
-  let credit = input.sliceCredit + (view ? 0 : Math.max(0, passed) * VOLUME_RATE);
+  let credit = input.sliceCredit + (view ? 0 : Math.max(0, passed) * (input.volumeScale === undefined ? 1 : input.volumeScale) * VOLUME_RATE);
   const slices = view ? SLICES : Math.min(SLICES, Math.floor(credit + 1e-6));
   credit = view ? 0 : Math.max(0, credit - slices);
   const sliceFrom = view ? 0 : input.sliceNext;

@@ -15,9 +15,9 @@ float strikeUnit(int s, vec3 p, vec3 view, float lod, bool marched) {
     // (the tests' marched view: towards the region's nearest shadow point; not in the shipped source)
     float towardsBest;
     vec3 shadowPoint = marched ? emitterNearest(s, n, p, towardsBest) : near;
-    float shade = marched ? through(p, shadowPoint, 3, lod) : above ? exp(-AIR * best) : component(baked, n);
+    float shade = marched ? through(p, shadowPoint, 3, lod) : above ? exp(-AIR_EXTINCTION * best) : component(baked, n);
 #else
-    float shade = above ? exp(-AIR * best) : component(baked, n);
+    float shade = above ? exp(-AIR_EXTINCTION * best) : component(baked, n);
 #endif
     vec3 towards = dot(vector, vector) > 0.0 ? normalize(vector) : normalize(near - p);
     sum += e * shade * phaseHG(dot(towards, view));

@@ -5,6 +5,8 @@ precision highp sampler3D;
 ${TEST_VIEWS}
 ${FLOAT_PICTURES}
 ${M.Camera.GLSL}
+// (the aerial perspective beyond the fog volume is compiled into this program only: shaders/fog/aerial.glsl)
+#define AERIAL
 ${glsl.fog}
 ${glsl.medium}
 ${glsl.shade}
@@ -453,6 +455,31 @@ bool waveHit(vec3 eye, vec3 d, inout float t) {
   return false;
 }
 
+// The air from the fog volume's far end to the distance `end` along the unit ray d (aerialSpan, shaders/fog/aerial.glsl: the atmosphere's aerial perspective, tabulated by azimuth from the Orb and distance
+// under the seen sky's rows): nothing when `end` is within the volume or Distance fog is off. The light the volume gathered is nearer to the eye and not attenuated by the span, what lies behind is: the span's
+// light joins fog.rgb weighted by the volume's transmittance, and fog.a (the scalar the level of detail and the cuts read) takes the span's luminance-weighted transmittance; the colours of the span's
+// transmittance come back as the tint at luminance 1 (the colour seen is multiplied by fog.a and the tint). The program's only call of aerialSpan.
+vec3 airBeyond(inout vec4 fog, vec3 d, float end) {
+  vec3 tint = vec3(1.0);
+  if (end > FOG_FAR && fParams.z > -0.5) {
+    vec3 span;
+    vec3 haze;
+    aerialSpan(d, end, span, haze);
+    // the mist beyond the volume, in closed form from the volume's far end to the water (the ray ends at the surface, y = 0: the depth is k len (1 - e^(-a / H)) / (a / H), a the ray's height at
+    // FOG_FAR, one exponential; the series for a small a): what it lets through multiplies the span's transmittance and the air's light seen through it; its own light is the white scattering of the
+    // light around (the volume's fogLight with no cloud shade and no phase: the sky's ambient and the Orb's irradiance spread over the sphere, with the multiple scattering), seen through the air
+    float up = max(cEye.y + FOG_FAR * d.y, 0.0) / MIST_HEIGHT;
+    float clear = exp(-MIST_K * (end - FOG_FAR) * (up < 1.0e-3 ? 1.0 - 0.5 * up : (1.0 - exp(-up)) / up));
+    vec3 lit = (atmosAmbient() + MOON / FOUR_PI) * (1.0 + MULTIPLE);
+    haze = haze * clear + (1.0 - clear) * lit * span;
+    span *= clear;
+    float luminance = dot(span, vec3(0.2126, 0.7152, 0.0722));
+    fog.rgb += fog.a * haze;
+    fog.a *= luminance;
+    tint = span / luminance;
+  }
+  return tint;
+}
 void main() {
   vec3 d = rayOf(gl_FragCoord.xy);
   ivec2 pixel = ivec2(gl_FragCoord.xy);
@@ -479,8 +506,11 @@ void main() {
     }
     float t0 = mirrored ? cEye.y / -d.y : 0.0;
     vec4 fog = march ? fogMarch(cEye.xyz, d, t0, uFogDistance, mirrored, pixelJitter(pixel)) : fogAt(gl_FragCoord.xy, uFogDistance, mirrored);
+    // (the volume's views carry the air beyond its far end too: the per-channel transmittance in the transmittance view, the span's light in the light view)
+    vec3 tint = vec3(1.0);
+    if (!mirrored && !march) tint = airBeyond(fog, d, uFogDistance);
     bool light = uMode == MODE_FOGLIGHT || uMode == MODE_FOGLIGHTMARCH;
-    outColor = vec4(light ? fog.rgb * uViewScale : vec3(fog.a), 1.0);
+    outColor = vec4(light ? fog.rgb * uViewScale : vec3(fog.a) * tint, 1.0);
     return;
   }
   if (uMode == MODE_REFLECTIONPICTURE) {
@@ -535,6 +565,9 @@ void main() {
     if (up.w > 0.0) fogPixel = clamp((up.xy / up.w * 0.5 + 0.5) * cScreen.xy, -margin, cScreen.xy + margin);
   }
   fog = fogAt(fogPixel, end, false, strike);
+  // (the air from the volume's far end to the water's hit)
+  vec3 airTint = vec3(1.0);
+  if (water) airTint = airBeyond(fog, d, end);
   float transmittance = water ? fog.a : 1.0;
 #ifdef TEST_VIEWS
   bool sceneView = uMode == MODE_SCENE;
@@ -560,6 +593,9 @@ void main() {
   }
   vec3 color = unseen ? vec3(0.0) : atmosSeen(d);
   vec3 reflected = vec3(0.0);
+  // (the water off, below the horizon: the sky of the mirrored ray, as the fog read above is; atmosSeen reads a ray's height clamped at 0, so an unmirrored downward ray showed the horizon's sky; the
+  // sky variant (sky_fragment.glsl) draws only rays above the horizon and has no such line)
+  if (!water && uWaterOff && d.y < 0.0) color = atmosSeen(vec3(d.x, -d.y, d.z));
   if (water && !unseen) {
     vec3 s = cEye.xyz + hit * d;
     float lod = lodOf(hit / cEye.w);
@@ -646,6 +682,9 @@ void main() {
   }
 #endif
   // (the fog of the pixels that are not water was read above, with the water-off mirrored ray's pixel)
+  // (what lies behind the span of air past the volume is attenuated by its colour: airTint is 1 where there is none; the lines below are the sky variant's too)
+  color *= airTint;
+  reflected *= airTint;
   outColor = vec4(color * fog.a + fog.rgb, 1.0);
 #ifdef TEST_VIEWS
   if (uMode == MODE_SKY) outColor.rgb *= uViewScale;

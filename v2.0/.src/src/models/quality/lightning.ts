@@ -5,7 +5,7 @@
 // The bound, per unit of level:
 //   - the emitter's light e at any place is at most EMITTER_MAX = 2 pi EMISSION / NEAREST: a line light at the clamped nearest distance
 //     gives pi EMISSION / NEAREST, and the worst bend of a jagged channel 1.4 times that (probed over every vertex of many strikes);
-//   - the fog's light from it is e x the Henyey-Greenstein phase (PHASE_MAX, the forward peak at PHASE_G) x the albedo share (<= 1) x the
+//   - the fog's light from it is e x the Henyey-Greenstein phase (PHASE_MAX, the mix's forward peak) x the albedo share (<= 1) x the
 //     slices' weights, which sum to 1 - transmittance <= 1 (STRIKE_SCALE cancels); the water's is e x WATER_DIFFUSE / PI; both times the
 //     brightest channel of the strikes' tint (BOLT_MAX);
 //   - what shows is under 1/255 where the radiance is under RADIANCE_CUT = (1/255) / (the exposure's greatest gain x the tone curve's
@@ -18,7 +18,7 @@
 // 2026-11-07: new.
 import { M } from "../../engine/core";
 import { BOLT } from "../../materials/bolt";
-import { PHASE_G } from "../../materials/fog";
+import { PHASE_MAX as PHASE_PEAK } from "../../materials/fog";
 import { WATER_DIFFUSE } from "../../materials/water";
 import { Flash } from "../flash";
 import { QualityFog } from "./fog";
@@ -28,8 +28,8 @@ import type { QualityStatics, QualityParams } from "./jobs";
 
 // the emitter's greatest light at a place, per unit of level
 const EMITTER_MAX = (2 * Math.PI * Flash.EMISSION) / Flash.NEAREST;
-// the Henyey-Greenstein phase's forward peak at PHASE_G, 0.5% over
-const PHASE_MAX = ((1 - PHASE_G * PHASE_G) / (4 * Math.PI * Math.pow(1 - PHASE_G, 3))) * 1.005;
+// the phase function's largest value (the mix of two Henyey-Greenstein lobes: its forward peak, materials/fog.ts PHASE_MAX), 0.5% over
+const PHASE_MAX = PHASE_PEAK * 1.005;
 const WATER_GAIN = WATER_DIFFUSE / Math.PI;
 const BOLT_MAX = Math.max(BOLT[0], BOLT[1], BOLT[2]);
 // the radiance under which a pixel's change is under 1/255 (exposure's gain and the tone curve's slope as the fog's tail bound)

@@ -2,7 +2,7 @@
 // from the region's nearest shadow point through the clouds) baked on the CPU, pure: no GL, no page, importable in any thread (the quality workers bake with it).
 // A cell holds four values, one a region g: the region's shadow points (centroid, radius; radius -1: none; texels 4..35 of the emitter, 8 a region) give the one with
 // the least (distance - radius) from the cell (the first on a tie), near, and the value is 1 for a region with no point, else
-//   through(p, near, 4 places, lod) = exp(-(the mean of the medium's density at the 4 places + AIR) |near - p|)
+//   through(p, near, 4 places, lod) = exp(-(the mean of the medium's density at the 4 places + AIR_EXTINCTION) |near - p|)
 // with lod = max(shadeLod(p), lodOf(|near - p| / 4)) and the density of shaders/fog/medium.glsl (sigma e^(-max(y, 0) / 4), none under 1e-5; 0.2 + 0.8 smoothstep(0.4,
 // 0.6, n); n = 0.55 N24 + 0.3 N10 + 0.15 N4, each a trilinear read of the noise at the level lod - log2(size) clamped to 0..7, the octaves drifting with the time).
 // The cell's place and lod are the shader's (shadePlace, shadeLod; the log as its text prints it: 6 decimals).
@@ -19,7 +19,7 @@
 // Changelog:
 // 2026-11-08: new.
 import { M } from "../../engine/core";
-import { AIR } from "../../materials/fog";
+import { AIR_EXTINCTION, MIST_RATIO, mistDepth } from "../../materials/fog";
 import { QualityFogShade } from "./fogshade";
 
 const ACROSS = 128;
@@ -114,6 +114,8 @@ let mix24 = 0;
 let mix10 = 0;
 let mix4 = 0;
 let sigmaNow = 0;
+// the mist's extinction at the water for this bake (materials/fog.ts: the clouds' sigma times MIST_RATIO)
+let mistNow = 0;
 let timeNow = 0;
 
 // an octave's value (0 to 1) at the level and the weight between it and the next
@@ -204,18 +206,19 @@ function group(noise: Uint8Array, points: Float32Array, g: number, px: number, p
     const u = (i + 0.5) / 4;
     depth += density(noise, px + ex * u, py + ey * u, pz + ez * u);
   }
-  return Math.exp(-(depth / 4 + AIR) * len);
+  return Math.exp(-(depth / 4 + AIR_EXTINCTION) * len - mistDepth(mistNow, py, ny, len));
 }
 
-// cells layerFrom..layerTo-1 (layers of the grid), rows 0..rows-1, columns x0..x0+nx-1, into out as half quads
-function bake(noise: Uint8Array, points: Float32Array, sigma: number, time: number, out: Uint16Array, layerFrom: number, layerTo: number, x0: number, nx: number, rows: number): void {
+// cells layerFrom..layerTo-1 (layers of the grid), rows y0..y0+rows-1 (y0 0: the rows from the water), columns x0..x0+nx-1, into out as half quads (the first row of the box first)
+function bake(noise: Uint8Array, points: Float32Array, sigma: number, time: number, out: Uint16Array, layerFrom: number, layerTo: number, x0: number, nx: number, rows: number, y0: number = 0): void {
   sigmaNow = sigma;
+  mistNow = sigma * MIST_RATIO;
   timeNow = time;
   const toHalf = QualityFogShade.toHalf;
   let at = 0;
   for (let iz = layerFrom; iz < layerTo; iz++) {
     const z = NEAR * Math.exp((iz / (DEEP - 1)) * LOG);
-    for (let iy = 0; iy < rows; iy++) {
+    for (let iy = y0; iy < y0 + rows; iy++) {
       const gy = iy / (UP - 1);
       const y = gy * gy * TOP;
       const up = (2 * Math.sqrt(Math.max(y, 0) * TOP)) / (UP - 1);

@@ -19,8 +19,9 @@ void main() {
   vec3 d = columnRay(gl_FragCoord.xy);
   float a = sliceAt(float(uSlice) / SLICES);
   float b = sliceAt(float(uSlice + 1) / SLICES);
-  vec4 direct = uSlice == 0 ? vec4(0.0, 0.0, 0.0, 1.0) : texelFetch(uSumDirect, c, 0);
-  vec4 mirror = uSlice == 0 ? vec4(0.0, 0.0, 0.0, 1.0) : texelFetch(uSumMirror, c, 0);
+  // (rgb the light so far, a the optical depth so far)
+  vec4 direct = uSlice == 0 ? vec4(0.0) : texelFetch(uSumDirect, c, 0);
+  vec4 mirror = uSlice == 0 ? vec4(0.0) : texelFetch(uSumMirror, c, 0);
   float lod = sliceLod(a, b);
   if (!directHeld(gl_FragCoord.xy, a)) direct = gather(direct, cEye.xyz, d, a, b, false, lod, uMarched);
   if (d.y < 0.0) {

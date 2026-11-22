@@ -1,6 +1,6 @@
 // QualityFogShade: the fog's sky and moon shade grid (effects/fog.ts: what gets to each cell of the 128 x 64 x 96 grid from the sky and the moon through the
 // clouds) baked on the CPU, pure: no GL, no page, importable in any thread (the quality workers bake with it).
-// A cell holds (sky, moon) = through(p, p + dir 8 m, 4 places) for dir = up and, for the moon, the mean over the penumbra kernel's directions over its disc: exp(-(the mean of the medium's density at the 4 places + AIR)
+// A cell holds (sky, moon) = through(p, p + dir 8 m, 4 places) for dir = up and, for the moon, the mean over the penumbra kernel's directions over its disc: exp(-(the mean of the medium's density at the 4 places + AIR_EXTINCTION)
 // x 8), the density of shaders/fog/medium.glsl (sigma e^(-max(y, 0) / 4), none under 1e-5; 0.2 + 0.8 smoothstep(0.4, 0.6, n); n = 0.55 N24 + 0.3 N10 + 0.15 N4,
 // each a trilinear read of the noise at the level lod - log2(size), the octaves drifting with the time). The cell's place and lod are the shader's
 // (shadePlace, shadeLod; the constants as its text prints them: the log with 6 decimals).
@@ -17,10 +17,13 @@
 // GPU and posts a job for each draw k for the time + (k + 1) / rate.
 //
 // Changelog:
+// 2026-11-21: viewRays, columnsFor, boxesFor (the shadow grid's boxes from the view's rays, the mouse parallax's yaw, eye offset and drift included).
+// 2026-11-21: bake's last argument y0, the first row of a box (the rows under it are read by nothing when the view only looks up); depthOf, rowFrom (Feature U1, story U7).
 // 2026-11-12: the moon channel the mean over the penumbra kernel's directions (MoonDisc: MOON_KERNEL, the GPU's constants), the kernel an optional argument of bake.
 // 2026-11-08: new.
 import { M } from "../../engine/core";
-import { AIR } from "../../materials/fog";
+import { Frame } from "../frame";
+import { AIR_EXTINCTION, MIST_RATIO, mistDepth } from "../../materials/fog";
 import { MOON_DIR, MoonDisc } from "../../materials/sky";
 
 const ACROSS = 128;
@@ -153,6 +156,8 @@ let mix24 = 0;
 let mix10 = 0;
 let mix4 = 0;
 let sigmaNow = 0;
+// the mist's extinction at the water for this bake (materials/fog.ts: the clouds' sigma times MIST_RATIO)
+let mistNow = 0;
 let timeNow = 0;
 
 function octave(noise: Float32Array, q0: number, q1: number, q2: number, level: number, mix: number): number {
@@ -188,7 +193,7 @@ function through(noise: Float32Array, x: number, y: number, z: number, dx: numbe
     const s = 1 + 2 * i;
     depth += density(noise, x + dx * s, y + dy * s, z + dz * s);
   }
-  return Math.exp(-(depth / 4 + AIR) * 8);
+  return Math.exp(-(depth / 4 + AIR_EXTINCTION) * 8 - mistDepth(mistNow, y, y + dy * 8, 8));
 }
 
 // the level and the weight to the next one for an octave of `size` metres at the cell's lod
@@ -209,14 +214,15 @@ function setLevel(lod: number, size: number, which: number): void {
 
 const LOG2_128 = 7;
 
-// cells layerFrom..layerTo-1 (layers of the grid), rows 0..rows-1, columns x0..x0+nx-1, into out as half pairs
-function bake(noise: Float32Array, sigma: number, time: number, out: Uint16Array, layerFrom: number, layerTo: number, x0: number, nx: number, rows: number, kernel: number = MOON_KERNEL): void {
+// cells layerFrom..layerTo-1 (layers of the grid), rows y0..y0+rows-1 (y0 0: the rows from the water), columns x0..x0+nx-1, into out as half pairs (the first row of the box first)
+function bake(noise: Float32Array, sigma: number, time: number, out: Uint16Array, layerFrom: number, layerTo: number, x0: number, nx: number, rows: number, kernel: number = MOON_KERNEL, y0: number = 0): void {
   sigmaNow = sigma;
+  mistNow = sigma * MIST_RATIO;
   timeNow = time;
   let at = 0;
   for (let iz = layerFrom; iz < layerTo; iz++) {
     const z = NEAR * Math.exp((iz / (DEEP - 1)) * LOG);
-    for (let iy = 0; iy < rows; iy++) {
+    for (let iy = y0; iy < y0 + rows; iy++) {
       const gy = iy / (UP - 1);
       const y = gy * gy * TOP;
       const up = (2 * Math.sqrt(Math.max(y, 0) * TOP)) / (UP - 1);
@@ -336,6 +342,124 @@ class Schedule {
   }
 }
 
-export const QualityFogShade = { ACROSS, UP, DEEP, TOP, NEAR, FAR, SPAN, MOON_KERNEL, MIP_FROM, MIP_LAST, MIP_TEXELS, MAX_TIME_ERROR, mipOffset, packMips, toHalf, fromHalf, slabBytes, bake, Schedule };
+// the depth (m) of layer n's node (the shader's z: NEAR e^(n / (DEEP - 1) LOG)); 0 under the first layer, whose reads begin at 0
+function depthOf(layer: number): number {
+  return layer < 0 ? 0 : NEAR * Math.exp((layer / (DEEP - 1)) * LOG);
+}
+
+// The first row of the grid that a read at depth zFrom or more can touch when every ray of the view rises at least `slope` per metre of depth (the camera looking up: sky only):
+// such a ray is at the height eyeY + z slope or more at depth z, and rows are sqrt(height / TOP) (UP - 1). Two rows of slack (the trilinear read's node, the bake's own slack). 0 when
+// the slope is not above 0: a ray going down meets the water, so the cells from the water up are read (also by the mirrored reads)
+function rowFrom(eyeY: number, slope: number, zFrom: number): number {
+  if (!(slope > 0)) {
+    return 0;
+  }
+  const y = eyeY + zFrom * slope;
+  const row = Math.floor(Math.sqrt(Math.min(1, Math.max(y, 0) / TOP)) * (UP - 1)) - 2;
+  return row > 0 ? row : 0;
+}
+
+// The rays of the extended view, for the view and its drifted variants: the 9 x 9 places of the window extended by (mx, my) pixels on each side (edges and corners included), for the pitch
+// tilt + a driftPitch and the yaw yaw + b driftYaw, a and b in -1, 0, 1 (the boxes are made again only after the mouse parallax's drift past its tolerance: the cells a drifted view reads are
+// read by one of these). cx, cy: the image's centre (the lens); each ray a unit direction, 3 numbers in out (at least 3 x 81 x 9 long). Returns the number of rays.
+const VIEW_GRID = 8;
+const VIEW_RAYS = (VIEW_GRID + 1) * (VIEW_GRID + 1) * 9;
+function viewRays(tilt: number, yaw: number, focal: number, cx: number, cy: number, width: number, height: number, mx: number, my: number, driftPitch: number, driftYaw: number, out: Float64Array): number {
+  let n = 0;
+  for (let a = -1; a <= 1; a++) {
+    for (let b = -1; b <= 1; b++) {
+      const axes = Frame.axes(tilt + a * driftPitch, yaw + b * driftYaw);
+      for (let j = 0; j <= VIEW_GRID; j++) {
+        for (let i = 0; i <= VIEW_GRID; i++) {
+          const u = (-mx + ((width + 2 * mx) * i) / VIEW_GRID - cx) / focal;
+          const v = (cy - (-my + ((height + 2 * my) * j) / VIEW_GRID)) / focal;
+          const x = axes.forward[0] + u * axes.right[0] + v * axes.up[0];
+          const y = axes.forward[1] + u * axes.right[1] + v * axes.up[1];
+          const z = axes.forward[2] + u * axes.right[2] + v * axes.up[2];
+          const length = Math.hypot(x, y, z);
+          out[n * 3] = x / length;
+          out[n * 3 + 1] = y / length;
+          out[n * 3 + 2] = z / length;
+          n++;
+        }
+      }
+    }
+  }
+  return n;
+}
+
+// The grid's columns (nodes, first and last) a draw of layers first..last can read, from the extremes sMin and sMax of dx / (-dz) over the view's rays and the eye's x range
+// eyeX +- driftEye. A read at depth D along a ray is at the column of g = (eyeX + s D) / max(D, NEAR) (shaders/fog/medium.glsl gridAt: x over the distance, the distance not under
+// NEAR), a trilinear read of layer n comes from the depths whose layer coordinate lies in [n - 1, n + 1) (clamped: the first layer's from depth 0, the last layer's up to any depth). g is
+// linear in the eye and in s, and monotone in D on each side of NEAR, so its extremes are at the corners of those ranges and the ends of the depths' range (0, NEAR, the range's end,
+// and infinity, where g is s). One node of slack to the first and two to the last (the nodes a read touches, floor and floor + 1, and one more each way).
+function columnsFor(sMin: number, sMax: number, eyeX: number, driftEye: number, first: number, last: number): number[] {
+  const from = first - 1 <= 0 ? 0 : depthOf(first - 1);
+  const to = last + 1 >= DEEP - 1 ? Infinity : depthOf(last + 1);
+  const depths = [from];
+  if (from < NEAR && NEAR < to) {
+    depths.push(NEAR);
+  }
+  depths.push(to);
+  let low = Infinity;
+  let high = -Infinity;
+  for (let e = -1; e <= 1; e += 2) {
+    const x = eyeX + e * driftEye;
+    for (let k = 0; k < 2; k++) {
+      const s = k === 0 ? sMin : sMax;
+      for (let d = 0; d < depths.length; d++) {
+        const D = depths[d];
+        const g = D === Infinity ? s : (x + s * D) / Math.max(D, NEAR);
+        low = Math.min(low, g);
+        high = Math.max(high, g);
+      }
+    }
+  }
+  const column = (g: number) => Math.min(1, Math.max(0, (g / SPAN + 1) / 2)) * (ACROSS - 1);
+  return [Math.max(0, Math.floor(column(low)) - 1), Math.min(ACROSS - 1, Math.floor(column(high)) + 2)];
+}
+
+// The boxes [first column, columns, rows, first row] of the draws of `layers` layers (the shadow grid's cells the view can read) from the rays (viewRays, `count` of them): the
+// columns of columnsFor, the rows up to the height the highest ray (or the lowest ray mirrored in the water) reaches at the draw's deepest depth plus 2 rows of slack, and (cull: true, the shipped
+// behaviour) from the row rowFrom gives for the lowest slope when every ray rises. A ray that does not go forward (dz not under 0) gives the whole grid. eyeY is the eye's height;
+// driftEye the eye's drift tolerance (x and y).
+function boxesFor(rays: ArrayLike<number>, count: number, eyeX: number, eyeY: number, layers: number, driftEye: number, cull: boolean): number[][] {
+  let sMin = Infinity;
+  let sMax = -Infinity;
+  let slopeMin = Infinity;
+  let slopeMax = -Infinity;
+  let forward = count > 0;
+  for (let n = 0; n < count && forward; n++) {
+    const dz = rays[n * 3 + 2];
+    if (!(dz < -1e-6)) {
+      forward = false;
+      break;
+    }
+    const s = rays[n * 3] / -dz;
+    const slope = rays[n * 3 + 1] / -dz;
+    sMin = Math.min(sMin, s);
+    sMax = Math.max(sMax, s);
+    slopeMin = Math.min(slopeMin, slope);
+    slopeMax = Math.max(slopeMax, slope);
+  }
+  // (the highest height a read reaches at depth D: a direct read at eyeY + D slopeMax from the highest ray, a read mirrored in the water at D (-slopeMin) - eyeY from the lowest)
+  const rising = forward ? Math.max(slopeMax, 0) : 0;
+  const falling = forward ? Math.max(-slopeMin, 0) : 0;
+  const lowest = forward && cull ? Math.max(0, slopeMin) : 0;
+  const boxes: number[][] = [];
+  for (let k = 0; k < DEEP; k += layers) {
+    const last = Math.min(DEEP, k + layers) - 1;
+    const columns = forward ? columnsFor(sMin, sMax, eyeX, driftEye, k, last) : [0, ACROSS - 1];
+    const deepest = Math.min(DEEP - 1, k + layers);
+    const z = depthOf(deepest);
+    const top = Math.max(eyeY + driftEye + z * rising, z * falling - (eyeY - driftEye));
+    const rows = forward ? Math.min(UP, Math.ceil(Math.sqrt(Math.min(1, top / TOP)) * (UP - 1)) + 2) : UP;
+    const from = Math.min(rows - 1, rowFrom(eyeY - driftEye, lowest, depthOf(k - 1)));
+    boxes.push([columns[0], columns[1] - columns[0] + 1, rows - from, from]);
+  }
+  return boxes;
+}
+
+export const QualityFogShade = { depthOf, rowFrom, viewRays, columnsFor, boxesFor, VIEW_RAYS, ACROSS, UP, DEEP, TOP, NEAR, FAR, SPAN, MOON_KERNEL, MIP_FROM, MIP_LAST, MIP_TEXELS, MAX_TIME_ERROR, mipOffset, packMips, toHalf, fromHalf, slabBytes, bake, Schedule };
 
 M.QualityFogShade = QualityFogShade;

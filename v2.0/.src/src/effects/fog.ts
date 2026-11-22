@@ -4,14 +4,14 @@
 // - The clouds: value noise of three sizes (24, 10 and 4 m), drifting and swirling, their
 //   billows the noise between 0.4 and 0.6, with a haze of a fifth between them; as dense as Fog
 //   intensity sets it; thinning out within about 4 m above the water. The air itself scatters and
-//   takes away light too (AIR per metre: about 1 km of visibility).
+//   takes away light too (AIR_SCATTER and AIR_EXTINCTION per metre: the atmosphere's clear air at the ground, about 0.65% over 300 m).
 // - Their light, single scattering: the atmosphere's (the mean radiance of its sky, atmosAmbient(): the same sky the sky is seen as)
 //   and diffuse moonlight from above (MOON, from MOON_DIR: materials/sky.ts), each through the
 //   clouds between, scattered by the clouds' albedo (the two fog colors, linear, mixed by a noise
 //   of its own: albedoAt); a little more for light scattered more than once (MULTIPLE). The
-//   medium's own parameters (DENSITY_FULL, AIR, MULTIPLE, PHASE_G, the default colors) are in
+//   medium's own parameters (DENSITY_FULL, AIR_SCATTER, AIR_EXTINCTION, MULTIPLE, the phase function's constants, the default colors) are in
 //   materials/fog.ts. The strikes' light
-//   is scattered by the same albedo (the air's share of it white).
+//   is scattered by the same albedo (the air's share of it white: AIR_SCATTER).
 // - The clouds' shadow of the sky and the moon, baked: what gets to each place from them (8 m
 //   towards them through the clouds, 4 places) in a grid fixed in the world (SHADE_ACROSS across
 //   the world's width by x / distance, SHADE_UP up to SHADE_TOP by the height's square root: thin
@@ -31,7 +31,7 @@
 //   screen past each side, for reflected rays leaving the screen) and slice (from t(k / SLICES) to
 //   t((k + 1) / SLICES), t(u) = SLICE_NEAR (e^(u ln(1 + FOG_FAR / SLICE_NEAR)) - 1): thin near
 //   the eye, about 6% of the distance far away), the light gathered from the eye to the slice's
-//   far end and what the medium lets through to there; each slice's medium taken at its middle,
+//   far end and the optical depth of the medium to there (what it lets through is its exponential: fogAt); each slice's medium taken at its middle,
 //   its light weighted by (1 - e^(-σ dt)) / σ. Two volumes: along the eye's rays, and along their
 //   mirror images below the water from where each meets still water (the reflection's). Built
 //   slice by slice, two draws a slice (Froxels): the first reads the columns' sums so far and
@@ -87,6 +87,9 @@
 //   `QualityFog.Lod`) the refresh period grows to 32 sweeps and more octaves are read as their mean (`uDrop`). With lod off none applies.
 //
 // Changelog:
+// 2026-11-21: the shadow grid's boxes follow the mouse parallax's yaw and eye offset (viewBoxes: QualityFogShade.viewRays, boxesFor; lowestSlope removed, the drift taken by drifted rays).
+// 2026-11-21: the shadow grid's boxes carry a first row (viewBoxes, lowestSlope): a view whose every ray rises bakes the rows from the lowest height it reads, not from the water (QualityFogShade.rowFrom).
+// 2026-11-21: Fog.coverage (the tests' switch), the plan's `coverage`: the perceptual level of detail (QualityFog.Lod.fullLevel).
 // 2026-11-18: the plan's input carries the camera's lens and the lens the volume was built for (builtLens, kept with builtFor): a lens step is a move of the view.
 // 2026-11-12: compile time: skyShadeMarched one march loop for the sky and the moon (i = -1 the sky), moonThrough folded into it; gather one density call site (densityFar's `far` flag, false = density).
 // 2026-11-12: planInput: no grid framebuffers (no float render targets) gives 0 draws instead of reading their length (the frame threw with the extensions missing).
@@ -98,6 +101,10 @@
 // 2026-11-07: level of detail: the dense tail, the refresh by distance and the far octaves (Effect.lod).
 // 2026-11-06: the quality job "fog" (the slices are its units): slices past the water along a column's rays are held, not
 //   gathered; SLICES, SLICE_NEAR and FOG_FAR owned by models/quality/fog.ts.
+// 2026-11-20: the volumes' and the sums' alpha hold the optical depth, not the transmittance (a product of per-slice transmittances written as half floats rounded down lost 4.7% in clear air); fogAt reads exp(-a).
+// 2026-11-21: the mist, an exponential height layer of white scattering (Feature U1, story U4: materials/fog.ts MIST, MIST_HEIGHT, mistDepth): Fog.mist() = intensity x MIST goes into the plan's block (fMoonGain.w);
+//   the test switch noClouds takes the clouds out (sigma() 0) with the mist kept.
+// 2026-11-20: Fog intensity maps to (intensity - 1) / 99 of the full density (was intensity / 100): the slider's minimum 1 is the air alone, no clouds.
 // 2026-11-20: the atmosphere's tables and the sky's picture built off the main thread (Feature S1, story A4): setLight moves the gains at once and starts a 100 ms debounce (M.Debounce),
 //   its end asks the atmosphere's JobTask (models/quality/atmosphere.ts, workers/atmosphereworker.ts) and a later update uploads the answer; the first build, a flush (reset, the first
 //   update, the tests' frames) and a missing task build here with the same function.
@@ -108,12 +115,14 @@
 //   restarting the whole volume.
 // 2026-11-04: TypeScript, a module of src/effects/ (was effects/fog.js); the medium's and the
 //   sky's physical parameters moved to materials/fog.ts and materials/sky.ts, values unchanged.
-import { M } from "../engine/core";
+import { M, testOptions } from "../engine/core";
 import { fill } from "../engine/glsl";
+import { FogWorldBuild } from "../engine/fogworldbuild";
 import type { ShaderProgram, UniformBlock, Uniforms, Programs, ProgramSources } from "../engine/gl";
 import type { EffectContext, SharedGlsl } from "../engine/effect";
 import type { Capabilities } from "../engine/namespace";
-import { DENSITY_FULL, MAIN_DEFAULT, SECONDARY_DEFAULT, AIR, MULTIPLE, PHASE_G } from "../materials/fog";
+import { Atmosphere } from "../models/atmosphere";
+import { DENSITY_FULL, MAIN_DEFAULT, SECONDARY_DEFAULT, AIR_SCATTER, AIR_EXTINCTION, MIST, MIST_HEIGHT, MULTIPLE, PHASE_FORWARD_G, PHASE_BACKWARD_G, PHASE_FORWARD_W, phaseGlsl } from "../materials/fog";
 import { MOON, MOON_DIR, MoonDisc } from "../materials/sky";
 import { QualityFog } from "../models/quality/fog";
 import { QualityFogShade } from "../models/quality/fogshade";
@@ -125,6 +134,8 @@ import type { QualityStatics, QualityParams } from "../models/quality/jobs";
 import type { FogQualityView } from "../models/quality/fog";
 import type { ParallaxOffsets } from "../models/mouseparallax";
 import { FogPlan } from "../models/fogplan";
+import { FogAccum } from "../models/fogaccum";
+import { FogAccumulation, fogAccumPrograms } from "../engine/fogaccum";
 import { ReflectionFrame } from "../models/reflectionframe";
 import type { ReflectionFrameOf } from "../models/reflectionframe";
 import type { FogPlanInput, FogPlanOutput } from "../models/fogplan";
@@ -136,6 +147,7 @@ import BLUR_FRAGMENT_SOURCE from "../shaders/fog/blur_fragment.glsl";
 import FINISH_FRAGMENT_SOURCE from "../shaders/fog/finish_fragment.glsl";
 import FOG_SOURCE from "../shaders/fog/fog.glsl";
 import ATMOSPHERE_SOURCE from "../shaders/fog/atmosphere.glsl";
+import AERIAL_SOURCE from "../shaders/fog/aerial.glsl";
 import MEDIUM_SOURCE from "../shaders/fog/medium.glsl";
 import SHADE_SOURCE from "../shaders/fog/shade.glsl";
 import TEST_SOURCE from "../shaders/fog/test.glsl";
@@ -168,6 +180,10 @@ const SLICE_NEAR = QualityFog.SLICE_NEAR;
 const COLUMNS_MOST = 28800;
 const TILE_LEAST = 8;
 const MARGIN = 0.1;
+// how far the view can drift from the one the shadow grid's boxes were made for before they are made again (the mouse parallax's tolerance, models/mouseparallax.ts: 0.004 rad of pitch and of yaw, 0.03 m of the eye, a tenth more)
+const DRIFT_PITCH = 0.0045;
+const DRIFT_YAW = 0.0045;
+const DRIFT_EYE = 0.033;
 // the wait after the last change of the Sky/Orb settings before the atmosphere's tables are built, and how many main-thread task times are kept
 const ATMOSPHERE_DEBOUNCE_MS = 100;
 const ATMOSPHERE_TASKS_KEPT = 256;
@@ -217,8 +233,8 @@ interface FogPasses {
   strikesCopy: ShaderProgram;
 }
 
-// the shadow grid's cells a draw of layers covers: [first column, columns, rows]
-type ViewBox = [number, number, number];
+// the shadow grid's cells a draw of layers covers: [first column, columns, rows, first row]
+type ViewBox = [number, number, number, number];
 
 // a pair of volumes along the camera's rays (direct and mirrored) and the columns' sums so far,
 // built slice by slice: each slice gathered by one program into the volumes' layer, then copied
@@ -300,6 +316,10 @@ class Froxels {
   // held: per slice 1 where some column may hold its direct slice (the gather's uCull), or null
   build(name: string, gather: ShaderProgram, copy: ShaderProgram, from: number, to: number, stack = 0, held: Uint8Array | null = null, drops: Uint8Array | null = null) {
     const gl = this.gl;
+    // (the world-fixed volume, the test option fogWorld: the camera-fixed volumes are not built)
+    if (FogWorldBuild.active(this.effect)) {
+      return;
+    }
     const guard = this.effect.guard;
     const each = guard.size(name, "slice");
     const offset = stack * SLICES;
@@ -367,6 +387,8 @@ export class Fog extends M.Effect {
   warmed: boolean;
   stale: boolean;
   boxes: ViewBox[];
+  // the rays viewBoxes makes its boxes from (QualityFogShade.viewRays), kept: no allocation when the view moves
+  viewRayBuffer: Float64Array;
   shadeCredit: number;
   shadePart: number;
   // the shade grid baked by the quality workers (Effect.lod on, with the pool: models/quality/fogshade.ts): the pool, the schedule (null until the noise's
@@ -441,7 +463,7 @@ export class Fog extends M.Effect {
   skyMoonBrightness: number;
   airToneSetting: string;
   moonTone: string;
-  // the atmosphere's tables' uniform block (aSH, aInfo, aOrb: 11 vec4), the seen sky's picture (Atmosphere.skyTexture: SKY_W x SKY_H RGBA16F, read by the water's programs as uSkyTable), and the
+  // the atmosphere's tables' uniform block (aSH, aInfo, aOrb: 11 vec4), the water programs' picture (Atmosphere.picture: the seen sky's rows and the aerial span's table, SKY_W x PICTURE_H RGBA16F, read as uSkyTable), and the
   // milliseconds the last build took
   atmosphereMs: number;
   // the tables built off the main thread: the task (src/index.ts gives it; null: built here), the wait that follows the settings (100 ms after the last change), whether tables are owed
@@ -455,6 +477,19 @@ export class Fog extends M.Effect {
   atmosphereTasks: number[];
   atmosphereUpdated: boolean;
   settleAtmosphere: boolean;
+  // M.TEST only: the factor of the volume's and the shade grids' refresh rates (1 as shipped; the cost tests set it near 0 for a static density)
+  rateScale: number;
+  // M.TEST only: the clouds taken out (sigma() 0) with the mist kept (the mist is the slider's factor times MIST, not tied to sigma)
+  noClouds: boolean;
+  // the tests' switch of the perceptual level of detail (QualityFog.Lod.fullLevel; false: the physical level alone); shipped, always on
+  coverage: boolean;
+  // the tests' switch of the shadow grid's culling (rows under the lowest height the view reads are not baked; false: from row 0, as before the story; M.TEST only, shipped always true)
+  cull: boolean;
+  // the volume's temporal accumulation (Feature U1, story U6; M.TEST only, shipped always off): the frames N of the average (0 off; the test option fogAccum's value as M.FogAccum.parse reads it), the frames blended since the last reset, the N the volume is held for, the GL half
+  accum: number;
+  accumFrames: number;
+  accumLast: number;
+  accumulator: FogAccumulation | null;
   atmosphereBlock: UniformBlock;
   skyTexture: WebGLTexture;
   constructor(context: EffectContext) {
@@ -475,13 +510,22 @@ export class Fog extends M.Effect {
     this.atmosphereTasks = [];
     this.atmosphereUpdated = false;
     this.settleAtmosphere = !!M.TEST;
+    this.rateScale = 1;
+    this.noClouds = false;
+    this.coverage = true;
+    this.cull = true;
+    this.accum = M.TEST ? FogAccum.parse(testOptions().fogAccum) : 0;
+    this.accumFrames = 0;
+    this.accumLast = 0;
+    this.accumulator = null;
+    this.viewRayBuffer = new Float64Array(QualityFogShade.VIEW_RAYS * 3);
     this.atmosphereDebounce = new M.Debounce(ATMOSPHERE_DEBOUNCE_MS, () => this.requestAtmosphere());
     this.atmosphereBlock = this.block("Atmosphere", ATMOSPHERE_FLOATS);
     // (the picture's storage made once on its own unit: the builds only fill it)
     this.skyTexture = this.createTexture();
     gl.activeTexture(gl.TEXTURE0 + M.UNITS.sky);
     gl.bindTexture(gl.TEXTURE_2D, this.skyTexture);
-    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA16F, M.Atmosphere.SKY_W, M.Atmosphere.SKY_H);
+    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA16F, M.Atmosphere.SKY_W, M.Atmosphere.PICTURE_H);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -551,7 +595,7 @@ export class Fog extends M.Effect {
     this.strikeUid = new Int32Array(SLOTS).fill(-1);
     this.strikeTry = new Uint8Array(SLOTS);
     this.strikeCpu = new Uint8Array(SLOTS);
-    // the shadow grid's cells the view reads, per draw of layers: [first column, columns, rows]
+    // the shadow grid's cells the view reads, per draw of layers: [first column, columns, rows, first row]
     this.boxes = [];
     this.stale = true;
     this.warmed = false;
@@ -675,7 +719,8 @@ export class Fog extends M.Effect {
         fog.stale = true;
       },
       p218_setting_FogIntensity: (fog: Fog, v: number) => {
-        fog.intensity = v / 100;
+        // (intensity - 1) / 99 of the full density: the slider's minimum, 1, is the air alone (no clouds), 100 the full density; a value below 1 (a test's 0) clamps to none
+        fog.intensity = Math.max(0, (v - 1) / 99);
         fog.stale = true;
       },
       p216_setting_FogColorMain: (fog: Fog, v: string) => {
@@ -743,7 +788,7 @@ export class Fog extends M.Effect {
     const gl = this.gl;
     gl.activeTexture(gl.TEXTURE0 + M.UNITS.sky);
     gl.bindTexture(gl.TEXTURE_2D, this.skyTexture);
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, M.Atmosphere.SKY_W, M.Atmosphere.SKY_H, gl.RGBA, gl.FLOAT, tables.subarray(M.QualityAtmosphere.BLOCK_FLOATS));
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, M.Atmosphere.SKY_W, M.Atmosphere.PICTURE_H, gl.RGBA, gl.FLOAT, tables.subarray(M.QualityAtmosphere.BLOCK_FLOATS));
     this.stale = true;
     this.atmosphereOwed = this.atmosphereDebounce.pending || this.atmosphereWanted !== 0;
   }
@@ -809,7 +854,12 @@ export class Fog extends M.Effect {
 
   // the medium's density per metre at its densest (none without float pictures for its noise)
   sigma() {
-    return this.caps.floats ? this.intensity * DENSITY_FULL : 0;
+    return this.caps.floats && !(M.TEST && this.noClouds) ? this.intensity * DENSITY_FULL : 0;
+  }
+
+  // the mist's extinction per metre at the water: the Fog intensity's factor times MIST (0 at Fog intensity 1; not tied to the float pictures: the fallback's transmittance applies it too)
+  mist() {
+    return this.intensity * MIST;
   }
 
   static programs(glsl: SharedGlsl, caps: Capabilities): ProgramSources {
@@ -823,6 +873,8 @@ export class Fog extends M.Effect {
       fogStrikes: [M.FULL_VERTEX, Fog.strikesFragment(glsl, M.TEST)],
       fogCopy: [M.FULL_VERTEX, Fog.COPY_FRAGMENT],
       fogStrikesCopy: [M.FULL_VERTEX, Fog.COPY_FRAGMENT],
+      ...(FogAccum.wanted(M.TEST, testOptions().fogAccum) ? fogAccumPrograms() : {}),
+      ...FogWorldBuild.programs(Fog),
     };
   }
 
@@ -832,6 +884,8 @@ export class Fog extends M.Effect {
     const names = ["noiseSeed", "noiseBlur", "noiseFinish", "fogShade", "fogStrikeShade", "fogVolume", "fogStrikes", "fogCopy", "fogStrikesCopy"];
     const [seed, blur, finish, shade, strikeShade, volume, strikes, copy, strikesCopy] = this.ownPrograms(programs, names);
     this.passes = { shade, strikeShade, volume, strikes, copy, strikesCopy };
+    this.accumulator = this.caps.floats && FogAccum.wanted(M.TEST, testOptions().fogAccum) ? new FogAccumulation(this, programs, SLICES) : null;
+    FogWorldBuild.init(this, programs);
     shade.samplers({ uNoise: M.UNITS.noise });
     strikeShade.samplers({ uNoise: M.UNITS.noise, uEmitter: M.UNITS.work });
     volume.samplers({ uNoise: M.UNITS.noise, uShade: M.UNITS.shade, uSumDirect: M.UNITS.fogSum, uSumMirror: M.UNITS.fogSumMirror });
@@ -939,7 +993,7 @@ export class Fog extends M.Effect {
     const draws = this.shadeDraws.length;
     this.strikeSets = [];
     for (let k = 0; k < Q.MOST_HELD; k++) {
-      this.strikeSets.push({ uid: -1, slot: -1, slabs: Array.from({ length: draws }, () => new Uint16Array(this.layers * SHADE_UP * SHADE_ACROSS * 4)), box: new Int32Array(draws * 3), plan: [] });
+      this.strikeSets.push({ uid: -1, slot: -1, slabs: Array.from({ length: draws }, () => new Uint16Array(this.layers * SHADE_UP * SHADE_ACROSS * 4)), box: new Int32Array(draws * 4), plan: [] });
     }
     this.strikeSched = new Q.Schedule(draws);
   }
@@ -984,10 +1038,11 @@ export class Fog extends M.Effect {
       if (!box || !points) {
         continue;
       }
-      set.box[part * 3] = box[0];
-      set.box[part * 3 + 1] = box[1];
-      set.box[part * 3 + 2] = box[2];
-      const message = { params: { sigma, time, points }, layerFrom: part * this.layers, layerTo: (part + 1) * this.layers, x0: box[0], nx: box[1], rows: box[2] };
+      set.box[part * 4] = box[0];
+      set.box[part * 4 + 1] = box[1];
+      set.box[part * 4 + 2] = box[2];
+      set.box[part * 4 + 3] = box[3];
+      const message = { params: { sigma, time, points }, layerFrom: part * this.layers, layerTo: (part + 1) * this.layers, x0: box[0], nx: box[1], rows: box[2], y0: box[3] };
       pool.bake(STRIKE_EFFECT, message, (reply) => this.strikeReply(uid, part, version, time, reply));
     }
   }
@@ -1039,7 +1094,7 @@ export class Fog extends M.Effect {
     const set = this.strikeSets.find((x) => x.uid === uid && x.slot < 0);
     if (sched.begin(uid, time, this.camera.baseVersion) && set) {
       set.slot = slot;
-      set.plan = QualityStrikeShade.uploadPlan(Array.from({ length: this.boxes.length }, (v, k) => [set.box[k * 3], set.box[k * 3 + 1], set.box[k * 3 + 2]]), this.layers, QualityStrikeShade.UPLOAD_FRAMES);
+      set.plan = QualityStrikeShade.uploadPlan(Array.from({ length: this.boxes.length }, (v, k) => [set.box[k * 4], set.box[k * 4 + 1], set.box[k * 4 + 2]]), this.layers, QualityStrikeShade.UPLOAD_FRAMES);
       this.strikeCpu[slot] = 1;
     } else if (set) {
       set.uid = -1;
@@ -1054,9 +1109,9 @@ export class Fog extends M.Effect {
     gl.activeTexture(gl.TEXTURE0 + M.UNITS.bloomFrom);
     gl.bindTexture(gl.TEXTURE_3D, this.strikeShade);
     for (let k = range.from; k < range.to; k++) {
-      const nx = set.box[k * 3 + 1];
-      const rows = set.box[k * 3 + 2];
-      gl.texSubImage3D(gl.TEXTURE_3D, 0, set.box[k * 3], 0, slot * SHADE_DEEP + k * this.layers, nx, rows, this.layers, gl.RGBA, gl.HALF_FLOAT, set.slabs[k].subarray(0, this.layers * rows * nx * 4));
+      const nx = set.box[k * 4 + 1];
+      const rows = set.box[k * 4 + 2];
+      gl.texSubImage3D(gl.TEXTURE_3D, 0, set.box[k * 4], set.box[k * 4 + 3], slot * SHADE_DEEP + k * this.layers, nx, rows, this.layers, gl.RGBA, gl.HALF_FLOAT, set.slabs[k].subarray(0, this.layers * rows * nx * 4));
     }
     if (stage === QualityStrikeShade.UPLOAD_FRAMES) {
       set.slot = -1;
@@ -1107,7 +1162,7 @@ export class Fog extends M.Effect {
     const draws = this.shadeDraws.length;
     this.shadeJob = new Int32Array(draws);
     this.shadePending = new Int32Array(draws);
-    this.shadeBox = new Int32Array(draws * 3);
+    this.shadeBox = new Int32Array(draws * 4);
     this.shadeSlab = Array.from({ length: draws }, () => new Uint16Array(this.layers * SHADE_UP * SHADE_ACROSS * 2));
     this.shadeSlabView = new Array(draws).fill(null);
     this.shadeSched = new Q.Schedule(draws, SHADE_RATE);
@@ -1131,12 +1186,13 @@ export class Fog extends M.Effect {
       const job = ++this.shadeJob[k];
       this.shadePending[k] = this.layers;
       this.shadeSlabView[k] = null;
-      this.shadeBox[k * 3] = box[0];
-      this.shadeBox[k * 3 + 1] = box[1];
-      this.shadeBox[k * 3 + 2] = box[2];
+      this.shadeBox[k * 4] = box[0];
+      this.shadeBox[k * 4 + 1] = box[1];
+      this.shadeBox[k * 4 + 2] = box[2];
+      this.shadeBox[k * 4 + 3] = box[3];
       const first = k * this.layers;
       for (let l = 0; l < this.layers; l++) {
-        const message = { params: { sigma, time }, layerFrom: first + l, layerTo: first + l + 1, x0: box[0], nx: box[1], rows: box[2] };
+        const message = { params: { sigma, time }, layerFrom: first + l, layerTo: first + l + 1, x0: box[0], nx: box[1], rows: box[2], y0: box[3] };
         const sent = pool.bake(SHADE_EFFECT, message, (reply) => this.shadeReply(k, job, version, time, reply), true);
         if (!sent) {
           // (no worker: the draw stays a job nobody answers, and the GPU bakes it at its turn)
@@ -1152,8 +1208,8 @@ export class Fog extends M.Effect {
     if (!data || job !== this.shadeJob[k] || version !== this.shadeVersion || !this.shadeSched) {
       return;
     }
-    const nx = this.shadeBox[k * 3 + 1];
-    const rows = this.shadeBox[k * 3 + 2];
+    const nx = this.shadeBox[k * 4 + 1];
+    const rows = this.shadeBox[k * 4 + 2];
     this.shadeSlab[k].set(data, ((reply.layerFrom as number) - k * this.layers) * rows * nx * 2);
     if (--this.shadePending[k] === 0) {
       this.shadeSlabView[k] = this.shadeSlab[k].subarray(0, this.layers * rows * nx * 2);
@@ -1167,7 +1223,7 @@ export class Fog extends M.Effect {
     const data = this.shadeSlabView[k]!;
     gl.activeTexture(gl.TEXTURE0 + M.UNITS.work);
     gl.bindTexture(gl.TEXTURE_3D, this.shade);
-    gl.texSubImage3D(gl.TEXTURE_3D, 0, this.shadeBox[k * 3], 0, k * this.layers, this.shadeBox[k * 3 + 1], this.shadeBox[k * 3 + 2], this.layers, gl.RG, gl.HALF_FLOAT, data);
+    gl.texSubImage3D(gl.TEXTURE_3D, 0, this.shadeBox[k * 4], this.shadeBox[k * 4 + 3], k * this.layers, this.shadeBox[k * 4 + 1], this.shadeBox[k * 4 + 2], this.layers, gl.RG, gl.HALF_FLOAT, data);
     gl.bindTexture(gl.TEXTURE_3D, null);
   }
 
@@ -1296,6 +1352,7 @@ export class Fog extends M.Effect {
     const plan = answered && FogPlan.same(answered.input, input) ? answered.output : FogPlan.plan(input);
     const built = input.built;
     this.ubo.data.set(plan.ubo);
+    FogWorldBuild.patch(this, this.ubo.data);
     this.ubo.upload();
     if (!built) {
       return;
@@ -1345,6 +1402,7 @@ export class Fog extends M.Effect {
       if (view) {
         this.shadeVersion++;
       }
+      sched.rate = SHADE_RATE * (M.TEST ? this.rateScale : 1);
       sched.frame(time, view, this.shadeVersion);
       owed = sched.owedCount;
       for (let i = 0; i < owed; ) {
@@ -1426,8 +1484,26 @@ export class Fog extends M.Effect {
     this.everyVersion = plan.everyVersion;
     this.everyAcross = plan.everyAcross;
     this.testValues(passes.volume);
-    for (let i = 0; i < plan.runs.length; i += 2) {
-      this.light.build("fog volume", passes.volume, passes.copy, plan.runs[i], plan.runs[i + 1], 0, this.heldNow, this.lod ? this.drop : null);
+    // (the temporal accumulation, M.TEST only: the slices owed are blended from reduced, jittered ones, except in the frame of a change of the view, a setting, the gap or the N, which builds exactly and starts the average again)
+    const accumulating = this.accumulator !== null && this.accum > 0 && !view && this.accumLast === this.accum;
+    if (this.accumulator !== null && this.accumLast !== this.accum) {
+      this.accumLast = this.accum;
+      this.refreshAll();
+    }
+    if (accumulating) {
+      this.accumulator!.begin();
+      for (let i = 0; i < plan.runs.length; i += 2) {
+        this.accumulator!.build(this.light, plan.runs[i], plan.runs[i + 1], this.heldNow, this.lod ? this.drop : null, this.accum);
+      }
+      this.accumFrames = this.accumulator!.frames;
+    } else {
+      for (let i = 0; i < plan.runs.length; i += 2) {
+        this.light.build("fog volume", passes.volume, passes.copy, plan.runs[i], plan.runs[i + 1], 0, this.heldNow, this.lod ? this.drop : null);
+      }
+      this.accumFrames = 0;
+      if (this.accumulator !== null) {
+        this.accumulator.reset(this.accum);
+      }
     }
     const drawn = plan.drawn;
     this.sweep = plan.sweep;
@@ -1451,6 +1527,7 @@ export class Fog extends M.Effect {
     this.refreshed.volumeBuilt = drawn;
     this.refreshed.sliceFrom = sliceFrom;
     this.refreshed.strikeSlots = gatheredNow;
+    FogWorldBuild.frame(this, time, moved, settings, jump);
   }
 
   // the frame's values and the state the plan (models/fogplan.ts) works from; `copy`: the arrays and objects copied, for an input kept to be compared (the fork's)
@@ -1472,6 +1549,7 @@ export class Fog extends M.Effect {
       stale: this.stale,
       built,
       sigma: this.sigma(),
+      mist: this.mist(),
       on: this.on,
       shining,
       colorMain: arrays(this.colorMain),
@@ -1485,6 +1563,7 @@ export class Fog extends M.Effect {
       marchSegments: MARCH_SEGMENTS,
       moonGain: arrays(this.moonGain),
       lod: this.lod,
+      coverage: M.TEST ? this.coverage : true,
       hasSched: this.shadeSched !== null,
       shadeCpu: this.shadeCpu,
       baseChanged: c.baseVersion !== this.baseSeen,
@@ -1498,7 +1577,8 @@ export class Fog extends M.Effect {
       gap: REFRESH_GAP,
       // (the grids' framebuffers exist only with float pictures: none, the plan is not built)
       draws: this.shadeDraws ? this.shadeDraws.length : 0,
-      shadeRate: SHADE_RATE,
+      shadeRate: SHADE_RATE * (M.TEST ? this.rateScale : 1),
+      volumeScale: M.TEST ? this.rateScale : undefined,
       shadeCredit: this.shadeCredit,
       shadePart: this.shadePart,
       sliceCredit: this.sliceCredit,
@@ -1514,7 +1594,7 @@ export class Fog extends M.Effect {
       width: c.width,
       height: c.height,
       tilt: c.tilt(),
-      air: AIR,
+      air: AIR_EXTINCTION,
       waterDrawn: false,
     };
   }
@@ -1532,30 +1612,14 @@ export class Fog extends M.Effect {
     });
   }
 
-  // the shadow grid's cells the view can read, for each draw of `layers` layers: the columns of
-  // x / distance and the rows of heights the camera's rays reach there (the volume's margin past
-  // each side included, the mirrored rays' heights too, a node more each way for the trilinear
-  // reading), as [first column, columns, rows]
+  // the shadow grid's cells the view can read, for each draw of `layers` layers: [first column, columns, rows, first row] (QualityFogShade.boxesFor). The rays are those of the extended view
+  // (the volume's margin included) at the camera's pitch, yaw, lens and eye, and at the pitch and yaw drifted by the mouse parallax's tolerance (the boxes are made again only after a larger
+  // drift), so the columns follow the yaw and the eye's x offset (a read's column is (eyeX + s D) / D for a ray's dx / (-dz) = s at depth D), the rows the highest and lowest slopes.
+  // fogCull=off in the tests: every draw from row 0
   viewBoxes() {
     const c = this.camera;
-    const tan = Math.tan(c.halfFov());
-    const across = ((c.width / c.height) * tan) * (1 + 2 * MARGIN);
-    const up = tan * (1 + 2 * MARGIN);
-    const slant = Math.max(0.1, Math.cos(c.tilt()) - up * Math.abs(Math.sin(c.tilt())));
-    const wide = across / slant;
-    const column = (g: number) => ((g / M.Camera.SPAN + 1) / 2) * (SHADE_ACROSS - 1);
-    const first = Math.max(0, Math.floor(column(-wide)) - 1);
-    const last = Math.min(SHADE_ACROSS - 1, Math.ceil(column(wide)) + 1);
-    const reach = Math.max(Math.tan(c.tilt() + Math.atan(up)), Math.tan(Math.atan(up) - c.tilt()), 0);
-    const boxes: ViewBox[] = [];
-    for (let k = 0; k < SHADE_DEEP; k += this.layers) {
-      const deepest = Math.min(SHADE_DEEP - 1, k + this.layers);
-      const z = SHADE_NEAR * Math.exp((deepest / (SHADE_DEEP - 1)) * Math.log(FOG_FAR / SHADE_NEAR));
-      const top = c.eyeY() + z * reach;
-      const rows = Math.min(SHADE_UP, Math.ceil(Math.sqrt(Math.min(1, top / SHADE_TOP)) * (SHADE_UP - 1)) + 2);
-      boxes.push([first, last - first + 1, rows]);
-    }
-    return boxes;
+    const count = QualityFogShade.viewRays(c.tilt(), c.yaw, c.focal(), c.cx(), c.cy(), c.width, c.height, MARGIN * c.width, MARGIN * c.height, DRIFT_PITCH, DRIFT_YAW, this.viewRayBuffer);
+    return QualityFogShade.boxesFor(this.viewRayBuffer, count, c.eyeX, c.eyeY(), this.layers, DRIFT_EYE, !M.TEST || this.cull) as ViewBox[];
   }
 
   // a slot's light gathered into its stack of the strikes' light, its slices from..to (a later
@@ -1611,7 +1675,7 @@ export class Fog extends M.Effect {
     for (let k = from; k < to; k++) {
       if (inView) {
         const box = this.boxes[k];
-        gl.scissor(box[0], 0, box[1], box[2]);
+        gl.scissor(box[0], box[3], box[1], box[2]);
       }
       gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffers[k]);
       gl.uniform1i(u.uLayer, k * this.layers);
@@ -1642,8 +1706,26 @@ Fog.FINISH_FRAGMENT = fill(FINISH_FRAGMENT_SOURCE, { "STRETCH.toFixed(1)": STRET
 const ATMOSPHERE_FLOATS = (9 + 2) * 4;
 
 // the shared fog text: the Atmosphere block and its lookups (shaders/fog/atmosphere.glsl) inside it, always
-Fog.GLSL = fill(FOG_SOURCE, { "ATMOSPHERE_GLSL": ATMOSPHERE_SOURCE, "FOG_FAR.toFixed(1)": FOG_FAR.toFixed(1), "AIR": AIR, 'MOON.map((v) => v.toFixed(2)).join(", ")': MOON.map((v) => v.toFixed(2)).join(", "), 'MOON_DIR.map((v) => v.toFixed(2)).join(", ")': MOON_DIR.map((v) => v.toFixed(2)).join(", "), "MOON_RADIUS.toFixed(6)": MoonDisc.RADIUS.toFixed(6), "MOON_SOLID_ANGLE.toExponential(6)": MoonDisc.SOLID_ANGLE.toExponential(6), "SLICES.toFixed(1)": SLICES.toFixed(1), "SLICE_NEAR.toFixed(1)": SLICE_NEAR.toFixed(1), "Math.log(1 + FOG_FAR / SLICE_NEAR).toFixed(6)": Math.log(1 + FOG_FAR / SLICE_NEAR).toFixed(6), "STRIKE_SCALE.toFixed(1)": STRIKE_SCALE.toFixed(1), "SLOTS": SLOTS, "strikeTerms": Array.from({ length: SLOTS }, (v, k) => fill(STRIKE_TERM_SOURCE, { "s": "xyzw"[k], "k": k })).join("\n") });
+Fog.GLSL = fill(FOG_SOURCE, { "ATMOSPHERE_GLSL": atmosphereText(), "AERIAL_GLSL": aerialText(), "FOG_FAR.toFixed(1)": FOG_FAR.toFixed(1), "AIR_SCATTER": AIR_SCATTER.toExponential(6), "AIR_EXTINCTION": AIR_EXTINCTION.toExponential(6), "MIST_HEIGHT": MIST_HEIGHT.toExponential(6), 'MOON.map((v) => v.toFixed(2)).join(", ")': MOON.map((v) => v.toFixed(2)).join(", "), 'MOON_DIR.map((v) => v.toFixed(2)).join(", ")': MOON_DIR.map((v) => v.toFixed(2)).join(", "), "MOON_RADIUS.toFixed(6)": MoonDisc.RADIUS.toFixed(6), "MOON_SOLID_ANGLE.toExponential(6)": MoonDisc.SOLID_ANGLE.toExponential(6), "SLICES.toFixed(1)": SLICES.toFixed(1), "SLICE_NEAR.toFixed(1)": SLICE_NEAR.toFixed(1), "Math.log(1 + FOG_FAR / SLICE_NEAR).toFixed(6)": Math.log(1 + FOG_FAR / SLICE_NEAR).toFixed(6), "STRIKE_SCALE.toFixed(1)": STRIKE_SCALE.toFixed(1), "SLOTS": SLOTS, "strikeTerms": Array.from({ length: SLOTS }, (v, k) => fill(STRIKE_TERM_SOURCE, { "s": "xyzw"[k], "k": k })).join("\n") });
 
+
+// the world-fixed volume's reading text in it (the test option fogWorld; nothing changes without it)
+Fog.GLSL = FogWorldBuild.inject(Fog.GLSL);
+
+// the atmosphere's text with the picture's size (the seen sky's SKY_W x SKY_H rows in a picture SKY_W x PICTURE_H: v scaled by SKY_V = SKY_H / PICTURE_H, the texel coordinate unchanged)
+function atmosphereText(): string {
+  const A = Atmosphere;
+  return fill(ATMOSPHERE_SOURCE, { "SKY_W": A.SKY_W.toFixed(1), "SKY_V": (A.SKY_H / A.PICTURE_H).toExponential(9), "PICTURE_H": A.PICTURE_H.toFixed(1) });
+}
+
+// the aerial span's lookup (shaders/fog/aerial.glsl) with the table's layout (M.Atmosphere.picture: its columns, rows, first distance, logarithm scale and the rows of the transmittance and the light)
+function aerialText(): string {
+  const A = Atmosphere;
+  return fill(AERIAL_SOURCE, {
+    "AERIAL_W": A.AERIAL_W.toFixed(1), "AERIAL_H": A.AERIAL_H.toFixed(1), "AERIAL_FROM": A.AERIAL_FROM.toFixed(1), "AERIAL_LOG_SCALE": (1 / Math.log(A.AERIAL_TO / A.AERIAL_FROM)).toExponential(9),
+    "AERIAL_ROW_T": (A.SKY_H + 1).toFixed(1), "AERIAL_ROW_L": (A.SKY_H + 1 + A.AERIAL_H).toFixed(1),
+  });
+}
 
 // the moon kernel's directions as GLSL constants (MOON_K0 ...: MoonDisc.directions over the disc round MOON_DIR, nine decimals), the centre first
 function moonKernelConstants(): string {
@@ -1658,7 +1740,7 @@ function moonKernelConstants(): string {
 // the medium: its density, what it lets through between two places, the shadow grid's places,
 // and the clouds' shadow of the sky and the moon marched. lod: log2 of the noise's texels at a
 // size of 1 m that a sample stands for (lodOf: of a length)
-Fog.MEDIUM_GLSL = fill(MEDIUM_SOURCE, { "MULTIPLE": MULTIPLE, "PHASE_G": PHASE_G, "SHADE_TOP.toFixed(1)": SHADE_TOP.toFixed(1), "SHADE_NEAR.toFixed(2)": SHADE_NEAR.toFixed(2), "Math.log(FOG_FAR / SHADE_NEAR).toFixed(6)": Math.log(FOG_FAR / SHADE_NEAR).toFixed(6), "SHADE_ACROSS": SHADE_ACROSS, "SHADE_UP": SHADE_UP, "SHADE_DEEP": SHADE_DEEP, "M.Camera.SPAN.toFixed(4)": M.Camera.SPAN.toFixed(4), "SLOTS": SLOTS, "NOISE.toFixed(1)": NOISE.toFixed(1), "MOON_KERNEL": MoonDisc.KERNEL, "MOON_KERNEL_MAX": MoonDisc.KERNEL_MAX, "moonKernelConstants": moonKernelConstants() });
+Fog.MEDIUM_GLSL = fill(MEDIUM_SOURCE, { "MULTIPLE": MULTIPLE, "PHASE_GLSL": phaseGlsl(PHASE_FORWARD_W, PHASE_FORWARD_G, PHASE_BACKWARD_G), "SHADE_TOP.toFixed(1)": SHADE_TOP.toFixed(1), "SHADE_NEAR.toFixed(2)": SHADE_NEAR.toFixed(2), "Math.log(FOG_FAR / SHADE_NEAR).toFixed(6)": Math.log(FOG_FAR / SHADE_NEAR).toFixed(6), "SHADE_ACROSS": SHADE_ACROSS, "SHADE_UP": SHADE_UP, "SHADE_DEEP": SHADE_DEEP, "M.Camera.SPAN.toFixed(4)": M.Camera.SPAN.toFixed(4), "SLOTS": SLOTS, "NOISE.toFixed(1)": NOISE.toFixed(1), "MOON_KERNEL": MoonDisc.KERNEL, "MOON_KERNEL_MAX": MoonDisc.KERNEL_MAX, "moonKernelConstants": moonKernelConstants() });
 
 // the baked shadows read, and the clouds' light (after MEDIUM_GLSL). marched: the shadows
 // marched, not baked

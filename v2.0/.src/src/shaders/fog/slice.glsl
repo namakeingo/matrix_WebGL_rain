@@ -11,7 +11,7 @@ const float TAIL_T = ${QualityFog.TAIL_T.toExponential(6)};
 // an upper bound of the transmittance along a ray rising dy per unit of direction from the eye to distance a
 float tailBound(float dy, float a) {
   float yHigh = cEye.y + max(dy, 0.0) * a;
-  return exp(-(AIR + fParams.x * 0.2 * exp(-max(yHigh, 0.0) / 4.0)) * a);
+  return exp(-(AIR_EXTINCTION + fParams.x * 0.2 * exp(-max(yHigh, 0.0) / 4.0)) * a);
 }
 float sliceLod(float a, float b) {
   return lodOf(max(0.5 * (a + b) * fVolume.z / cEye.w, b - a));
