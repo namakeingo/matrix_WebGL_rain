@@ -53,7 +53,12 @@ import "./models/floor";
 import "./models/rainlayout";
 import "./models/rainwheel";
 import "./models/skylight";
-import "./models/fogworld";
+import "./models/mistbeyond";
+import "./models/mistalbedo";
+import "./models/staticmist";
+import "./models/baselod";
+import "./models/fogpair";
+import "./models/noisemin";
 import "./models/atmosphere";
 import "./models/strikebias";
 import "./models/hdroutput";
@@ -76,6 +81,9 @@ import "./models/quality/rain";
 import "./models/quality/splashes";
 import "./models/quality/bolt";
 import "./models/quality/fog";
+import "./models/quality/fogvolume";
+import "./models/shadeaccum";
+import "./models/shadeaccumgpu";
 import "./models/quality/waves";
 import "./models/quality/lightning";
 import "./models/textvisibility";
@@ -97,6 +105,7 @@ import "./models/musicfollower";
 import "./models/musicrain";
 import "./models/musicidle";
 import "./models/mouseparallax";
+import "./models/parallaxlead";
 import "./models/spawnbox";
 import "./models/glyphrelief";
 import "./platform/workers";
@@ -117,6 +126,7 @@ import "./workers/boltlistworker";
 import "./models/frame";
 import "./workers/frameworker";
 import "./workers/textlayoutworker";
+import "./workers/shadeaccumworker";
 import "./workers/simmusicworker";
 import "./platform/steppedtask";
 import "./workers/qualityworker";
@@ -178,6 +188,7 @@ import type { SceneWorker, SceneTask } from "./workers/sceneworker";
 import type { PerfMeter, FrameHealth, AudioRate, RatePacer } from "./debug/debug";
 import type { SimMusicTask } from "./workers/simmusicworker";
 import type { LayoutJob, LayoutOut } from "./workers/textlayoutworker";
+import type { ShadeFreshJob } from "./workers/shadeaccumworker";
 import type { JobTask } from "./platform/jobtask";
 import type { SteppedTask } from "./platform/steppedtask";
 import type { RainSimPacket } from "./models/rainsimtick";
@@ -423,6 +434,8 @@ export class Wallpaper implements WallpaperControl {
   fogPlanTask: JobTask<FogPlanInput, FogPlanOutput> | null = null;
   // the atmosphere's tables task (workers/atmosphereworker.ts), asked by Fog.setLight's debounce and taken by Fog.update
   atmosphereTask: JobTask<AtmosphereJob, Float32Array> | null = null;
+  // the shade grid's fresh reduced grid task (workers/shadeaccumworker.ts), asked by Fog.fork when Fog.shadeWorker is on
+  shadeAccumTask: JobTask<ShadeFreshJob, Uint16Array> | null = null;
   // the bolt's piece lists task (workers/boltlistworker.ts), asked by Bolt.fork
   boltListTask: JobTask<BoltListInput, BoltListOutput> | null = null;
   frameTask: JobTask<FrameInput, FrameOutput> | null = null;
@@ -602,6 +615,9 @@ export class Wallpaper implements WallpaperControl {
     }
     if (this.water) {
       this.water.off = !this.waterState.waterDrawn;
+    }
+    if (this.fog) {
+      this.fog.setWaterDrawn(this.waterState.waterDrawn);
     }
     // (the drops, the splashes and the strikes' feet rest on the waves' live height only where the waves are stepped: Collision plane and Ripples on)
     for (const effect of [this.rain, this.splashes, this.bolt]) {
@@ -1109,7 +1125,7 @@ export class Wallpaper implements WallpaperControl {
     // (the scene's one-off work in a Web Worker when one can be made, else here: the script's
     // hashes and their check, the rain's layouts, the characters)
     // (the tests may refuse a worker: window.Matrix3DTest { sceneWorker, boltWorker: "none" })
-    const refused = (name: "sceneWorker" | "boltWorker" | "musicWorker" | "parallaxWorker" | "textLayoutWorker" | "strikePlanWorker" | "fogPlanWorker" | "atmosphereWorker" | "boltListWorker" | "frameWorker" | "splashWorker") => testOptions()[name] || "";
+    const refused = (name: "sceneWorker" | "boltWorker" | "musicWorker" | "parallaxWorker" | "textLayoutWorker" | "strikePlanWorker" | "fogPlanWorker" | "atmosphereWorker" | "boltListWorker" | "frameWorker" | "splashWorker" | "shadeAccumWorker") => testOptions()[name] || "";
     const scene = new M.SceneTask({
       base: this.platform.base,
       force: refused("sceneWorker"),
@@ -1247,6 +1263,21 @@ export class Wallpaper implements WallpaperControl {
     this.atmosphereTask = atmosphere;
     this.tasks.atmosphere = atmosphere as unknown as ThreadedTask;
     atmosphere.start();
+    // (the shade grid's fresh reduced grid: a JobTask over the pure job of workers/shadeaccumworker.ts, asked in Fog.fork when the accumulation's worker option is on and awaited by the frame; inline until its worker is made)
+    const shadeAccum = new M.JobTask({
+      fn: M.ShadeAccumWorker.job,
+      name: M.ShadeAccumWorker.NAME,
+      base: this.platform.base,
+      force: refused("shadeAccumWorker"),
+      observe: (event) => {
+        if (event.name === "adopt") {
+          this.mark("shadeAccumWorker");
+        }
+      },
+    });
+    this.shadeAccumTask = shadeAccum;
+    this.tasks.shadeaccum = shadeAccum as unknown as ThreadedTask;
+    shadeAccum.start();
     // (the bolt's piece lists: a JobTask over models/boltlist.ts, asked in Bolt.fork with the frame's inputs and awaited by the draw; inline until its worker is made)
     const boltList = new M.JobTask({
       fn: M.BoltList.run,
@@ -1492,6 +1523,7 @@ export class Wallpaper implements WallpaperControl {
     this.lightning.planTask = this.strikePlanTask;
     this.fog.planTask = this.fogPlanTask;
     this.fog.atmosphereTask = this.atmosphereTask;
+    this.fog.shadeTask = this.shadeAccumTask;
     this.lightning.onPlanned = (s) => this.fog.announceStrike(s.uid!, s.start, s.flash!);
     // (an unexpected error in the lightning's asynchronous answers: reported as a failure of the wallpaper, as a frame's error is)
     this.lightning.onFailure = (error) => this.fail(error);
@@ -2678,6 +2710,8 @@ if (inWorker()) {
     M.SimMusicWorker.serve();
   } else if (name === "textlayout") {
     M.TextLayoutWorker.serve();
+  } else if (name === "shadeaccum") {
+    M.ShadeAccumWorker.serve();
   }
 } else if (document.getElementById("gl")) {
   // (the bundle's URL: its workers are made from it; read while it runs, as it loads)

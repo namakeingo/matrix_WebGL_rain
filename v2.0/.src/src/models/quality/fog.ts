@@ -42,13 +42,16 @@
 //   density's scale).
 //
 // Changelog:
+// 2026-11-23: the pop bug: Lod.coverageT is the air's transmittance alone (the provable bound: the density's least along a path is 0); the mean-field density it took before is gone.
+// 2026-11-22: Feature U3, story M4: Lod.coverageT takes the cloud's density at the ray's highest point from the two-scale profile (inputs.tail, inputs.tailScale; absent: the defaults); tailBound, denseStart unchanged (floor bounds).
+// 2026-11-22: Lod: the refresh by level (levelRefresh, LEVEL_REFRESH_MOST, fractionTable) gone with the volume's refresh periods (the volume is built by the temporal accumulation); the by-distance refreshEvery stays unused by the fog.
 // 2026-11-21: Lod: the perceptual level by the coverage of the fog in front (coverageLevel, fullLevel: Feature U1, story U7).
 // 2026-11-18: the columns' rays go through the image centre of the lens (inputs.lensX and lensY, 0 when absent: the window's centre); the lens is in both tables' keys.
 // 2026-11-07: Lod: the physical level of a slice (transmittance), the refresh and the octaves by level, whole slices held, the strikes' skip.
 // 2026-11-07: level of detail: the dense tail (level 0), the refresh periods and the far octaves.
 // 2026-11-06: new; the pool's job kind "fog" registered.
 import { M } from "../../engine/core";
-import { PHASE_MAX, mistDepth } from "../../materials/fog";
+import { PHASE_MAX } from "../../materials/fog";
 import { QualityJobs } from "./jobs";
 import { QUALITY_LEVELS } from "./types";
 
@@ -72,8 +75,9 @@ const TAIL_RADIANCE = 16;
 const TAIL_EXPOSURE = 4;
 const TAIL_SLOPE = 6.4;
 const TAIL_T = 1 / 255 / (TAIL_RADIANCE * TAIL_EXPOSURE * TAIL_SLOPE);
-// the clouds' density floor and scale height (unit.ts's, shaders/fog/medium.glsl)
-const DENSITY_FLOOR = 0.2;
+// the clouds' density floor and scale height (unit.ts's, shaders/fog/medium.glsl). No floor since Feature U3, story M2: the density is the noise window alone (0.8 smoothstep), so its least is 0 and the
+// transmittance bound is the air's alone, exp(-air t): at least 0.993 over 300 m, never under TAIL_T (the dense tail never holds a slice by it; the water's cut still does)
+const DENSITY_FLOOR = 0;
 const DENSITY_HEIGHT = 4;
 // the clouds' fastest drift (m/s), the time of a sweep of the volume (s), the share of a froxel the drift may cover between
 // two refreshes of a slice, and the most sweeps between them
@@ -88,7 +92,7 @@ const TOP_MIP = 7;
 
 // the view a job is made for: the shared inputs' eye, focal and screen, the water, and the volume's columns
 export interface FogQualityView {
-  inputs: { eyeY: number; focal: number; width: number; height: number; lensX?: number; lensY?: number; waterDrawn: boolean; sigma: number; air: number; mist?: number };
+  inputs: { eyeY: number; focal: number; width: number; height: number; lensX?: number; lensY?: number; waterDrawn: boolean; sigma: number; air: number; mist?: number; tail?: number; tailScale?: number };
   pitch: number;
   margin: number;
   across: number;
@@ -312,22 +316,11 @@ function process(statics: Record<string, Float32Array>, view: FogQualityView, fr
 // a froxel's density loses (a stale volume, an octave read as its mean, a strike's light left out) reaches the picture times the
 // transmittance (T <= level / 40), so at level L the froxel's optical depth may change by TAIL_T x 40 / L (TAIL_T holds the radiance,
 // exposure and tone slope's share: 1 / 255 over their product). The tables and functions below are pure and equal in any split.
-const LEVEL_REFRESH_MOST = 32;
 const OCTAVE_WEIGHTS = [0.55, 0.3, 0.15];
 // the density's change per unit of change of the noise: 0.8 x smoothstep's steepest slope 7.5
 const DENSITY_SLOPE = 6;
 // the phase function's largest value (the mix of two Henyey-Greenstein lobes: its forward peak, materials/fog.ts PHASE_MAX)
 const STRIKE_PHASE_MAX = PHASE_MAX;
-
-// the 41 entries of the share of a froxel the clouds' drift may cover between two refreshes of a slice, by level: the by-distance
-// fraction at level 40, growing as 40 / level (the error is the transmittance's share of it) up to a whole froxel; level 0 a whole one
-function fractionTable(): Float32Array {
-  const t = new Float32Array(QUALITY_LEVELS + 1);
-  t[0] = 1;
-  for (let level = 1; level <= QUALITY_LEVELS; level++) t[level] = Math.min(1, (REFRESH_FRACTION * QUALITY_LEVELS) / level);
-  return t;
-}
-const FRACTIONS = fractionTable();
 
 // the geometry of a view's columns, the whole grid scanned once for a view: the highest ray (dyMax), the highest ray among the columns
 // with no cut by the water (dyFree, -Infinity: none) and the distance past which the columns with a cut are all held (heldFrom, 0:
@@ -435,24 +428,6 @@ function sliceHeld(view: FogQualityView, k: number): boolean {
   return LKEY.dyFree === -Infinity || tailBound(view, LKEY.dyFree, a) < TAIL_T;
 }
 
-// the most sweeps between two refreshes of slice k at `level`: the largest power of two (to the level's most) that keeps the drift
-// within the level's fraction of the froxel's least size. The most is the by-distance REFRESH_MOST at level 40, growing as 40 / level
-// up to LEVEL_REFRESH_MOST. 0 at level 0 (the slice is held: never refreshed)
-function levelRefresh(view: FogQualityView, k: number, level: number): number {
-  if (level <= 0) {
-    return 0;
-  }
-  const thickness = sliceStart(k + 1) - sliceStart(k);
-  const width = columnWidth(view, k);
-  const least = width < thickness ? width : thickness;
-  const fraction = FRACTIONS[level > QUALITY_LEVELS ? QUALITY_LEVELS : level]!;
-  let most = 1;
-  while (most * 2 <= LEVEL_REFRESH_MOST && most * 2 <= (REFRESH_MOST * QUALITY_LEVELS) / level) most *= 2;
-  let n = 1;
-  while (n * 2 <= most && DRIFT_SPEED * 2 * n * SWEEP_SECONDS <= fraction * least) n *= 2;
-  return n;
-}
-
 // how many of the noise's octaves (finest first: 4 m, 10 m, 24 m) slice k's gather reads as their mean at `level`: those the footprint
 // flattens (flatOctaves, free), then as many more as keep the density's change of optical depth (each one 6 x 0.5 x weight x sigma x
 // thickness at most) within TAIL_T x 40 / level
@@ -512,27 +487,12 @@ function coverageOf(t: number): number {
   return level < 1 ? 1 : level > QUALITY_LEVELS ? QUALITY_LEVELS : level;
 }
 
-// the mean transmittance in front of slice k's start over the view's sampled columns (the grid makeTable samples: both edges included), each along its own ray
-// (the clouds at its highest point). A view that is half sky and half dense fog has the mean of the two: the share of the picture the fog covers
+// the transmittance in front of slice k's start that is PROVABLE: the clouds' and the mist's density reach 0 in clear gaps of the noise (the window is 0 under 0.4 and the base's window under its lower edge), so the
+// least density along a path is 0 and the largest transmittance bound is the air's alone, exp(-AIR x a), the same for every column (the pop bug: the mean-field density this took before, sigma x COVERAGE_DENSITY x
+// the profile, is 2.5 times the window's mean and ignores the gaps, so a ray through a gap kept far more light than the level assumed and what is behind the fog was lowered or lost where it showed). A positive
+// lower bound would need the noise's minima over the footprint (M.NoiseMin, the min-mip): its saving is measured by units.ui.popbug.ts (popbugsavings) and is not taken here
 function coverageT(view: FogQualityView, k: number): number {
-  const i = view.inputs;
-  const a = sliceStart(k);
-  const sin = Math.sin(view.pitch), cos = Math.cos(view.pitch);
-  const stepX = Math.max(1, Math.ceil(view.across / SAMPLE_ACROSS));
-  const stepY = Math.max(1, Math.ceil(view.down / SAMPLE_ACROSS));
-  let sum = 0, n = 0;
-  for (let iy = 0; iy < view.down + stepY - 1; iy += stepY) {
-    const y = Math.min(iy, view.down - 1);
-    for (let ix = 0; ix < view.across + stepX - 1; ix += stepX) {
-      const dy = rayY(view, sin, cos, Math.min(ix, view.across - 1), y);
-      const yHigh = i.eyeY + (dy > 0 ? dy * a : 0);
-      const clouds = i.sigma > 0 ? i.sigma * COVERAGE_DENSITY * Math.exp(-(yHigh > 0 ? yHigh : 0) / DENSITY_HEIGHT) : 0;
-      const mist = i.mist ? mistDepth(i.mist, i.eyeY, yHigh, a) : 0;
-      sum += Math.exp(-(i.air + clouds) * a - mist);
-      n++;
-    }
-  }
-  return sum / n;
+  return Math.exp(-view.inputs.air * sliceStart(k));
 }
 
 function coverageLevel(view: FogQualityView, k: number): number {
@@ -549,7 +509,7 @@ function fullLevel(view: FogQualityView, k: number): number {
   return coverage < physical ? coverage : physical;
 }
 
-const Lod = { COVERAGE_KNEE, COVERAGE_DENSITY, coverageOf, coverageT, coverageLevel, fullLevel, LEVELS: QUALITY_LEVELS, LEVEL_REFRESH_MOST, OCTAVE_WEIGHTS, DENSITY_SLOPE, STRIKE_PHASE_MAX, fractionTable, sliceTransmittance, sliceLevel, columnLevel, sliceHeld, levelRefresh, levelOctaves, strikeSkip, process: processLevels };
+const Lod = { COVERAGE_KNEE, COVERAGE_DENSITY, coverageOf, coverageT, coverageLevel, fullLevel, LEVELS: QUALITY_LEVELS, OCTAVE_WEIGHTS, DENSITY_SLOPE, STRIKE_PHASE_MAX, sliceTransmittance, sliceLevel, columnLevel, sliceHeld, levelOctaves, strikeSkip, process: processLevels };
 
 export const QualityFog = { SLICES, SLICE_NEAR, FOG_FAR, SLICE_LOG, CULL_BELOW, CULL_RELATIVE, TAIL_RADIANCE, TAIL_EXPOSURE, TAIL_SLOPE, TAIL_T, DRIFT_SPEED, REFRESH_FRACTION, REFRESH_MOST, SWEEP_SECONDS, OCTAVE_SIZES, TOP_MIP, NOISE_TEXELS, sliceStart, bounds, columnDy, columnCut, unread, tailBound, denseStart, denseHeld, sliceFootprint, refreshEvery, flatOctaves, process, Lod };
 

@@ -58,7 +58,7 @@ function handle(state: QualityWorkerState, message: Message): QualityReply | nul
     const head = { type: "baked", id: message.id, effect, version: message.version };
     if (stored && stored.kind === "strikeshade" && stored.version === message.version) {
       // a strike's shadow grid (models/quality/strikeshade.ts): four values a cell, the strike's shadow points given
-      const sp = message.params as { sigma: number; time: number; points: Float32Array };
+      const sp = message.params as { sigma: number; time: number; points: Float32Array; tail?: number; tailScale?: number };
       const from = message.layerFrom as number;
       const to = message.layerTo as number;
       const sx = message.x0 as number;
@@ -66,13 +66,13 @@ function handle(state: QualityWorkerState, message: Message): QualityReply | nul
       const srows = message.rows as number;
       const sy0 = (message.y0 as number) || 0;
       const sdata = new Uint16Array((to - from) * srows * snx * 4);
-      M.QualityStrikeShade.bake(stored.arrays.noise as unknown as Uint8Array, sp.points, sp.sigma, sp.time, sdata, from, to, sx, snx, srows, sy0);
+      M.QualityStrikeShade.bake(stored.arrays.noise as unknown as Uint8Array, sp.points, sp.sigma, sp.time, sdata, from, to, sx, snx, srows, sy0, sp.tail === undefined ? undefined : { tail: sp.tail, scale: sp.tailScale as number });
       return { reply: Object.assign(head, { layerFrom: from, layerTo: to, x0: sx, nx: snx, rows: srows, y0: sy0, data: sdata }), transfer: [sdata.buffer as ArrayBuffer] };
     }
     if (!stored || stored.kind !== "fogshade" || stored.version !== message.version) {
       return { reply: Object.assign(head, { error: "static " + effect + " is " + (stored ? "version " + stored.version : "missing") + ", expected " + message.version }), transfer: [] };
     }
-    const p = message.params as { sigma: number; time: number };
+    const p = message.params as { sigma: number; time: number; tail?: number; tailScale?: number };
     const layerFrom = message.layerFrom as number;
     const layerTo = message.layerTo as number;
     const x0 = message.x0 as number;
@@ -80,7 +80,7 @@ function handle(state: QualityWorkerState, message: Message): QualityReply | nul
     const rows = message.rows as number;
     const y0 = (message.y0 as number) || 0;
     const data = new Uint16Array((layerTo - layerFrom) * rows * nx * 2);
-    M.QualityFogShade.bake(stored.arrays.noise, p.sigma, p.time, data, layerFrom, layerTo, x0, nx, rows, undefined, y0);
+    M.QualityFogShade.bake(stored.arrays.noise, p.sigma, p.time, data, layerFrom, layerTo, x0, nx, rows, undefined, y0, p.tail === undefined ? undefined : { tail: p.tail, scale: p.tailScale as number });
     return { reply: Object.assign(head, { layerFrom, layerTo, x0, nx, rows, y0, data }), transfer: [data.buffer as ArrayBuffer] };
   }
   if (type !== "run") {

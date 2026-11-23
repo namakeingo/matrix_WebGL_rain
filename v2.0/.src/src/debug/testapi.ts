@@ -362,6 +362,10 @@ const makeTestApi = (wallpaper: Wallpaper, ready: Promise<void>) => {
     get fogPlanTask() {
       return wallpaper.fogPlanTask;
     },
+    // the shade grid's fresh reduced grid task (the kill spec asks it with the fog's own input)
+    get shadeAccumTask() {
+      return wallpaper.shadeAccumTask;
+    },
     // the atmosphere's tables task (the kill spec asks it with a fixed input)
     get atmosphereTask() {
       return wallpaper.atmosphereTask;
@@ -498,6 +502,100 @@ const makeTestApi = (wallpaper: Wallpaper, ready: Promise<void>) => {
       wallpaper.fog.refreshAll();
     },
     refreshFog: () => wallpaper.fog.refreshAll(),
+    // a volume of the fog read back whole (Feature U3, story M2): which 'base' (the base mist's layers) or 'front' (the front cloud's), the direct volume or the mirror; data is RGBA floats (rgb the light, a the
+    // optical depth as stored), index ((slice * down + row) * across + column) * 4, row counted up from the bottom as the shader's gl_FragCoord; slice k holds the accumulation through the slices 0..k; rays is each
+    // column's unit ray (the shader's columnRay), eye the camera's eye (eyeX, eye height, 0)
+    // the base volume's cells past a column's cut are clamped to the cut (the layer cut - 1 repeated: what a read returns) unless `raw`
+    readVolume: (which: string, mirror = false, raw = false) => {
+      const gl = wallpaper.gl;
+      const fog = wallpaper.fog;
+      const light = fog.light as unknown as { across: number; down: number; slices: WebGLFramebuffer[] };
+      const base = which === "base";
+      const first = base ? M().BaseMist.FRONT_SLICES : 0;
+      const slices = base ? M().BaseMist.SLICES : M().QualityFog.SLICES;
+      const across = light.across, down = light.down;
+      const data = new Float32Array(across * down * slices * 4);
+      const row = new Float32Array(across * down * 4);
+      const framebuffer = gl.getParameter(gl.READ_FRAMEBUFFER_BINDING) as WebGLFramebuffer | null;
+      const buffer = gl.getParameter(gl.READ_BUFFER) as GLenum;
+      for (let k = 0; k < slices; k++) {
+        gl.bindFramebuffer(gl.READ_FRAMEBUFFER, light.slices[first + k]!);
+        gl.readBuffer(gl.COLOR_ATTACHMENT0 + (mirror ? 1 : 0));
+        gl.readPixels(0, 0, across, down, gl.RGBA, gl.FLOAT, row);
+        data.set(row, k * across * down * 4);
+      }
+      if (base && !raw) {
+        const cut = new Float32Array(across * down * 4);
+        gl.bindFramebuffer(gl.READ_FRAMEBUFFER, light.slices[M().BaseMist.CUT_LAYER]!);
+        gl.readBuffer(gl.COLOR_ATTACHMENT0 + (mirror ? 1 : 0));
+        gl.readPixels(0, 0, across, down, gl.RGBA, gl.FLOAT, cut);
+        const plane = across * down * 4;
+        for (let c = 0; c < across * down; c++) {
+          const n = Math.min(slices, Math.max(1, Math.round(cut[c * 4]!)));
+          for (let k = n; k < slices; k++) {
+            for (let ch = 0; ch < 4; ch++) data[k * plane + c * 4 + ch] = data[(n - 1) * plane + c * 4 + ch]!;
+          }
+        }
+      }
+      gl.readBuffer(buffer);
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, framebuffer);
+      const camera = wallpaper.camera;
+      const margin = fog.ubo.data[15]!;
+      const rays = new Float32Array(across * down * 3);
+      for (let iy = 0; iy < down; iy++) {
+        for (let ix = 0; ix < across; ix++) {
+          const x = ((ix + 0.5) / across * (1 + 2 * margin) - margin) * camera.width;
+          const yUp = ((iy + 0.5) / down * (1 + 2 * margin) - margin) * camera.height;
+          rays.set(camera.rayAt(x, camera.height - yUp), (iy * across + ix) * 3);
+        }
+      }
+      return { across, down, slices, data, rays, eye: [camera.eyeX, camera.eyeY(), 0] };
+    },
+    // the base volume's cut layer: { across, down, cut } with cut a Float32Array across x down (the built slice count of each column, the red of the cut layer's texel, row x across + column)
+    readCut: (mirror = false) => {
+      const gl = wallpaper.gl;
+      const light = wallpaper.fog.light as unknown as { across: number; down: number; slices: WebGLFramebuffer[] };
+      const across = light.across, down = light.down;
+      const texels = new Float32Array(across * down * 4);
+      const framebuffer = gl.getParameter(gl.READ_FRAMEBUFFER_BINDING) as WebGLFramebuffer | null;
+      const buffer = gl.getParameter(gl.READ_BUFFER) as GLenum;
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, light.slices[M().BaseMist.CUT_LAYER]!);
+      gl.readBuffer(gl.COLOR_ATTACHMENT0 + (mirror ? 1 : 0));
+      gl.readPixels(0, 0, across, down, gl.RGBA, gl.FLOAT, texels);
+      gl.readBuffer(buffer);
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, framebuffer);
+      const cut = new Float32Array(across * down);
+      for (let i = 0; i < across * down; i++) cut[i] = texels[i * 4]!;
+      return { across, down, cut };
+    },
+    // the one read of the combined shade (the front's grid times the base mist's), skyShade of a world point as the shader reads it: [sky, moon]
+    shadeAt: (p: number[]) => wallpaper.fog.shadeAt(p),
+    // the shade grid's texture read back whole (Feature U2, story V5): { across, up, layers, data }, data Float32Array across x up x layers x 2, index ((layer x up + row) x across + column) x 2 + channel (0 the
+    // sky's, 1 the Orb's); the front's layers 0 .. 95 then the base mist's 96 .. 191
+    readShade: () => {
+      const gl = wallpaper.gl;
+      const across = M().QualityFogShade.ACROSS, up = M().QualityFogShade.UP, layers = 2 * M().QualityFogShade.DEEP;
+      const data = new Float32Array(across * up * layers * 2);
+      const row = new Float32Array(across * up * 4);
+      const framebuffer = gl.getParameter(gl.READ_FRAMEBUFFER_BINDING) as WebGLFramebuffer | null;
+      const probe = gl.createFramebuffer();
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, probe);
+      for (let layer = 0; layer < layers; layer++) {
+        gl.framebufferTextureLayer(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, wallpaper.fog.shade, 0, layer);
+        gl.readPixels(0, 0, across, up, gl.RGBA, gl.FLOAT, row);
+        for (let i = 0; i < across * up; i++) {
+          data[(layer * across * up + i) * 2] = row[i * 4]!;
+          data[(layer * across * up + i) * 2 + 1] = row[i * 4 + 1]!;
+        }
+      }
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, framebuffer);
+      gl.deleteFramebuffer(probe);
+      return { across, up, layers, data };
+    },
+    // the base mist's volume (its draw counter, schedule and footprint), for the tests
+    get baseMist() {
+      return wallpaper.fog.baseMist;
+    },
     get fogRefreshed() {
       return wallpaper.fog.refreshed;
     },

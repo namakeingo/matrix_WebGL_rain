@@ -1,0 +1,1 @@
+  outLayer${i} = texelFetch(uBlended, ivec3(c, uLayer + ${i}), 0);

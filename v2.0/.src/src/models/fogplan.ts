@@ -5,15 +5,16 @@
 // run here) or with the answer its fork asked of the worker in the same frame, so the picture does not depend on where the plan ran.
 //
 // Changelog:
+// 2026-11-22: no refresh periods (`every`, due): the volume is blended by the temporal accumulation, every slice the time passed owes is built; the octaves read as their mean (`drop`) stay.
 // 2026-11-20: the block is 28 floats: no sky gain, the Orb's gain at 24 (Feature S1, story A2).
 // 2026-11-18: the lens (lensX, lensY, builtLensX, builtLensY): a lens other than the one the volume was built for is a move of the view; the periods' view carries the lens.
 // 2026-11-10: new, from Fog.update, Fog.setEvery, Fog.due and Fog.buildDue.
 // 2026-11-11: same() tells an array from a typed array or a non-array, compares key sets both ways by own property, and takes objects that are not plain data by reference only.
 import { M } from "../engine/core";
-import { MIST_HEIGHT } from "../materials/fog";
 import { QualityFog } from "./quality/fog";
 import type { FogQualityView } from "./quality/fog";
 import { MouseParallax } from "./mouseparallax";
+import { StaticMist } from "./staticmist";
 import type { ParallaxOffsets } from "./mouseparallax";
 
 // the length of the uniform block's data (floats)
@@ -29,8 +30,11 @@ export interface FogPlanInput {
   // the uniform block: sigma, whether the fog is on, whether a strike's light shines, the colors, the volume's columns, its margin, each strike slot's level when shown (0: not shown)
   // and the scale it is divided by, the bolt's color, the march's segments, the sky's and the moon's gains
   sigma: number;
-  // the mist's extinction at the water per metre (Fog.mist(): the slider's factor times MIST), written into the block's last float while the fog is on; absent: 0
+  // the base mist's extinction at the water per metre (Fog.baseStrength()): read by the level of detail's coverage only (the block no longer carries it); absent: 0
   mist?: number;
+  // the front cloud's profile: the tail's share and scale (Fog.frontTail(), frontScale(); absent: the shipped defaults), written into the block's floats 7 and 27
+  tail?: number;
+  tailScale?: number;
   on: boolean;
   shining: boolean;
   colorMain: ArrayLike<number>;
@@ -65,12 +69,11 @@ export interface FogPlanInput {
   volumeScale?: number;
   shadeCredit: number;
   shadePart: number;
-  // the volume's refresh: the credit of slices, the next slice, the sweeps done, the periods (and octaves dropped) of the slices and the view they were made for (the camera's
-  // version, the columns across), and the camera's numbers the periods are worked out from
+  // the volume's refresh: the credit of slices, the next slice, the sweeps done, the octaves dropped per slice and the view they were made for (the camera's
+  // version, the columns across), and the camera's numbers they are worked out from
   sliceCredit: number;
   sliceNext: number;
   sweep: number;
-  every: Uint8Array;
   drop: Uint8Array;
   everyVersion: number;
   everyAcross: number;
@@ -100,8 +103,7 @@ export interface FogPlanOutput {
   shadeBakes: number[];
   shadeCredit: number;
   shadePart: number;
-  // the slices' periods and octaves dropped, the camera version and columns they are for
-  every: Uint8Array;
+  // the octaves dropped per slice, the camera version and columns they are for
   drop: Uint8Array;
   everyVersion: number;
   everyAcross: number;
@@ -118,11 +120,9 @@ export interface FogPlanOutput {
 const SLICES = QualityFog.SLICES;
 const VOLUME_RATE = SLICES / QualityFog.SWEEP_SECONDS;
 
-// the slices' refresh periods for the view: every slice every sweep with lod off; made again only when the camera's version or the columns changed (or `all`); by the slice's
-// physical level: its transmittance bound; a held slice (level 0) is refreshed the least often: its mirrored volume is read behind the same fog
-function periods(input: FogPlanInput, all: boolean, every: Uint8Array, drop: Uint8Array): { everyVersion: number; everyAcross: number } {
+// the octaves each slice's gather reads as their mean for the view: none with lod off; made again only when the camera's version or the columns changed (or `all`); by the slice's level
+function periods(input: FogPlanInput, all: boolean, drop: Uint8Array): { everyVersion: number; everyAcross: number } {
   if (!input.lod) {
-    every.fill(1);
     drop.fill(0);
     return { everyVersion: -1, everyAcross: input.everyAcross };
   }
@@ -130,7 +130,7 @@ function periods(input: FogPlanInput, all: boolean, every: Uint8Array, drop: Uin
     return { everyVersion: input.everyVersion, everyAcross: input.everyAcross };
   }
   const view: FogQualityView = {
-    inputs: { eyeY: input.eyeY, focal: input.focal, width: input.width, height: input.height, lensX: input.lensX || 0, lensY: input.lensY || 0, waterDrawn: input.waterDrawn, sigma: input.sigma, air: input.air, mist: input.mist || 0 },
+    inputs: { eyeY: input.eyeY, focal: input.focal, width: input.width, height: input.height, lensX: input.lensX || 0, lensY: input.lensY || 0, waterDrawn: input.waterDrawn, sigma: input.sigma, air: input.air, mist: input.mist || 0, tail: input.tail, tailScale: input.tailScale },
     pitch: input.tilt,
     margin: input.margin,
     across: input.columns[0],
@@ -138,8 +138,6 @@ function periods(input: FogPlanInput, all: boolean, every: Uint8Array, drop: Uin
   };
   for (let k = 0; k < SLICES; k++) {
     const level = input.coverage === false ? QualityFog.Lod.sliceLevel(view, k) : QualityFog.Lod.fullLevel(view, k);
-    const n = QualityFog.Lod.levelRefresh(view, k, level);
-    every[k] = n > 0 ? n : QualityFog.Lod.LEVEL_REFRESH_MOST;
     drop[k] = QualityFog.Lod.levelOctaves(view, k, level);
   }
   return { everyVersion: input.cameraVersion, everyAcross: input.columns[0] };
@@ -163,12 +161,9 @@ function plan(input: FogPlanInput): FogPlanOutput {
   d.set(input.boltColor, 20);
   d[23] = input.marchSegments;
   d.set(input.moonGain, 24);
-  d[27] = input.on ? input.mist || 0 : 0;
-  // the mist at the eye's height (fMain.w, the colour's unused fourth float), for fogAt's no-volume case; an input without a mist leaves the colour's own fourth value as it is
-  if (input.mist !== undefined) {
-    d[7] = input.on ? input.mist * Math.exp(-Math.max(input.eyeY, 0) / MIST_HEIGHT) : 0;
-  }
-  const every = input.every.slice();
+  d[7] = input.tail === undefined ? StaticMist.TAIL_SHARE : input.tail;
+  d[27] = input.tailScale === undefined ? StaticMist.TAIL_SCALE : input.tailScale;
+  // (the block's floats 7 and 27 (fMain.w, fMoonGain.w) are the front cloud's tail share and scale since Feature U3, story M4; fSecond.w, float 11, is the effect's base-volume flag)
   const drop = input.drop.slice();
   const out: FogPlanOutput = {
     ubo: d,
@@ -183,7 +178,6 @@ function plan(input: FogPlanInput): FogPlanOutput {
     shadeBakes: [],
     shadeCredit: input.shadeCredit,
     shadePart: input.shadePart,
-    every,
     drop,
     everyVersion: input.everyVersion,
     everyAcross: input.everyAcross,
@@ -237,30 +231,17 @@ function plan(input: FogPlanInput): FogPlanOutput {
   const slices = view ? SLICES : Math.min(SLICES, Math.floor(credit + 1e-6));
   credit = view ? 0 : Math.max(0, credit - slices);
   const sliceFrom = view ? 0 : input.sliceNext;
-  const made = periods(input, view, every, drop);
+  const made = periods(input, view, drop);
   out.everyVersion = made.everyVersion;
   out.everyAcross = made.everyAcross;
   let sweep = input.sweep;
-  const due = (k: number) => view || every[k] === 1 || (sweep + (k >> 3)) % every[k] === 0;
   let drawn = 0;
   for (let n = 0; n < slices; ) {
     const from = (sliceFrom + n) % SLICES;
     const to = Math.min(SLICES, from + slices - n);
-    // (slices from..to of one sweep: those due, in runs; a sweep done counts for the slices refreshed every N-th one)
-    let k = from;
-    while (k < to) {
-      if (!due(k)) {
-        k++;
-        continue;
-      }
-      let end = k + 1;
-      while (end < to && due(end)) {
-        end++;
-      }
-      out.runs.push(k, end);
-      drawn += end - k;
-      k = end;
-    }
+    // (slices from..to of one sweep: all of them, one run)
+    out.runs.push(from, to);
+    drawn += to - from;
     if (to === SLICES) {
       sweep++;
     }

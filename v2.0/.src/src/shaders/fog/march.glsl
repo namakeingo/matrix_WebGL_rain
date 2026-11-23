@@ -21,10 +21,9 @@ vec4 fogMarch(vec3 o, vec3 d, float t0, float t1, bool mirrored, float jitter) {
     if (mirrored) p.y = -p.y;
     float lod = lodOf(t / cEye.w);
     float sigma = density(p, lod);
-    float mist = mistMean(o, d, s0, s1, mirrored);
-    float extinction = sigma + AIR_EXTINCTION + mist;
+    float extinction = sigma + AIR_EXTINCTION;
     vec3 source = vec3(0.0);
-    if (sigma + mist > 1e-6) source += fogLight(p, view, lod, true, sigma, mist);
+    if (sigma > 1e-6) source += fogLight(p, view, lod, true, sigma);
     light += pass * (1.0 - exp(-extinction * dt)) / extinction * source;
     pass *= exp(-extinction * dt);
   }

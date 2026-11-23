@@ -18,16 +18,14 @@ uniform int uSlot;
 layout(location = 0) out vec4 outDirect;
 layout(location = 1) out vec4 outMirror;
 // the light of a stretch a to b of the ray d (mirrored: in the water), let through to its start t0:
-// scattered by the clouds (sigma, their albedo), the air (AIR_SCATTER, white) and the mist (white, its mean extinction over the stretch)
+// scattered by the clouds (sigma, their albedo), and the air (AIR_SCATTER, white)
 vec3 stretch(float t0, float a, float b, vec3 d, bool mirrored, float lod) {
   vec3 p = cEye.xyz + 0.5 * (a + b) * d;
   if (mirrored) p.y = -p.y;
   vec3 view = mirrored ? vec3(d.x, -d.y, d.z) : d;
   float sigma = density(p, lod);
-  // (the mist at the stretch's middle, like the clouds' density: one exponential)
-  float mist = MIST_K * exp(-max(p.y, 0.0) / MIST_HEIGHT);
-  float extinction = sigma + AIR_EXTINCTION + mist;
-  vec3 scatter = (sigma * albedoAt(p, lod) + AIR_SCATTER + mist) / extinction;
+  float extinction = sigma + AIR_EXTINCTION;
+  vec3 scatter = (sigma * albedoAt(p, lod) + AIR_SCATTER) / extinction;
   return t0 * STRIKE_SCALE * strikeUnit(uSlot, p, view, lod, uMarched) * scatter * (1.0 - exp(-extinction * (b - a)));
 }
 void main() {

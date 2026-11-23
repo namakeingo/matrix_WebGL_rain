@@ -2,7 +2,7 @@
 precision highp float;
 precision highp int;
 precision highp sampler3D;
-#define TEST_VIEWS
+${TEST_VIEWS}
 ${M.Camera.GLSL}
 ${Fog.GLSL}
 ${Fog.MEDIUM_GLSL}
@@ -26,8 +26,7 @@ const float CULL_BELOW = ${CULL_BELOW};
 const float CULL_RELATIVE = ${CULL_RELATIVE};
 const float TAIL_T = ${TAIL_T};
 float tailBound(float dy, float a) {
-  float yHigh = cEye.y + max(dy, 0.0) * a;
-  return exp(-(AIR_EXTINCTION + fParams.x * 0.2 * exp(-max(yHigh, 0.0) / 4.0)) * a);
+  return exp(-AIR_EXTINCTION * a);
 }
 float sliceLod(float a, float b) {
   return lodOf(max(0.5 * (a + b) * fVolume.z / cEye.w, b - a));
@@ -42,14 +41,12 @@ bool directHeld(vec2 fc, float a, vec2 w) {
   if (uTail > 0.5 && tailBound(columnRay(fc).y, a) < TAIL_T) return true;
   float far = underWater(fc);
   if (far >= 1e29) return false;
-  far = max(far, underWater(fc + w * vec2(-1.0, -1.0)));
-  far = max(far, underWater(fc + w * vec2(0.0, -1.0)));
-  far = max(far, underWater(fc + w * vec2(1.0, -1.0)));
-  far = max(far, underWater(fc + w * vec2(-1.0, 0.0)));
-  far = max(far, underWater(fc + w * vec2(1.0, 0.0)));
-  far = max(far, underWater(fc + w * vec2(-1.0, 1.0)));
-  far = max(far, underWater(fc + w * vec2(0.0, 1.0)));
-  far = max(far, underWater(fc + w * vec2(1.0, 1.0)));
+  // (the eight neighbours in one loop, its count a value at run time (uCull is 1 here: the function returned above when it is 0): the centre, offset (0, 0), is the loop's fifth, a max with itself)
+  int ring = int(8.0 * uCull + 1.5);
+  for (int i = 0; i < ring; i++) {
+    if (i >= 9) break;
+    far = max(far, underWater(fc + w * vec2(float(i % 3) - 1.0, float(i / 3) - 1.0)));
+  }
   return a > far * (1.0 + CULL_RELATIVE);
 }
 // gather (gather.glsl) with the medium taken at t of the slice (0 to 1) along the ray instead of its middle
@@ -59,9 +56,8 @@ vec4 gatherAt(vec4 acc, vec3 o, vec3 d, float a, float b, float t, bool mirrored
   if (mirrored) p.y = -p.y;
   vec3 view = mirrored ? vec3(d.x, -d.y, d.z) : d;
   float sigma = densityFar(p, lod, uFar > 0.5 && !marched);
-  float mist = MIST_K * exp(-max(p.y, 0.0) / MIST_HEIGHT);
-  float extinction = sigma + AIR_EXTINCTION + mist;
-  vec3 source = sigma + mist > 1e-6 ? fogLight(p, view, lod, marched, sigma, mist) : vec3(0.0);
+  float extinction = sigma + AIR_EXTINCTION;
+  vec3 source = sigma > 1e-6 ? fogLight(p, view, lod, marched, sigma) : vec3(0.0);
   float pass = exp(-extinction * dt);
   acc.rgb += exp(-acc.a) * source * (1.0 - pass) / extinction;
   acc.a += extinction * dt;
@@ -79,10 +75,21 @@ void main() {
   vec4 direct = uSlice == 0 ? vec4(0.0) : texelFetch(uSumDirect, c, 0);
   vec4 mirror = uSlice == 0 ? vec4(0.0) : texelFetch(uSumMirror, c, 0);
   float lod = sliceLod(a, b);
-  if (!directHeld(fc, a, w)) direct = gatherAt(direct, cEye.xyz, d, a, b, uAccumZ, false, lod, uMarched);
-  if (d.y < 0.0) {
-    float start = max(a, cEye.y / -d.y);
-    if (b > start) mirror = gatherAt(mirror, cEye.xyz, d, start, b, uAccumZ, true, lod, uMarched);
+  // (the direct ray, then the mirrored one from where it meets still water: one gatherAt site in a loop of a count given at run time, so its code is in the program once)
+  int rays = d.y < 0.0 ? 2 : 1;
+  for (int k = 0; k < rays; k++) {
+    if (k >= 2) break;
+    bool mirrored = k == 1;
+    float from = a;
+    if (mirrored) {
+      from = max(a, cEye.y / -d.y);
+      if (b <= from) break;
+    } else if (directHeld(fc, a, w)) {
+      continue;
+    }
+    vec4 acc = gatherAt(mirrored ? mirror : direct, cEye.xyz, d, from, b, uAccumZ, mirrored, lod, uMarched);
+    if (mirrored) mirror = acc;
+    else direct = acc;
   }
   outDirect = direct;
   outMirror = mirror;

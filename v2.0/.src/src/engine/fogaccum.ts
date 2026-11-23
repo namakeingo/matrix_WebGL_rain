@@ -1,4 +1,4 @@
-// The fog volume's temporal accumulation (Feature U1, story U6): a prototype behind the test option fogAccum (M.TEST only: Fog.accum, the frames N of the average; 0 off, as shipped). The GL half of
+// The fog volume's temporal accumulation (Feature U1, story U6): the shipped build of the volume's slices (Fog.accum, the frames N of the average, M.FogAccum.FRAMES; M.TEST only: 0 builds exactly, the tests' control). The GL half of
 // the pure model M.FogAccum (models/fogaccum.ts); the slices the plan owes this frame are built here instead of by Froxels.build:
 // - each slice is gathered into a reduced picture (the columns of the full volume divided by `factor` each way, M.FogAccum.reduced), its sample moved inside the column and along the slice by the frame's
 //   jitter (M.FogAccum.jitter; shaders/fog/fogaccum_volume.glsl), its sums so far the reduced chain's (two pictures swapped from slice to slice; a run that starts past slice 0 seeds the chain from the
@@ -10,6 +10,9 @@
 // The held volume stays on its units (M.UNITS.fogDirect, fogMirror); the units of the sums (fogSum, fogSumMirror) carry the pictures of this build during it and the volume's own sums after it.
 //
 // Changelog:
+// 2026-11-22: the volume's text has `#define TEST_VIEWS` only under M.TEST (it was always there: the marched shade was compiled into both gathers; compile time).
+// 2026-11-22: warm(): the four programs drawn once over one pixel at the effect's warm-up.
+// 2026-11-22: shipped: always made with float pictures, no test option.
 // 2026-11-21: new (Feature U1, story U6).
 import { M } from "./core";
 import { fill } from "./glsl";
@@ -26,9 +29,10 @@ import STORE_SOURCE from "../shaders/fog/fogaccum_store.glsl";
 const REDUCE = 2;
 const NAMES = ["fogAccumVolume", "fogAccumSeed", "fogAccumBlend", "fogAccumStore"];
 
-// the programs (M.TEST only; the shipped programs are the fog's own)
+// the programs (the fog's own, with them)
 export function fogAccumPrograms(): ProgramSources {
   const volume = fill(VOLUME_SOURCE, {
+    "TEST_VIEWS": M.TEST ? "#define TEST_VIEWS" : "",
     "M.Camera.GLSL": M.Camera.GLSL,
     "Fog.GLSL": M.Fog.GLSL,
     "Fog.MEDIUM_GLSL": M.Fog.MEDIUM_GLSL,
@@ -44,6 +48,8 @@ export function fogAccumPrograms(): ProgramSources {
 
 // the volume's pair of pictures as Froxels keeps them (the stack of the fog's own light, one)
 interface Volumes {
+  // the layers of the volume's textures (the seed reads the held volume by a z coordinate over them: the front volume's slices and, after them, the base mist's)
+  layers: number;
   across: number;
   down: number;
   volumes: WebGLTexture[];
@@ -170,6 +176,52 @@ export class FogAccumulation {
     gl.bindTexture(gl.TEXTURE_2D, b);
   }
 
+  // the four programs drawn once over one pixel (the driver finishes a program at its first draw: a stall of 100 to 250 ms in the first frame that accumulates, which follows the first exact build): every
+  // draw goes to the chain's or the blended picture, never to the held volume (the store writes the chain's first picture, not a layer), so the volume is as it was
+  warm(light: Volumes) {
+    const gl = this.gl;
+    this.make(light);
+    const ra = this.reducedAcross, rd = this.reducedDown;
+    const sx = this.across / ra, sy = this.down / rd;
+    gl.enable(gl.SCISSOR_TEST);
+    gl.scissor(0, 0, 1, 1);
+    gl.viewport(0, 0, ra, rd);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.chainFramebuffers[0]!);
+    const s = this.seed.use();
+    gl.uniform1i(s.uSlice, 0);
+    gl.uniform4f(s.uMap, sx, sy, 0, 0);
+    gl.uniform3f(s.uVolume, this.across, this.down, light.layers);
+    this.effect.quad.drawFull();
+    this.bindSums(this.chain[0]![0]!, this.chain[0]![1]!);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.chainFramebuffers[1]!);
+    const u = this.volume.use();
+    gl.uniform1i(u.uSlice, 1);
+    gl.uniform1f(u.uCull, 0);
+    gl.uniform1f(u.uTail, 0);
+    gl.uniform1f(u.uFar, 0);
+    gl.uniform1f(u.uTailFlat, 0);
+    gl.uniform4f(u.uAccum, sx - 1, sy - 1, 0, 0);
+    gl.uniform1f(u.uAccumZ, 0.5);
+    this.effect.testValues(this.volume);
+    this.effect.quad.drawFull();
+    gl.viewport(0, 0, this.across, this.down);
+    this.bindSums(this.chain[1]![0]!, this.chain[1]![1]!);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.blendFramebuffer);
+    const b = this.blend.use();
+    gl.uniform1i(b.uSlice, 1);
+    gl.uniform1f(b.uAlpha, 1);
+    gl.uniform4f(b.uMap, 1 / sx, 1 / sy, 0, 0);
+    gl.uniform4f(b.uSize, ra, rd, ra, rd);
+    this.effect.quad.drawFull();
+    this.bindSums(this.blended[0]!, this.blended[1]!);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.chainFramebuffers[0]!);
+    this.store.use();
+    this.effect.quad.drawFull();
+    gl.disable(gl.SCISSOR_TEST);
+    this.bindSums(light.sums[0]!, light.sums[1]!);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+
   // slices from..to blended (the first frame's blend of the run: the sums before `from` seeded from the held volume), as the guard's pass "fog volume"; held: per slice 1 where some column may hold
   // its direct slice, drops: the octaves dropped per slice (or null)
   build(light: Volumes, from: number, to: number, held: Uint8Array | null, drops: Uint8Array | null, n: number) {
@@ -181,7 +233,18 @@ export class FogAccumulation {
     const sx = this.across / ra, sy = this.down / rd;
     const jx = this.jitter[0]! - 0.5, jy = this.jitter[1]! - 0.5;
     const lod = this.effect.lod ? 1 : 0;
-    guard.begin("fog volume", "slice");
+    // (the tests' split timing: the draws of every `split`-th slice timed one by one, named by kind and slice, and no pass of the whole build)
+    const split = M.TEST ? this.effect.timeSplit : 0;
+    const time = (kind: string, k: number): boolean => {
+      if (split > 0 && k % split === 0) {
+        guard.begin("fog accum " + kind + " " + k, "slice");
+        return true;
+      }
+      return false;
+    };
+    if (split === 0) {
+      guard.begin("fog volume", "slice");
+    }
     let prev = 0;
     gl.viewport(0, 0, ra, rd);
     if (from > 0) {
@@ -189,7 +252,7 @@ export class FogAccumulation {
       const u = this.seed.use();
       gl.uniform1i(u.uSlice, from - 1);
       gl.uniform4f(u.uMap, sx, sy, jx, jy);
-      gl.uniform3f(u.uVolume, this.across, this.down, this.slices);
+      gl.uniform3f(u.uVolume, this.across, this.down, light.layers);
       this.effect.quad.drawFull();
     }
     for (let k = from; k < to; k++) {
@@ -197,11 +260,13 @@ export class FogAccumulation {
       gl.viewport(0, 0, ra, rd);
       this.bindSums(this.chain[prev]![0]!, this.chain[prev]![1]!);
       gl.bindFramebuffer(gl.FRAMEBUFFER, this.chainFramebuffers[1 - prev]!);
+      const timedFresh = time("fresh", k);
       const u = this.volume.use();
       gl.uniform1i(u.uSlice, k);
       gl.uniform1f(u.uCull, held !== null && held[k] === 1 ? 1 : 0);
       gl.uniform1f(u.uTail, lod);
       gl.uniform1f(u.uFar, lod);
+      gl.uniform1f(u.uTailFlat, this.effect.frontFlatNow());
       if (drops !== null) {
         gl.uniform1f(u.uDrop, drops[k]!);
       }
@@ -209,22 +274,33 @@ export class FogAccumulation {
       gl.uniform1f(u.uAccumZ, this.jitter[2]!);
       this.effect.testValues(this.volume);
       this.effect.quad.drawFull();
+      if (timedFresh) {
+        guard.end();
+      }
       // the held slice moved towards it, into the blended picture
       gl.viewport(0, 0, this.across, this.down);
       this.bindSums(this.chain[1 - prev]![0]!, this.chain[1 - prev]![1]!);
       gl.bindFramebuffer(gl.FRAMEBUFFER, this.blendFramebuffer);
+      const timedBlend = time("blend", k);
       const b = this.blend.use();
       gl.uniform1i(b.uSlice, k);
       gl.uniform1f(b.uAlpha, FogAccum.alpha(this.counts[k]!, n));
       gl.uniform4f(b.uMap, 1 / sx, 1 / sy, jx, jy);
       gl.uniform4f(b.uSize, ra, rd, ra, rd);
       this.effect.quad.drawFull();
+      if (timedBlend) {
+        guard.end();
+      }
       this.counts[k] = Math.min(255, this.counts[k]! + 1);
       // and into the volume's layer
       this.bindSums(this.blended[0]!, this.blended[1]!);
       gl.bindFramebuffer(gl.FRAMEBUFFER, light.slices[k]!);
+      const timedStore = time("store", k);
       this.store.use();
       this.effect.quad.drawFull();
+      if (timedStore) {
+        guard.end();
+      }
       prev = 1 - prev;
       if ((k - from) % each === each - 1 || k === to - 1) {
         guard.piece();

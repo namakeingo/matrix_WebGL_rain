@@ -21,7 +21,7 @@ void main() {
   vec3 d = rayOf(gl_FragCoord.xy);
   vec3 color = unseen ? vec3(0.0) : atmosSeen(d);
   vec3 reflected = vec3(0.0);
-  float end = FOG_FAR;
+  float end = BASE_FAR;
   vec2 fogPixel = gl_FragCoord.xy;
   fog = fogAt(fogPixel, end, false, strike);
   outColor = vec4(color * fog.a + fog.rgb, 1.0);

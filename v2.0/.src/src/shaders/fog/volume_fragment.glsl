@@ -23,10 +23,21 @@ void main() {
   vec4 direct = uSlice == 0 ? vec4(0.0) : texelFetch(uSumDirect, c, 0);
   vec4 mirror = uSlice == 0 ? vec4(0.0) : texelFetch(uSumMirror, c, 0);
   float lod = sliceLod(a, b);
-  if (!directHeld(gl_FragCoord.xy, a)) direct = gather(direct, cEye.xyz, d, a, b, false, lod, uMarched);
-  if (d.y < 0.0) {
-    float start = max(a, cEye.y / -d.y);
-    if (b > start) mirror = gather(mirror, cEye.xyz, d, start, b, true, lod, uMarched);
+  // (the direct ray, then the mirrored one from where it meets still water: one gather site in a loop of a count given at run time, so its code is in the program once)
+  int rays = d.y < 0.0 ? 2 : 1;
+  for (int k = 0; k < rays; k++) {
+    if (k >= 2) break;
+    bool mirrored = k == 1;
+    float from = a;
+    if (mirrored) {
+      from = max(a, cEye.y / -d.y);
+      if (b <= from) break;
+    } else if (directHeld(gl_FragCoord.xy, a)) {
+      continue;
+    }
+    vec4 acc = gather(mirrored ? mirror : direct, cEye.xyz, d, from, b, mirrored, lod, uMarched);
+    if (mirrored) mirror = acc;
+    else direct = acc;
   }
   outDirect = direct;
   outMirror = mirror;

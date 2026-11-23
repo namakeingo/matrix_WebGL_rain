@@ -34,7 +34,7 @@ const OCCLUDER_PAD_PX = 1;
 const OCCLUDER_RELATIVE = 0.01;
 // the fog's density (shaders/fog/medium.glsl): sigma exp(-max(y, 0) / DENSITY_SCALE_HEIGHT) (DENSITY_FLOOR + 0.8 s), s from 0
 // to 1, so never under DENSITY_FLOOR of the first factor
-const DENSITY_FLOOR = 0.2;
+const DENSITY_FLOOR = 0;
 const DENSITY_SCALE_HEIGHT = 4;
 // the planes' slack: the view-projection is 32 bit, so a sphere touching a plane within its rounding is kept
 const PLANE_SLACK = 1e-3;

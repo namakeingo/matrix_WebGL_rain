@@ -8,7 +8,7 @@ uniform sampler3D uHeldMirror;
 uniform int uSlice;
 // xy: the columns of the full volume that one reduced column covers; zw: the sample's offset in reduced columns
 uniform vec4 uMap;
-// xy: the full volume's columns; z: its layers
+// xy: the full volume's columns; z: the layers of its texture (the front's slices and the base mist's after them: the slice is read at (slice + 0.5) / layers)
 uniform vec3 uVolume;
 layout(location = 0) out vec4 outDirect;
 layout(location = 1) out vec4 outMirror;

@@ -11,11 +11,12 @@
 // 2026-11-19: the slider's default 50 (was 5), its range 0 to 100 now the earlier 0 to 10: gain = brightness / 50.
 // 2026-11-20: the slider's default 40 (the value whose default picture is closest to the flat-sky version's: the water's light matches), the gain's reference stays 50 (REFERENCE_BRIGHTNESS).
 // 2026-11-20: the flat sky's gain and DEFAULT_SKY_TONE removed; the Air tone (DEFAULT_AIR_TONE white, gains().air) added (Feature S1, stories A2 and A5).
+// 2026-11-22: the slider's default 43 (was 40) and its maximum 110 (was 100): identity sweeps against d3dfcb3 (the tree's darker picture after Feature U1: the frame mean 28.5 against 30.2 at 40): the default's mean difference is least at 43 (5.21 levels, frame mean 30.4 against 30.2), the maximum 110 (the old slider 100: 9.20 levels least, frame mean 64.5 against 63.3).
 import { M } from "../engine/core";
 
 // the defaults of Sky/Orb brightness, Air tone and Orb tone (project.json's)
 // the slider's default (project.json's) and the gain's reference: the slider value at which the Orb's gain is 1 (the earlier physical light; slider 100 is twice it)
-const DEFAULT_BRIGHTNESS = 40;
+const DEFAULT_BRIGHTNESS = 43;
 const REFERENCE_BRIGHTNESS = 50;
 const DEFAULT_AIR_TONE = "1 1 1";
 const DEFAULT_MOON_TONE = "0.5843137254901961 0.6 0.6352941176470588";

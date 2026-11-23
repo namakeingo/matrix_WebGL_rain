@@ -1,7 +1,7 @@
 // QualityFogShade: the fog's sky and moon shade grid (effects/fog.ts: what gets to each cell of the 128 x 64 x 96 grid from the sky and the moon through the
 // clouds) baked on the CPU, pure: no GL, no page, importable in any thread (the quality workers bake with it).
 // A cell holds (sky, moon) = through(p, p + dir 8 m, 4 places) for dir = up and, for the moon, the mean over the penumbra kernel's directions over its disc: exp(-(the mean of the medium's density at the 4 places + AIR_EXTINCTION)
-// x 8), the density of shaders/fog/medium.glsl (sigma e^(-max(y, 0) / 4), none under 1e-5; 0.2 + 0.8 smoothstep(0.4, 0.6, n); n = 0.55 N24 + 0.3 N10 + 0.15 N4,
+// x 8), the density of shaders/fog/medium.glsl (sigma e^(-max(y, 0) / 4), none under 1e-5; 0.8 smoothstep(0.4, 0.6, n) (no floor); n = 0.55 N24 + 0.3 N10 + 0.15 N4,
 // each a trilinear read of the noise at the level lod - log2(size), the octaves drifting with the time). The cell's place and lod are the shader's
 // (shadePlace, shadeLod; the constants as its text prints them: the log with 6 decimals).
 // Only the noise's levels 3..7 are ever read: lod is at least lodOf(2 m) = 8 (the places are 2 m apart), so the 24 m octave reads at 8 - log2(24) = 3.415 or
@@ -18,12 +18,15 @@
 //
 // Changelog:
 // 2026-11-21: viewRays, columnsFor, boxesFor (the shadow grid's boxes from the view's rays, the mouse parallax's yaw, eye offset and drift included).
+// 2026-11-22: Feature U3, story M4: the density's profile is StaticMist.frontProfile (the front's two scales); bake and bakeAt take a trailing optional front { tail, scale } (absent: the shipped defaults).
+// 2026-11-22: bakeAt: the cells at fractional grid coordinates (the shade grid's jittered, reduced bake: Feature U2, story V1).
 // 2026-11-21: bake's last argument y0, the first row of a box (the rows under it are read by nothing when the view only looks up); depthOf, rowFrom (Feature U1, story U7).
 // 2026-11-12: the moon channel the mean over the penumbra kernel's directions (MoonDisc: MOON_KERNEL, the GPU's constants), the kernel an optional argument of bake.
 // 2026-11-08: new.
 import { M } from "../../engine/core";
 import { Frame } from "../frame";
-import { AIR_EXTINCTION, MIST_RATIO, mistDepth } from "../../materials/fog";
+import { AIR_EXTINCTION } from "../../materials/fog";
+import { StaticMist } from "../staticmist";
 import { MOON_DIR, MoonDisc } from "../../materials/sky";
 
 const ACROSS = 128;
@@ -156,9 +159,19 @@ let mix24 = 0;
 let mix10 = 0;
 let mix4 = 0;
 let sigmaNow = 0;
-// the mist's extinction at the water for this bake (materials/fog.ts: the clouds' sigma times MIST_RATIO)
-let mistNow = 0;
 let timeNow = 0;
+// the front's profile parameters of the bake in progress (the tail's share and scale: StaticMist.frontDensity)
+let tailNow = StaticMist.TAIL_SHARE;
+let scaleNow = StaticMist.TAIL_SCALE;
+
+export interface FrontProfile {
+  tail: number;
+  scale: number;
+}
+function setFront(front?: FrontProfile): void {
+  tailNow = front ? front.tail : StaticMist.TAIL_SHARE;
+  scaleNow = front ? front.scale : StaticMist.TAIL_SCALE;
+}
 
 function octave(noise: Float32Array, q0: number, q1: number, q2: number, level: number, mix: number): number {
   const n0 = 128 >> level;
@@ -173,8 +186,8 @@ function octave(noise: Float32Array, q0: number, q1: number, q2: number, level: 
 
 // the medium's density at (x, y, z)
 function density(noise: Float32Array, x: number, y: number, z: number): number {
-  const scale = sigmaNow * Math.exp(-Math.max(y, 0) / 4);
-  if (scale < 1e-5) {
+  const scale = sigmaNow * StaticMist.frontProfile(y, scaleNow, tailNow);
+  if (scale < StaticMist.EXPIRY) {
     return 0;
   }
   const t = timeNow;
@@ -183,7 +196,7 @@ function density(noise: Float32Array, x: number, y: number, z: number): number {
     0.3 * octave(noise, x / 10 - t * 0.0052, y / 10 + t * 0.0012, z / 10 + 0.31, level10, mix10) +
     0.15 * octave(noise, x / 4 + 0.17, y / 4 - t * 0.0024, z / 4 + t * 0.008, level4, mix4);
   const s = Math.min(1, Math.max(0, (n - 0.4) / 0.2));
-  return scale * (0.2 + 0.8 * s * s * (3 - 2 * s));
+  return scale * (0.8 * s * s * (3 - 2 * s));
 }
 
 // how much light gets through 8 m from (x, y, z) in the direction (dx, dy, dz): 4 places, 2 m apart, the first one 1 m along
@@ -193,7 +206,7 @@ function through(noise: Float32Array, x: number, y: number, z: number, dx: numbe
     const s = 1 + 2 * i;
     depth += density(noise, x + dx * s, y + dy * s, z + dz * s);
   }
-  return Math.exp(-(depth / 4 + AIR_EXTINCTION) * 8 - mistDepth(mistNow, y, y + dy * 8, 8));
+  return Math.exp(-(depth / 4 + AIR_EXTINCTION) * 8);
 }
 
 // the level and the weight to the next one for an octave of `size` metres at the cell's lod
@@ -215,10 +228,10 @@ function setLevel(lod: number, size: number, which: number): void {
 const LOG2_128 = 7;
 
 // cells layerFrom..layerTo-1 (layers of the grid), rows y0..y0+rows-1 (y0 0: the rows from the water), columns x0..x0+nx-1, into out as half pairs (the first row of the box first)
-function bake(noise: Float32Array, sigma: number, time: number, out: Uint16Array, layerFrom: number, layerTo: number, x0: number, nx: number, rows: number, kernel: number = MOON_KERNEL, y0: number = 0): void {
+function bake(noise: Float32Array, sigma: number, time: number, out: Uint16Array, layerFrom: number, layerTo: number, x0: number, nx: number, rows: number, kernel: number = MOON_KERNEL, y0: number = 0, front?: FrontProfile): void {
   sigmaNow = sigma;
-  mistNow = sigma * MIST_RATIO;
   timeNow = time;
+  setFront(front);
   let at = 0;
   for (let iz = layerFrom; iz < layerTo; iz++) {
     const z = NEAR * Math.exp((iz / (DEEP - 1)) * LOG);
@@ -234,6 +247,37 @@ function bake(noise: Float32Array, sigma: number, time: number, out: Uint16Array
       setLevel(lod, 4, 2);
       for (let ix = x0; ix < x0 + nx; ix++) {
         const x = ((ix / (ACROSS - 1)) * 2 - 1) * SPAN * z;
+        out[at++] = toHalf(through(noise, x, y, -z, 0, 1, 0));
+        let moon = 0;
+        for (let k = 0; k < kernel; k++) {
+          moon += through(noise, x, y, -z, KERNEL_DIRS[3 * k], KERNEL_DIRS[3 * k + 1], KERNEL_DIRS[3 * k + 2]);
+        }
+        out[at++] = toHalf(moon / kernel);
+      }
+    }
+  }
+}
+
+// the cells at fractional grid coordinates (index units): the layers zs, the rows ys, the columns xs (each cell's lod from its own place, as bake's); half pairs, out[((a * ys.length + b) * xs.length + c) * 2 + ch];
+// at integer coordinates the values are bake's
+function bakeAt(noise: Float32Array, sigma: number, time: number, out: Uint16Array, zs: ArrayLike<number>, ys: ArrayLike<number>, xs: ArrayLike<number>, kernel: number = MOON_KERNEL, front?: FrontProfile): void {
+  sigmaNow = sigma;
+  timeNow = time;
+  setFront(front);
+  let at = 0;
+  for (let a = 0; a < zs.length; a++) {
+    const z = NEAR * Math.exp((zs[a] / (DEEP - 1)) * LOG);
+    for (let b = 0; b < ys.length; b++) {
+      const gy = ys[b] / (UP - 1);
+      const y = gy * gy * TOP;
+      const up = (2 * Math.sqrt(Math.max(y, 0) * TOP)) / (UP - 1);
+      const size = Math.max(Math.max((2 * SPAN * z) / (ACROSS - 1), up), (z * LOG) / (DEEP - 1));
+      const lod = Math.max(Math.log2(Math.max(size * 128, 1e-6)), LOG2_128 + 1);
+      setLevel(lod, 24, 0);
+      setLevel(lod, 10, 1);
+      setLevel(lod, 4, 2);
+      for (let c = 0; c < xs.length; c++) {
+        const x = ((xs[c] / (ACROSS - 1)) * 2 - 1) * SPAN * z;
         out[at++] = toHalf(through(noise, x, y, -z, 0, 1, 0));
         let moon = 0;
         for (let k = 0; k < kernel; k++) {
@@ -460,6 +504,6 @@ function boxesFor(rays: ArrayLike<number>, count: number, eyeX: number, eyeY: nu
   return boxes;
 }
 
-export const QualityFogShade = { depthOf, rowFrom, viewRays, columnsFor, boxesFor, VIEW_RAYS, ACROSS, UP, DEEP, TOP, NEAR, FAR, SPAN, MOON_KERNEL, MIP_FROM, MIP_LAST, MIP_TEXELS, MAX_TIME_ERROR, mipOffset, packMips, toHalf, fromHalf, slabBytes, bake, Schedule };
+export const QualityFogShade = { bakeAt, depthOf, rowFrom, viewRays, columnsFor, boxesFor, VIEW_RAYS, ACROSS, UP, DEEP, TOP, NEAR, FAR, SPAN, MOON_KERNEL, MIP_FROM, MIP_LAST, MIP_TEXELS, MAX_TIME_ERROR, mipOffset, packMips, toHalf, fromHalf, slabBytes, bake, Schedule };
 
 M.QualityFogShade = QualityFogShade;

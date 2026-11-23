@@ -11,13 +11,14 @@ float noise3Far(vec3 q, float size, float lod, float rank, bool far) {
 // density(p, lod), the far octaves flat when far (the same sums, the same octaves' places; far false: exactly density(p, lod), so
 // gather has one density call site)
 float densityFar(vec3 p, float lod, bool far) {
-  float scale = fParams.x * exp(-max(p.y, 0.0) / 4.0);
+  float scale = fParams.x * frontProfile(p.y);
   if (scale < 1e-5) return 0.0;
+  if (scale < uTailFlat) return scale * 0.4;
   float t = fParams.y;
   float n = 0.55 * noise3Far(p / 24.0 + vec3(t * 0.004, 0.0, t * 0.0016), 24.0, lod, 2.0, far)
     + 0.3 * noise3Far(p / 10.0 + vec3(-t * 0.0052, t * 0.0012, 0.31), 10.0, lod, 1.0, far)
     + 0.15 * noise3Far(p / 4.0 + vec3(0.17, -t * 0.0024, t * 0.008), 4.0, lod, 0.0, far);
-  return scale * (0.2 + 0.8 * smoothstep(0.4, 0.6, n));
+  return scale * (0.8 * smoothstep(0.4, 0.6, n));
 }
 vec4 gather(vec4 acc, vec3 o, vec3 d, float a, float b, bool mirrored, float lod, bool marched) {
   float dt = b - a;
@@ -25,11 +26,8 @@ vec4 gather(vec4 acc, vec3 o, vec3 d, float a, float b, bool mirrored, float lod
   if (mirrored) p.y = -p.y;
   vec3 view = mirrored ? vec3(d.x, -d.y, d.z) : d;
   float sigma = densityFar(p, lod, uFar > 0.5 && !marched);
-  // (the mist at the slice's middle like the clouds' density, one exponential: the closed form over the slice (mistMean, the tests' march's) cost the volume's full rebuild 7 ms; white scattering, so it is
-  // part of the source as well)
-  float mist = MIST_K * exp(-max(p.y, 0.0) / MIST_HEIGHT);
-  float extinction = sigma + AIR_EXTINCTION + mist;
-  vec3 source = sigma + mist > 1e-6 ? fogLight(p, view, lod, marched, sigma, mist) : vec3(0.0);
+  float extinction = sigma + AIR_EXTINCTION;
+  vec3 source = sigma > 1e-6 ? fogLight(p, view, lod, marched, sigma) : vec3(0.0);
   float pass = exp(-extinction * dt);
   // acc.a is the optical depth so far, not the transmittance: the sums and the volume are half floats written rounded down, and a product of per-slice
   // transmittances near 1 loses a whole step (1/2048) every slice (4.7% over 96 slices in clear air); a sum of optical depths loses at most a step of its own size

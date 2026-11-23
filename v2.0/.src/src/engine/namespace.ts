@@ -30,6 +30,7 @@ import type { QualityRain } from "../models/quality/rain";
 import type { QualitySplashes } from "../models/quality/splashes";
 import type { QualityBolt } from "../models/quality/bolt";
 import type { QualityFog } from "../models/quality/fog";
+import type { QualityFogVolume } from "../models/quality/fogvolume";
 import type { QualityWater } from "../models/quality/water";
 import type { QualityWaterBands } from "../models/quality/waterbands";
 import type { QualityRainReuse } from "../models/quality/rainreuse";
@@ -46,10 +47,17 @@ import type { GlyphAtlas } from "./glyphs";
 import type { RainLayout } from "../models/rainlayout";
 import type { RainWheel } from "../models/rainwheel";
 import type { SkyLight } from "../models/skylight";
-import type { FogWorld } from "../models/fogworld";
+import type { MistBeyond } from "../models/mistbeyond";
+import type { MistAlbedo } from "../models/mistalbedo";
+import type { StaticMist } from "../models/staticmist";
+import type { BaseLod } from "../models/baselod";
+import type { FogPair } from "../models/fogpair";
+import type { NoiseMin } from "../models/noisemin";
+import type { BaseMist } from "./basemist";
+import type { BaseMistShade } from "../models/basemistshade";
 import type { Atmosphere } from "../models/atmosphere";
 import type { MoonDisc } from "../materials/sky";
-import type { DENSITY_FULL, MIST, MIST_HEIGHT, MIST_RATIO, mistDepth, phaseLobe, phaseAt, phase, phaseGlsl } from "../materials/fog";
+import type { DENSITY_FULL, MIST, MIST_HEIGHT, MIST_RATIO, mistDepth, NOISE_CONTRAST, NOISE_STRETCH_BASE, NOISE_STRETCH, noiseStretchText, phaseLobe, phaseAt, phase, phaseGlsl } from "../materials/fog";
 import type { StrikeBias } from "../models/strikebias";
 import type { HdrOutput } from "../models/hdroutput";
 import type { HdrPack } from "../models/hdrpack";
@@ -68,6 +76,8 @@ import type { StrikePlan } from "../models/strikeplan";
 import type { StrikePlanWorker } from "../workers/strikeplanworker";
 import type { FogPlan } from "../models/fogplan";
 import type { FogAccum } from "../models/fogaccum";
+import type { ShadeAccum } from "../models/shadeaccum";
+import type { ShadeAccumGpu } from "../models/shadeaccumgpu";
 import type { FogPlanWorker } from "../workers/fogplanworker";
 import type { QualityAtmosphere } from "../models/quality/atmosphere";
 import type { AtmosphereWorker } from "../workers/atmosphereworker";
@@ -78,6 +88,7 @@ import type { Frame } from "../models/frame";
 import type { FrameWorker } from "../workers/frameworker";
 import type { JobTask, serveJob } from "../platform/jobtask";
 import type { TextLayoutWorker } from "../workers/textlayoutworker";
+import type { ShadeAccumWorker } from "../workers/shadeaccumworker";
 import type { SimMusicTask, SimMusicWorker } from "../workers/simmusicworker";
 import type { SteppedTask, serveStepped } from "../platform/steppedtask";
 import type { BoltShape } from "../models/boltshape";
@@ -89,6 +100,7 @@ import type { MusicFollower } from "../models/musicfollower";
 import type { MusicRain } from "../models/musicrain";
 import type { MusicIdle } from "../models/musicidle";
 import type { MouseParallax } from "../models/mouseparallax";
+import type { ParallaxLead } from "../models/parallaxlead";
 import type { SpawnBox } from "../models/spawnbox";
 import type { GlyphRelief } from "../models/glyphrelief";
 import type { GlyphTurn } from "../models/glyphturn";
@@ -127,16 +139,11 @@ export interface Capabilities {
 // the tests' options: window.Matrix3DTest given as an object (true: the tests, with none)
 export interface Matrix3DTestOptions {
   // the mist's strength as a multiple of MIST and its scale height in metres (materials/fog.ts), for the headed comparison of strengths and heights
-  // the world-fixed fog volume prototype (engine/fogworldbuild.ts; Feature U1, story U8): its text, programs and textures exist only with it
-  fogWorld?: boolean;
-  // with fogWorld: the world grid is the fog from the start (else `world` is false until set)
-  fogWorldOn?: boolean;
-  // with fogWorld: the world grid's march steps (1 to 96; default FogWorld.STEPS)
-  fogWorldSteps?: number;
   mistStrength?: number;
   mistHeight?: number;
-  // the fog volume's temporal accumulation (models/fogaccum.ts, engine/fogaccum.ts): the frames N of the average (a number or its text); "off" or nothing: off
-  fogAccum?: number | string;
+  // the fog noise's contrast gain (materials/fog.ts NOISE_CONTRAST, kept in [1, 10]); default 10
+  noiseContrast?: number;
+  colourContrast?: number;
   // the fog's phase function: "single" (the old single lobe), the forward weight and the forward lobe's g (materials/fog.ts), for the comparison of the weights
   phaseMode?: string;
   phaseWeight?: number;
@@ -155,6 +162,7 @@ export interface Matrix3DTestOptions {
   boltListWorker?: string;
   frameWorker?: string;
   textLayoutWorker?: string;
+  shadeAccumWorker?: string;
   qualityWorker?: string;
   // the waves start on the full 2048 x 1024 grid and ignore the brightness choice (?waves=full in the test pages)
   wavesFull?: boolean;
@@ -176,6 +184,8 @@ export interface Matrix3DNamespace {
   StrikePlanWorker: typeof StrikePlanWorker;
   FogPlan: typeof FogPlan;
   FogAccum: typeof FogAccum;
+  ShadeAccum: typeof ShadeAccum;
+  ShadeAccumGpu: typeof ShadeAccumGpu;
   FogPlanWorker: typeof FogPlanWorker;
   QualityAtmosphere: typeof QualityAtmosphere;
   AtmosphereWorker: typeof AtmosphereWorker;
@@ -223,6 +233,7 @@ export interface Matrix3DNamespace {
   QualitySplashes: typeof QualitySplashes;
   QualityBolt: typeof QualityBolt;
   QualityFog: typeof QualityFog;
+  QualityFogVolume: typeof QualityFogVolume;
   QualityWater: typeof QualityWater;
   QualityWaterBands: typeof QualityWaterBands;
   QualityRainReuse: typeof QualityRainReuse;
@@ -239,11 +250,18 @@ export interface Matrix3DNamespace {
   RainLayout: typeof RainLayout;
   RainWheel: typeof RainWheel;
   SkyLight: typeof SkyLight;
-  FogWorld: typeof FogWorld;
+  MistBeyond: typeof MistBeyond;
+  MistAlbedo: typeof MistAlbedo;
+  StaticMist: typeof StaticMist;
+  BaseLod: typeof BaseLod;
+  FogPair: typeof FogPair;
+  NoiseMin: typeof NoiseMin;
+  BaseMist: typeof BaseMist;
+  BaseMistShade: typeof BaseMistShade;
   Atmosphere: typeof Atmosphere;
   MoonDisc: typeof MoonDisc;
   FogPhase: { FORWARD_G: number; BACKWARD_G: number; FORWARD_W: number; SINGLE_G: number; MAX: number; hg: typeof phaseLobe; at: typeof phaseAt; phase: typeof phase; glsl: typeof phaseGlsl };
-  FogMist: { DENSITY_FULL: typeof DENSITY_FULL; MIST: typeof MIST; HEIGHT: typeof MIST_HEIGHT; RATIO: typeof MIST_RATIO; depth: typeof mistDepth };
+  FogMist: { DENSITY_FULL: typeof DENSITY_FULL; MIST: typeof MIST; HEIGHT: typeof MIST_HEIGHT; RATIO: typeof MIST_RATIO; depth: typeof mistDepth; NOISE_CONTRAST: typeof NOISE_CONTRAST; NOISE_STRETCH_BASE: typeof NOISE_STRETCH_BASE; NOISE_STRETCH: typeof NOISE_STRETCH; noiseStretchText: typeof noiseStretchText; COLOUR_CONTRAST: number; COLOUR_LO: number; COLOUR_HI: number; colourEdges: (c: number) => number[] };
   StrikeBias: typeof StrikeBias;
   HdrOutput: typeof HdrOutput;
   HdrPack: typeof HdrPack;
@@ -260,6 +278,7 @@ export interface Matrix3DNamespace {
   JobTask: typeof JobTask;
   serveJob: typeof serveJob;
   TextLayoutWorker: typeof TextLayoutWorker;
+  ShadeAccumWorker: typeof ShadeAccumWorker;
   SimMusicTask: typeof SimMusicTask;
   SimMusicWorker: typeof SimMusicWorker;
   SteppedTask: typeof SteppedTask;
@@ -273,6 +292,7 @@ export interface Matrix3DNamespace {
   MusicRain: typeof MusicRain;
   MusicIdle: typeof MusicIdle;
   MouseParallax: typeof MouseParallax;
+  ParallaxLead: typeof ParallaxLead;
   SpawnBox: typeof SpawnBox;
   GlyphRelief: typeof GlyphRelief;
   GlyphTurn: typeof GlyphTurn;

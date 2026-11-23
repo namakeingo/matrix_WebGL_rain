@@ -616,12 +616,12 @@
 				"condition" : "p200_label_Physics.value && p000_setting_SettingsMode.value == 'advanced'",
 				"editable" : false,
 				"index" : 34,
-				"max" : 100,
+				"max" : 108,
 				"min" : 0,
 				"order" : 134,
 				"text" : "ui_201_setting_SkyOrbBrightness",
 				"type" : "slider",
-				"value" : 40
+				"value" : 43
 			},
 			"p202_setting_AirTone" : 
 			{

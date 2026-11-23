@@ -7,6 +7,11 @@ const float SHADE_NEAR = ${SHADE_NEAR.toFixed(2)};
 const float SHADE_LOG = ${Math.log(FOG_FAR / SHADE_NEAR).toFixed(6)};
 const vec3 SHADE_CELLS = vec3(${SHADE_ACROSS}.0, ${SHADE_UP}.0, ${SHADE_DEEP}.0);
 const float SHADE_SPAN = ${M.Camera.SPAN.toFixed(4)};
+// the shade texture's depth: the front cloud's SHADE_DEEP layers, then the base mist's (Feature U3, story M3): a layer of either grid at the grid's own z coordinate g (0 to 1 over SHADE_DEEP layers) is read at
+// g x SHADE_FRONT (the front's) or SHADE_BASE + g x SHADE_FRONT (the base's)
+const float SHADE_LAYERS = ${SHADE_LAYERS.toFixed(1)};
+const float SHADE_FRONT = SHADE_CELLS.z / SHADE_LAYERS;
+const float SHADE_BASE = SHADE_CELLS.z / SHADE_LAYERS;
 const float STRIKE_SLOTS = ${SLOTS}.0;
 float lodOf(float metres) {
   return log2(max(metres * ${NOISE.toFixed(1)}, 1e-6));
@@ -14,27 +19,32 @@ float lodOf(float metres) {
 float noise3(vec3 q, float size, float lod) {
   return textureLod(uNoise, q, max(0.0, lod - log2(size))).r;
 }
+// the front cloud's height profile: the 4 m core and a tail of the share fMain.w at the scale fMoonGain.w (1 at the water; models/staticmist.ts: frontProfile)
+float frontProfile(float y) {
+  return (1.0 - fMain.w) * exp(-max(y, 0.0) / 4.0) + fMain.w * exp(-max(y, 0.0) / fMoonGain.w);
+}
+// the front's tail flat (Feature U3, story M5): the noise is replaced by its window's mean (0.4) where the density's scale is under this per metre; 0 (never set) is no replacement: lod off
+uniform float uTailFlat;
 float density(vec3 p, float lod) {
   // (none where even its densest is under 1e-5 per metre: high above the water)
-  float scale = fParams.x * exp(-max(p.y, 0.0) / 4.0);
+  float scale = fParams.x * frontProfile(p.y);
   if (scale < 1e-5) return 0.0;
+  if (scale < uTailFlat) return scale * 0.4;
   float t = fParams.y;
   float n = 0.55 * noise3(p / 24.0 + vec3(t * 0.004, 0.0, t * 0.0016), 24.0, lod)
     + 0.3 * noise3(p / 10.0 + vec3(-t * 0.0052, t * 0.0012, 0.31), 10.0, lod)
     + 0.15 * noise3(p / 4.0 + vec3(0.17, -t * 0.0024, t * 0.008), 4.0, lod);
-  return scale * (0.2 + 0.8 * smoothstep(0.4, 0.6, n));
+  return scale * (0.8 * smoothstep(0.4, 0.6, n));
 }
+// the window of the colour mix (M.FogMist.COLOUR_LO, COLOUR_HI: 0.3 and 0.7 unless the headed pair's colour contrast is set)
+const float COLOUR_LO = ${COLOUR_LO};
+const float COLOUR_HI = ${COLOUR_HI};
 // the clouds' albedo at p: the two fog colors mixed by a noise of its own
 vec3 albedoAt(vec3 p, float lod) {
-  return mix(fMain.rgb, fSecond.rgb, smoothstep(0.3, 0.7, noise3(p / 40.0 + vec3(0.37, 0.11, 0.53), 40.0, lod)));
+  return mix(fMain.rgb, fSecond.rgb, smoothstep(COLOUR_LO, COLOUR_HI, noise3(p / 40.0 + vec3(0.37, 0.11, 0.53), 40.0, lod)));
 }
-// the mist's mean extinction per metre over the stretch a to b of the ray o + t d (mirrored: the ray's image in the water, its height counted up from the water)
-float mistMean(vec3 o, vec3 d, float a, float b, bool mirrored) {
-  float side = mirrored ? -1.0 : 1.0;
-  return mistDepth(MIST_K, side * (o.y + a * d.y), side * (o.y + b * d.y), 1.0);
-}
-// how much light gets from p to q through the clouds, the mist and the air (n places along the way, each
-// read at the level of their spacing at least; the mist's by its closed form between the two places)
+// how much light gets from p to q through the clouds and the air (n places along the way, each
+// read at the level of their spacing at least)
 float through(vec3 p, vec3 q, int n, float lod) {
   float len = length(q - p);
   float at = max(lod, lodOf(len / float(n)));
@@ -42,7 +52,7 @@ float through(vec3 p, vec3 q, int n, float lod) {
   for (int i = 0; i < n; i++) {
     depth += density(mix(p, q, (float(i) + 0.5) / float(n)), at);
   }
-  return exp(-(depth / float(n) + AIR_EXTINCTION) * len - mistDepth(MIST_K, p.y, q.y, len));
+  return exp(-(depth / float(n) + AIR_EXTINCTION) * len);
 }
 // how much light from a direction reaches p through the clouds (4 places over 8 m)
 float lightThrough(vec3 p, vec3 dir, float lod) {

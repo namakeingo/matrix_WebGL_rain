@@ -19,8 +19,10 @@
 // Changelog:
 // 2026-11-08: new.
 import { M } from "../../engine/core";
-import { AIR_EXTINCTION, MIST_RATIO, mistDepth } from "../../materials/fog";
+import { AIR_EXTINCTION } from "../../materials/fog";
 import { QualityFogShade } from "./fogshade";
+import type { FrontProfile } from "./fogshade";
+import { StaticMist } from "../staticmist";
 
 const ACROSS = 128;
 const UP = 64;
@@ -114,9 +116,10 @@ let mix24 = 0;
 let mix10 = 0;
 let mix4 = 0;
 let sigmaNow = 0;
-// the mist's extinction at the water for this bake (materials/fog.ts: the clouds' sigma times MIST_RATIO)
-let mistNow = 0;
 let timeNow = 0;
+// the front's profile parameters of the bake in progress
+let tailNow = StaticMist.TAIL_SHARE;
+let scaleNow = StaticMist.TAIL_SCALE;
 
 // an octave's value (0 to 1) at the level and the weight between it and the next
 function octave(noise: Uint8Array, q0: number, q1: number, q2: number, level: number, mix: number): number {
@@ -131,8 +134,8 @@ function octave(noise: Uint8Array, q0: number, q1: number, q2: number, level: nu
 
 // the medium's density at (x, y, z)
 function density(noise: Uint8Array, x: number, y: number, z: number): number {
-  const scale = sigmaNow * Math.exp(-Math.max(y, 0) / 4);
-  if (scale < 1e-5) {
+  const scale = sigmaNow * StaticMist.frontProfile(y, scaleNow, tailNow);
+  if (scale < StaticMist.EXPIRY) {
     return 0;
   }
   const t = timeNow;
@@ -141,7 +144,7 @@ function density(noise: Uint8Array, x: number, y: number, z: number): number {
     0.3 * octave(noise, x / 10 - t * 0.0052, y / 10 + t * 0.0012, z / 10 + 0.31, level10, mix10) +
     0.15 * octave(noise, x / 4 + 0.17, y / 4 - t * 0.0024, z / 4 + t * 0.008, level4, mix4);
   const s = Math.min(1, Math.max(0, (n - 0.4) / 0.2));
-  return scale * (0.2 + 0.8 * s * s * (3 - 2 * s));
+  return scale * (0.8 * s * s * (3 - 2 * s));
 }
 
 const LOG2_24 = Math.log2(24);
@@ -206,14 +209,15 @@ function group(noise: Uint8Array, points: Float32Array, g: number, px: number, p
     const u = (i + 0.5) / 4;
     depth += density(noise, px + ex * u, py + ey * u, pz + ez * u);
   }
-  return Math.exp(-(depth / 4 + AIR_EXTINCTION) * len - mistDepth(mistNow, py, ny, len));
+  return Math.exp(-(depth / 4 + AIR_EXTINCTION) * len);
 }
 
 // cells layerFrom..layerTo-1 (layers of the grid), rows y0..y0+rows-1 (y0 0: the rows from the water), columns x0..x0+nx-1, into out as half quads (the first row of the box first)
-function bake(noise: Uint8Array, points: Float32Array, sigma: number, time: number, out: Uint16Array, layerFrom: number, layerTo: number, x0: number, nx: number, rows: number, y0: number = 0): void {
+function bake(noise: Uint8Array, points: Float32Array, sigma: number, time: number, out: Uint16Array, layerFrom: number, layerTo: number, x0: number, nx: number, rows: number, y0: number = 0, front?: FrontProfile): void {
   sigmaNow = sigma;
-  mistNow = sigma * MIST_RATIO;
   timeNow = time;
+  tailNow = front ? front.tail : StaticMist.TAIL_SHARE;
+  scaleNow = front ? front.scale : StaticMist.TAIL_SCALE;
   const toHalf = QualityFogShade.toHalf;
   let at = 0;
   for (let iz = layerFrom; iz < layerTo; iz++) {

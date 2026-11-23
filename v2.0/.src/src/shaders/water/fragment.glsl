@@ -147,7 +147,14 @@ bool flatWater(vec2 xz, vec2 foot, float t) {
   if (top * perH < limit) return true;
   vec2 r = w + c;
   if (2.0 * r.x <= 4.0 * c.x && 2.0 * r.y <= 4.0 * c.y) {
-    float local = max(max(blockTop(xz + vec2(-r.x, -r.y)), blockTop(xz + vec2(r.x, -r.y))), max(blockTop(xz + vec2(-r.x, r.y)), blockTop(xz + vec2(r.x, r.y))));
+    // (the four corners' tops in one loop, its count a value at run time: one blockTop site; the highest of them, the order does not matter)
+    int corners = 3 + int(uFlatPx / uFlatPx);
+    float local = 0.0;
+    for (int c = 0; c < corners; c++) {
+      if (c >= 4) break;
+      float cornerTop = blockTop(xz + vec2((c & 1) == 0 ? -r.x : r.x, c < 2 ? -r.y : r.y));
+      local = c == 0 ? cornerTop : max(local, cornerTop);
+    }
     return local * perH < limit;
   }
 #endif
@@ -240,7 +247,7 @@ vec3 mirroredAt(vec2 at, vec2 major, float minor, out vec3 emitted, out vec3 sce
   for (int i = 0; i < 2; i++) {
     if (i == 1 && !covered) break;
     vec3 share;
-    vec4 fog = fogAt(i == 0 ? clamp(at, -edge, cScreen.xy + edge) : at, i == 0 ? FOG_FAR : NEAR_SCALE / near, true, share);
+    vec4 fog = fogAt(i == 0 ? clamp(at, -edge, cScreen.xy + edge) : at, i == 0 ? BASE_FAR : NEAR_SCALE / near, true, share);
     if (i == 0) {
       sky = seenMirror * fog.a + fog.rgb;
       strike = share;
@@ -465,14 +472,7 @@ vec3 airBeyond(inout vec4 fog, vec3 d, float end) {
     vec3 span;
     vec3 haze;
     aerialSpan(d, end, span, haze);
-    // the mist beyond the volume, in closed form from the volume's far end to the water (the ray ends at the surface, y = 0: the depth is k len (1 - e^(-a / H)) / (a / H), a the ray's height at
-    // FOG_FAR, one exponential; the series for a small a): what it lets through multiplies the span's transmittance and the air's light seen through it; its own light is the white scattering of the
-    // light around (the volume's fogLight with no cloud shade and no phase: the sky's ambient and the Orb's irradiance spread over the sphere, with the multiple scattering), seen through the air
-    float up = max(cEye.y + FOG_FAR * d.y, 0.0) / MIST_HEIGHT;
-    float clear = exp(-MIST_K * (end - FOG_FAR) * (up < 1.0e-3 ? 1.0 - 0.5 * up : (1.0 - exp(-up)) / up));
-    vec3 lit = (atmosAmbient() + MOON / FOUR_PI) * (1.0 + MULTIPLE);
-    haze = haze * clear + (1.0 - clear) * lit * span;
-    span *= clear;
+    // (the mist beyond the volume is the base volume's, read by fogAt to BASE_FAR: this span is the air's alone)
     float luminance = dot(span, vec3(0.2126, 0.7152, 0.0722));
     fog.rgb += fog.a * haze;
     fog.a *= luminance;
@@ -556,7 +556,7 @@ void main() {
   vec4 fog = vec4(0.0, 0.0, 0.0, 1.0);
   // (one read for both cases, so the fog's code is in the program once here: the water's pixel and the hit distance, or, with the water off below the
   // horizon, the pixel the mirrored ray crosses and the far distance)
-  float end = FOG_FAR;
+  float end = BASE_FAR;
   if (water) end = hit;
   vec2 fogPixel = gl_FragCoord.xy;
   if (!water && uWaterOff && d.y < 0.0) {

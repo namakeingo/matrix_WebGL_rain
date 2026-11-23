@@ -4,14 +4,13 @@ uniform int uSlice;
 uniform float uCull;
 const float CULL_BELOW = ${CULL_BELOW.toFixed(2)};
 const float CULL_RELATIVE = ${CULL_RELATIVE};
-// 1: a column also holds a slice where its own ray's transmittance bound is under TAIL_T (the density's floor at the ray's highest
-// point and the air: models/quality/fog.ts); 0: only the water's cut holds
+// 1: a column also holds a slice where its own ray's transmittance bound is under TAIL_T (the air's alone: no density floor
+// since Feature U3, story M2: models/quality/fog.ts); 0: only the water's cut holds
 uniform float uTail;
 const float TAIL_T = ${QualityFog.TAIL_T.toExponential(6)};
-// an upper bound of the transmittance along a ray rising dy per unit of direction from the eye to distance a
+// an upper bound of the transmittance along a ray to distance a: the air's alone (the front cloud's density has no floor, so its least is 0; dy, the ray's rise, is not needed)
 float tailBound(float dy, float a) {
-  float yHigh = cEye.y + max(dy, 0.0) * a;
-  return exp(-(AIR_EXTINCTION + fParams.x * 0.2 * exp(-max(yHigh, 0.0) / 4.0)) * a);
+  return exp(-AIR_EXTINCTION * a);
 }
 float sliceLod(float a, float b) {
   return lodOf(max(0.5 * (a + b) * fVolume.z / cEye.w, b - a));
@@ -30,13 +29,11 @@ bool directHeld(vec2 fc, float a) {
   if (uTail > 0.5 && tailBound(columnRay(fc).y, a) < TAIL_T) return true;
   float far = underWater(fc);
   if (far >= 1e29) return false;
-  far = max(far, underWater(fc + vec2(-1.0, -1.0)));
-  far = max(far, underWater(fc + vec2(0.0, -1.0)));
-  far = max(far, underWater(fc + vec2(1.0, -1.0)));
-  far = max(far, underWater(fc + vec2(-1.0, 0.0)));
-  far = max(far, underWater(fc + vec2(1.0, 0.0)));
-  far = max(far, underWater(fc + vec2(-1.0, 1.0)));
-  far = max(far, underWater(fc + vec2(0.0, 1.0)));
-  far = max(far, underWater(fc + vec2(1.0, 1.0)));
+  // (the eight neighbours in one loop, its count a value at run time (uCull is 1 here: the function returned above when it is 0): the centre, offset (0, 0), is the loop's fifth, a max with itself)
+  int ring = int(8.0 * uCull + 1.5);
+  for (int i = 0; i < ring; i++) {
+    if (i >= 9) break;
+    far = max(far, underWater(fc + vec2(float(i % 3) - 1.0, float(i / 3) - 1.0)));
+  }
   return a > far * (1.0 + CULL_RELATIVE);
 }
