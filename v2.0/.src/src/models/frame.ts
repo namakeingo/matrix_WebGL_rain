@@ -8,6 +8,7 @@
 // axes() is the view's axes: the pitch, then the yaw about the vertical (turning right: forward towards +x).
 //
 // Changelog:
+// 2026-11-23: atPose(input, pose): the input with the four parallax offsets of a target pose.
 // 2026-11-18: edgeAngle (the angle of the extended window's bottom or top row from the optical axis); FrameInput.margin (the OLED margin, device pixels; a view key); the block's cScreen.z (float 34) is the tangent below the horizon of the bottom row of the window extended by the margin (lens-independent: the rain's world does not move with the lens).
 // 2026-11-18: the lens (lensX, lensY): the off-axis term of the view-projection, cLens in the block (40 floats, floats 36 to 39), both keys of the view (sameView).
 // 2026-11-10: new, from Camera.update() and StepClock.stepAt.
@@ -156,6 +157,11 @@ function sameView(a: FrameInput, b: FrameInput): boolean {
   return true;
 }
 
-export const Frame = { compute, same, sameView, axes, edgeAngle };
+// the input with the four parallax offsets of a pose { yaw, pitch, eyeX, eyeY } (a new object: the input is not changed)
+function atPose(input: FrameInput, pose: { yaw: number; pitch: number; eyeX: number; eyeY: number }): FrameInput {
+  return Object.assign({}, input, { yaw: pose.yaw, pitchShift: pose.pitch, eyeX: pose.eyeX, eyeShift: pose.eyeY });
+}
+
+export const Frame = { atPose, compute, same, sameView, axes, edgeAngle };
 
 M.Frame = Frame;

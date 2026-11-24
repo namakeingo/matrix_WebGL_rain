@@ -71,7 +71,7 @@ export function phaseGlsl(w: number, gF: number, gB: number): string {
 }
 
 // The mist: an exponential height layer of white scattering (scatter = extinction, as the old constant haze was), extinction k e^(-y / MIST_HEIGHT) per metre at y metres above the water, k = MIST x
-// (Fog intensity - 1) / 99 (the clouds' factor: Fog intensity 1 is the air alone). MIST is half the strength that made the optical depth over 300 m at the water at Fog intensity 40 (factor 39/99) the old constant's 0.003 x 300 = 0.9: that depth is 0.45; MIST_HEIGHT is 130 m (main_03 "The mist layer").
+// the layer intensity / 101 (the clouds' factor: Fog intensity 1 is already a faint cloud; only 0, a test's, is the air alone). MIST is half the strength that made the optical depth over 300 m at the water at Fog intensity 40 (factor 39/99) the old constant's 0.003 x 300 = 0.9: that depth is 0.45; MIST_HEIGHT is 130 m (main_03 "The mist layer").
 // (M.TEST only: the tests' options mistStrength and mistHeight scale MIST and replace MIST_HEIGHT for the headed comparison of strengths and heights; shipped, neither is read)
 const TEST = testOptions();
 export const MIST = (TEST.mistStrength ?? 1) * 0.5 * 0.9 / 300 / (39 / 99);

@@ -51,6 +51,8 @@
 //   WaveFuse.FUSE_MIN_STEPS (8) steps takes them two to a draw (fewer steps: single draws, the fused draw being dearer there).
 //
 // Changelog:
+// 2026-11-23: qualityStatics compares the grid's numbers rounded to 32 bits (Math.fround) with the sent ones, and the cells down: the statics were given to the pool every frame before.
+// 2026-11-23: qualityLeadKey (the quality job's lead: what the job reads at the release frame besides the view).
 // 2026-11-08: fusion on by default, only for frames of 8 steps or more (`fuseMin`, `fuseAnyLod` for the tests).
 // 2026-11-08: two steps a draw (fused pairs first, an odd one single last), behind `fuse`; the guard's pieces counted in draws.
 // 2026-11-07: the quality job is the block map (kind "waves", 2048 units of 8 x 8 blocks, the grid as its static array).
@@ -74,6 +76,7 @@ import MAX_FRAGMENT_SOURCE from "../shaders/waves/max_fragment.glsl";
 import RESAMPLE_FRAGMENT_SOURCE from "../shaders/waves/resample_fragment.glsl";
 import WAVES_SOURCE from "../shaders/waves/waves.glsl";
 import { QualityWater } from "../models/quality/water";
+import { QualityLead } from "../models/quality/lead";
 import { QualityWaves } from "../models/quality/waves";
 import { WaveSteps } from "../models/wavesteps";
 import { WaveDissolve } from "../models/wavedissolve";
@@ -500,6 +503,11 @@ export class Waves extends M.Effect {
     this.qualityFor = this.camera.dirty ? -1 : this.camera.version;
   }
 
+  // what the job reads at the release frame besides the view (the pool's lead): the level of detail's switch
+  qualityLeadKey(): number {
+    return QualityLead.fold([this.lod ? 1 : 0]);
+  }
+
   qualityKind(): string {
     return "waves";
   }
@@ -509,7 +517,8 @@ export class Waves extends M.Effect {
     const g = this.grid;
     const sent = this.qualitySentGrid;
     const { across, down } = WaveSteps.cellsFor(!!this.full);
-    if (sent && sent[0] === g.near && sent[1] === g.far && sent[2] === g.span && sent[3] === across) {
+    // (the sent grid is packed in 32 bits: the grid's own numbers are rounded the same way before they are compared, else a number not exact in 32 bits never matches and the statics go every frame)
+    if (sent && sent[0] === Math.fround(g.near) && sent[1] === Math.fround(g.far) && sent[2] === Math.fround(g.span) && sent[3] === across && sent[4] === down) {
       return null;
     }
     const grid = QualityWaves.gridStatics(g, across, down);

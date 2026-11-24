@@ -1,7 +1,7 @@
 // The static mist's model (Feature U3, story M1; units.ui.staticmist.ts). Pure, no GL, no page, importable in any thread: the fog's two layers as functions. The BASE MIST is a noise-modulated exponential height
 // layer whose density never drifts (the noise read at fixed offsets, a window normalised to mean 1 so its mean extinction at the water is its strength); the FRONT CLOUD has a two-scale height profile and a window
 // without the 20% floor; the SPLIT shares today's mean extinction at the water between them.
-// - totalAtWater(i): today's mean extinction per metre at the water at Fog intensity i: f (DENSITY_FULL CLOUD_WINDOW_MEAN + MIST), f = clamp((i - 1) / 99, 0, 1)
+// - totalAtWater(i): today's mean extinction per metre at the water at Fog intensity i: f (DENSITY_FULL CLOUD_WINDOW_MEAN + MIST), f = clamp(i / 101, 0, 1) (i the layer intensity; 0 and below give none)
 // - splitStrengths(i, share): { base, front }: base = share total, front = (1 - share) total / FRONT_WINDOW_MEAN (the front's sigma): base + front FRONT_WINDOW_MEAN = total
 // - frontWindow(n) = 0.8 smoothstep(0.4, 0.6, n); frontProfile(y, hf, t) = (1 - t) e^(-max(y, 0) / 4) + t e^(-max(y, 0) / hf); frontColumn(hf, t) = (1 - t) 4 + t hf
 // - baseDensity(y, hb, base, m) = base e^(-max(y, 0) / hb) m (no time); baseNoise(p, read, lod): the three octaves (OCTAVES) read at p / size + offset at the level max(0, lod - log2(size)), mixed by their weights
@@ -11,6 +11,7 @@
 // - viewAccumulates(change), viewAlpha(frame), staleWeight(frames), STALE_LIMIT, converged(frames), needsDraw({ change, frames }): the following of a view change by accumulation
 //
 // Changelog:
+// 2026-11-23: the layers start from Fog intensity 1 (no longer the air alone): layerIntensity is i / 2 (was max(1, i / 2)) and the factor i / 101 (was (i - 1) / 99).
 // 2026-11-23: the calibrated defaults: layerIntensity (the single Fog intensity halved), TAIL_SHARE 0.3 and TAIL_SCALE 100 (were 0.1 and 130), WINDOW_MEAN and WINDOW_TABLE at the noise contrast 5.
 // 2026-11-22: Feature U3, story M5: TAIL_FLAT, FLAT_WINDOW, flatHeight, frontDensityLod (the front's tail flat).
 // 2026-11-22: Feature U3, story M4: TAIL_SHARE, TAIL_SCALE (range, CORE_SCALE), EXPIRY, clampTail, clampScale, frontDensity, expiryHeight, frontDepth.
@@ -59,10 +60,10 @@ const WINDOW_TABLE = [
   [0.4815, 0.7813, 0.9932, 1, 1],
 ];
 
-const factor = (i: number): number => clamp((i - 1) / 99, 0, 1);
+const factor = (i: number): number => clamp(i / 101, 0, 1);
 
-// the single Fog intensity as the two layers get it (the calibrated defaults): halved, then the (i - 1) / 99 mapping: Fog 40 is what 20 was, Fog 100 what 50 was, Fog 1 and 2 are no fog
-const layerIntensity = (i: number): number => Math.max(1, i / 2);
+// the single Fog intensity as the two layers get it: halved (no floor), then the i / 101 mapping: Fog 40 is the layer 20, Fog 100 the layer 50, Fog 1 the layer 0.5 (a cloud already at the slider's minimum); a test's 0 is none
+const layerIntensity = (i: number): number => i / 2;
 
 function totalAtWater(i: number): number {
   return factor(i) * (DENSITY_FULL * CLOUD_WINDOW_MEAN + MIST);

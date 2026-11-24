@@ -7,6 +7,7 @@
 // exactly on its target (within SETTLED: snapped), after which step() reports no change: the camera is not touched once the view is still.
 // - farFrom(a, b): whether two sets of the camera's offsets ({ yaw, pitchShift, eyeX, eyeShift }) differ by more than TOLERANCE (yaw and pitch 0.004 rad, the eye 0.03 m, any one of them):
 //   what the fog's volume and shade, built for the view of a time, tolerate before they are built again.
+// - offsetsFor(mode, amount, limits, x, y): the camera's offsets { yaw, pitch, eyeX, eyeY } of a position x, y (-1 to 1): x Amount x REACH x the mode's limit, the other mode's 0; step() and models/parallaxpose.ts give exactly these.
 // - seed(x, y): the position and its target put at (x, y) at once (a model taking over from another, mid-movement: the view does not jump).
 // - reset(): the position, its target and every offset back to 0, the clock forgotten (Mouse parallax off: nothing is left of the cursor's last place).
 // - step(now): follows the target to `now` (ms; the first call only takes the time); true when an offset changed since the last step.
@@ -20,6 +21,7 @@
 // 2026-11-09: new.
 // 2026-11-10: seed (a handover between a model and another).
 // 2026-11-12: reach (the range a setting reaches, for the spawn box).
+// 2026-11-23: offsetsFor (the mapping of a position to the offsets, shared with models/parallaxpose.ts); step uses it.
 // 2026-11-10: the movement without the x 2 (Amount 1 reaches half of the limit: REACH); the pitch limit the yaw limit's (balanced rotation), not over the highest pitch.
 import { M } from "../engine/core";
 
@@ -100,6 +102,13 @@ export class MouseParallax {
     return { yaw: rotate ? s * limits.yaw : 0, pitch: rotate ? s * limits.pitch : 0, eyeX: rotate ? 0 : s * limits.eyeX, eyeY: rotate ? 0 : s * limits.eyeY };
   }
 
+  // the offsets of a position x, y (-1 to 1) in the mode chosen
+  static offsetsFor(mode: string, amount: number, limits: ParallaxLimits, x: number, y: number): { yaw: number; pitch: number; eyeX: number; eyeY: number } {
+    const s = amount * REACH;
+    const rotate = mode === "rotation";
+    return { yaw: rotate ? x * s * limits.yaw : 0, pitch: rotate ? y * s * limits.pitch : 0, eyeX: rotate ? 0 : x * s * limits.eyeX, eyeY: rotate ? 0 : y * s * limits.eyeY };
+  }
+
   static farFrom(a: ParallaxOffsets, b: ParallaxOffsets): boolean {
     return (
       Math.abs(a.yaw - b.yaw) > TOLERANCE.yaw ||
@@ -151,13 +160,7 @@ export class MouseParallax {
       if (Math.abs(this.ty - this.y) < SETTLED) this.y = this.ty;
     }
     this.moving = this.x !== this.tx || this.y !== this.ty;
-    const s = this.amount * REACH;
-    const l = this.limits;
-    const rotate = this.mode === "rotation";
-    const yaw = rotate ? this.x * s * l.yaw : 0;
-    const pitch = rotate ? this.y * s * l.pitch : 0;
-    const eyeX = rotate ? 0 : this.x * s * l.eyeX;
-    const eyeY = rotate ? 0 : this.y * s * l.eyeY;
+    const { yaw, pitch, eyeX, eyeY } = MouseParallax.offsetsFor(this.mode, this.amount, this.limits, this.x, this.y);
     const changed = yaw !== this.yaw || pitch !== this.pitch || eyeX !== this.eyeX || eyeY !== this.eyeY;
     this.yaw = yaw;
     this.pitch = pitch;

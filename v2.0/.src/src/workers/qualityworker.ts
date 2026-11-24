@@ -11,6 +11,7 @@
 //   that worker's tasks itself).
 //
 // Changelog:
+// 2026-11-24: a fogshade bake message's params may carry lod: true (the layers by M.QualityFogShade.bakeLod, the rule's strides; Feature P1, story P10).
 // 2026-11-06: new.
 import { M } from "../engine/core";
 import { workerScope } from "../platform/scope";
@@ -72,7 +73,7 @@ function handle(state: QualityWorkerState, message: Message): QualityReply | nul
     if (!stored || stored.kind !== "fogshade" || stored.version !== message.version) {
       return { reply: Object.assign(head, { error: "static " + effect + " is " + (stored ? "version " + stored.version : "missing") + ", expected " + message.version }), transfer: [] };
     }
-    const p = message.params as { sigma: number; time: number; tail?: number; tailScale?: number };
+    const p = message.params as { sigma: number; time: number; tail?: number; tailScale?: number; lod?: boolean };
     const layerFrom = message.layerFrom as number;
     const layerTo = message.layerTo as number;
     const x0 = message.x0 as number;
@@ -80,7 +81,16 @@ function handle(state: QualityWorkerState, message: Message): QualityReply | nul
     const rows = message.rows as number;
     const y0 = (message.y0 as number) || 0;
     const data = new Uint16Array((layerTo - layerFrom) * rows * nx * 2);
-    M.QualityFogShade.bake(stored.arrays.noise, p.sigma, p.time, data, layerFrom, layerTo, x0, nx, rows, undefined, y0, p.tail === undefined ? undefined : { tail: p.tail, scale: p.tailScale as number });
+    const front = p.tail === undefined ? undefined : { tail: p.tail, scale: p.tailScale as number };
+    if (p.lod) {
+      // (the LOD's lattice of each layer: models/shadelod.ts, the strides of the rule)
+      const per = rows * nx * 2;
+      for (let l = layerFrom; l < layerTo; l++) {
+        M.QualityFogShade.bakeLod(stored.arrays.noise, p.sigma, p.time, data.subarray((l - layerFrom) * per, (l - layerFrom + 1) * per), l, x0, nx, rows, y0, 0, 0, front);
+      }
+    } else {
+      M.QualityFogShade.bake(stored.arrays.noise, p.sigma, p.time, data, layerFrom, layerTo, x0, nx, rows, undefined, y0, front);
+    }
     return { reply: Object.assign(head, { layerFrom, layerTo, x0, nx, rows, y0, data }), transfer: [data.buffer as ArrayBuffer] };
   }
   if (type !== "run") {

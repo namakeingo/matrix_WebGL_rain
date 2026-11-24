@@ -7,8 +7,12 @@
 // - the slots' segments are big: the input carries them only when a slot's items changed (`segments`, with the slot's `version`), and run holds the last of each slot (module state:
 //   in a worker its own, inline the page's); a slot whose segments are neither given nor held at that version is listed in `missing` with no mask, so the caller computes that frame
 //   inline (the same functions) and sends the segments again. Nothing else is held, and the output depends on the input and on what was held at the version it names
+// - listFits(made, now): whether a quality list made for a view fits the view of a frame. made and now are { version, viewVersion, pose }: the camera's version, its version without the parallax-only steps
+//   (Camera.viewVersion) and the parallax's offsets { yaw, pitch, eyeX, eyeY }. With no pose in `made` the versions are equal (the list is for the camera's own version); with one the view versions and the four
+//   offsets are equal bit for bit, whatever the version counted meanwhile (a list made for the pose the view reaches at its release fits exactly the frame that shows it)
 //
 // Changelog:
+// 2026-11-23: listFits.
 // 2026-11-10: new.
 import { M } from "../engine/core";
 import { QualityBolt } from "./quality/bolt";
@@ -104,6 +108,30 @@ function keep(mask: Uint8Array, region: number, list: Uint32Array, from: number,
   return kept;
 }
 
-export const BoltList = { run, forget, keep, brightest };
+// the offsets of a pose
+interface ListPose {
+  yaw: number;
+  pitch: number;
+  eyeX: number;
+  eyeY: number;
+}
+
+// the view a list was made for, or the camera's now
+export interface ListView {
+  version: number;
+  viewVersion: number;
+  pose: ListPose | null;
+}
+
+function listFits(made: ListView, now: ListView): boolean {
+  const p = made.pose;
+  if (!p) {
+    return made.version === now.version;
+  }
+  const q = now.pose;
+  return !!q && made.viewVersion === now.viewVersion && p.yaw === q.yaw && p.pitch === q.pitch && p.eyeX === q.eyeX && p.eyeY === q.eyeY;
+}
+
+export const BoltList = { run, forget, keep, brightest, listFits };
 
 M.BoltList = BoltList;

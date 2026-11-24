@@ -81,6 +81,9 @@
 //   by column.
 //
 // Changelog:
+// 2026-11-23: the lead's path (a layout for the pose of the release, at the release step) only for a layout owed by the view (the drift rule, an obsolete pose); one owed by a setting, the floor or the spawn plane is asked or made as without a lead.
+// 2026-11-23: qualityLeadKey (the quality job's lead: what the job reads at the release frame besides the view), qualityUsesStep.
+// 2026-11-23: setAhead (the Parallax delay as a lead): with a lead the screen floor's layout is asked for the pose of the release (floorView, viewDrifted and lay take a pose), for the release step (RainLayout.releaseStep), a pending layout whose pose is no longer reached is dropped and one not answered at its step is made here; no lead: as before.
 // 2026-11-18: the OLED margin (Camera.margin, not the lens: the rain's world is the same at every pixel shift): the wheel's view, the call records, the part and the worker's job carry the extended window's top and bottom rows' angles (Camera.topAngle(), bottomAngle()); the screen floor's layout is laid out again past the tolerance of the bottom angle (viewDrifted, layoutAngle); setSpawnBox takes the extended window's angles and side tangents (boxTopAngle, boxBottomAngle, boxLeftTan, boxRightTan, recorded settings).
 // 2026-11-15: crestHide and the uCrest sampler: a drop behind a crest is discarded in the direct pass.
 // 2026-11-12: a drop meets the water by its life, never by moving: the gather pass (shaders/rain/gather_vertex.glsl, gatherMeets, pollMeets, setMeets) reads the water's rows at each drop's
@@ -127,6 +130,7 @@ import type { GlyphAtlas } from "../engine/glyphs";
 import type { RainLayout, RestartResult, SpawnPlane } from "../models/rainlayout";
 import type { FloorKind, FloorView } from "../models/floor";
 import type { QualityJob, EffectQuality, QualityShared, QualityViewInputs } from "../models/quality/types";
+import { QualityLead } from "../models/quality/lead";
 import type { QualityStatics, QualityParams } from "../models/quality/jobs";
 import type { SceneWorker, RainResult } from "../workers/sceneworker";
 import type { RainWheel, DropState } from "../models/rainwheel";
@@ -174,6 +178,19 @@ const MEET_STRIDE = M.WaveLift.STRIDE;
 // the width of a 16:9 view as a bearing (x / z): the colours' unit across the world
 // whether two spawn planes are the same (null: the world's ceiling)
 // (within MouseParallax.TOLERANCE: the view the mouse parallax moves does not lay the drops out again for a drift smaller than that)
+// the parallax's offsets of a pose, and the source of the pose the view will show: the frame's time (s), the lead (s) and the pose `secondsAhead` after the frame (null when not known)
+export interface RainPose {
+  yaw: number;
+  pitch: number;
+  eyeX: number;
+  eyeY: number;
+}
+export interface RainAhead {
+  time: number;
+  lead: number;
+  poseAt(secondsAhead: number): RainPose | null;
+}
+
 const sameSpawn = (a: SpawnPlane | null, b: SpawnPlane | null): boolean => {
   if (a === b) {
     return true;
@@ -319,7 +336,9 @@ export class Rain extends M.Effect {
   tiltOn: boolean;
   layoutSpawn: SpawnPlane | null;
   ready: RainResult | null;
-  pending: { generation: number; at: number } | null;
+  pending: { generation: number; at: number; pose?: RainPose; release?: number } | null;
+  // the parallax's target pose source (setAhead): the frame's time, the lead and the pose that far ahead
+  ahead: RainAhead | null;
   layGeneration: number;
   worker: SceneWorker | null;
   // the drops the quality says are seen this frame (setQuality), for the direct draw: their indices, how many, and the buffer and vertex
@@ -436,6 +455,7 @@ export class Rain extends M.Effect {
     this.layGeneration = 0;
     this.pending = null;
     this.ready = null;
+    this.ahead = null;
     // (the colours' state this frame, filled in place by update)
     this.colorState = { colors: this.colors, custom: this.custom, wave: this.wave, width: this.waveWidth, now: 0, screen: WAVE_SCREEN };
   }
@@ -581,9 +601,29 @@ export class Rain extends M.Effect {
   }
 
   // the floor the next layout is made for (the water's: none to give), by the camera's view now
-  floorView(): FloorView | undefined {
+  // (with a pose: the view of that pose, the camera's base with its offsets)
+  floorView(pose?: RainPose): FloorView | undefined {
     const camera = this.camera;
-    return this.floorKind === "screen" ? { kind: "screen", eyeHeight: camera.eyeY(), pitch: camera.tilt(), halfFov: camera.bottomAngle() } : undefined;
+    if (this.floorKind !== "screen") {
+      return undefined;
+    }
+    const view = pose ? RL.viewAt({ pitch: camera.pitch, eyeHeight: camera.eyeHeight }, pose) : { pitch: camera.tilt(), eyeHeight: camera.eyeY() };
+    return { kind: "screen", eyeHeight: view.eyeHeight, pitch: view.pitch, halfFov: camera.bottomAngle() };
+  }
+
+  // the parallax's pose source for the layouts (the frame's time, the lead, the pose ahead; null or a lead of 0: the layouts are made for the view now, as ever)
+  setAhead(ahead: RainAhead | null) {
+    this.ahead = ahead;
+  }
+
+  // the pose a layout is made for and the time it is released at, with a lead: the pose at the lead (null with none, the lead 0, or an unknown pose: poseAt is not asked at the lead 0)
+  aheadTarget(): { pose: RainPose; release: number } | null {
+    const a = this.ahead;
+    if (!a || !(a.lead > 0)) {
+      return null;
+    }
+    const pose = a.poseAt(a.lead);
+    return pose ? { pose, release: a.time + a.lead } : null;
   }
 
   // the frame's quality: the levels are the direct view's for the drops 0 .. n-1 and the mirrored view's for the units n .. 2n-1
@@ -643,6 +683,16 @@ export class Rain extends M.Effect {
     // draw (its version), is another view, and the lists are not used)
     this.listVersion = this.camera.dirty ? -1 : this.camera.version;
     this.dropListed = !this.camera.dirty;
+  }
+
+  // the rain's job reads the clock's step (the drops' places)
+  qualityUsesStep(): boolean {
+    return true;
+  }
+
+  // what the job reads at the release frame besides the view (the pool's lead): the layout it was given (replaced: another), the wanted drops, the trail
+  qualityLeadKey(): number {
+    return QualityLead.fold([QualityLead.identity(this.layout as unknown as object), this.wanted, this.trail]);
   }
 
   qualityKind(): string {
@@ -727,13 +777,35 @@ export class Rain extends M.Effect {
   // the layout owed (one for any number of settings changed since): asked of the worker, or
   // made here (also with `now`: a reset's, whatever was waiting)
   applyLayout(now = false) {
+    // (with a lead: a pending layout whose pose is no longer the one the view reaches at its release is dropped; one not answered by its step is made here for its pose)
+    const ahead = this.ahead;
+    // (only a layout owed by the view takes the lead's path: one owed by a setting, the floor or the spawn plane keeps its timing, which is the simulation's)
+    const owedBefore = this.relay;
+    let viewOwed = false;
+    if (ahead && ahead.lead > 0 && this.pending && this.pending.pose && !now) {
+      const pending = this.pending;
+      const reached = ahead.poseAt(pending.release! - ahead.time);
+      if (reached && RL.viewDrifted({ pitch: pending.pose!.pitch, eye: pending.pose!.eyeY, angle: 0 }, { pitch: reached.pitch, eye: reached.eyeY, angle: 0 }, M.MouseParallax.TOLERANCE)) {
+        this.drop();
+        this.relay = true;
+        viewOwed = true;
+      } else if (!this.ready && this.clock.stepAt(ahead.time) >= pending.at) {
+        const pose = pending.pose!;
+        this.drop();
+        this.lay(pose);
+        this.restart();
+      }
+    }
     // (the screen's floor depends on the pitch and the eye's height: a view that moved past the tolerance lays the drops out again)
     if (this.floorKind === "screen" && this.layout && !this.pending && this.viewDrifted()) {
       this.relay = true;
+      viewOwed = true;
     }
     // (the spawn plane turned for the music, or the view it is the top of changed: the drops laid out again)
+    let otherOwed = owedBefore;
     if (this.layout && !this.pending && !sameSpawn(this.spawnNow(), this.layoutSpawn)) {
       this.relay = true;
+      otherOwed = true;
     }
     if (now && this.pending) {
       this.relay = true;
@@ -743,8 +815,13 @@ export class Rain extends M.Effect {
       return;
     }
     this.relay = false;
+    const target = now || otherOwed || !viewOwed ? null : this.aheadTarget();
     if (this.worker && !now) {
-      this.ask();
+      this.ask(target);
+    } else if (target) {
+      // (no worker, with a lead: made at the release step, for the pose of the release)
+      this.pending = { generation: ++this.layGeneration, at: RL.releaseStep(this.lastStep, this.clock.most, this.clock, target.release), pose: target.pose, release: target.release };
+      this.ready = null;
     } else {
       this.lay();
       this.restart();
@@ -752,11 +829,13 @@ export class Rain extends M.Effect {
   }
 
   // the layout and a restart asked of the worker for a step ahead (the most a frame can move)
-  ask() {
+  // (with a target, a lead: for the pose of the release and its step)
+  ask(target: { pose: RainPose; release: number } | null = null) {
     const generation = ++this.layGeneration;
-    const at = this.lastStep + this.clock.most;
+    const at = target ? RL.releaseStep(this.lastStep, this.clock.most, this.clock, target.release) : this.lastStep + this.clock.most;
     const camera = this.camera;
-    this.pending = { generation, at };
+    const view = target ? RL.viewAt({ pitch: camera.pitch, eyeHeight: camera.eyeHeight }, target.pose) : { pitch: camera.tilt(), eyeHeight: camera.eyeY() };
+    this.pending = target ? { generation, at, pose: target.pose, release: target.release } : { generation, at };
     this.ready = null;
     const params = {
       generation,
@@ -767,8 +846,8 @@ export class Rain extends M.Effect {
       steady: this.steady,
       spawn: this.spawnNow(),
       lastStep: at,
-      eyeHeight: camera.eyeY(),
-      pitch: camera.tilt(),
+      eyeHeight: view.eyeHeight,
+      pitch: view.pitch,
       halfFov: camera.bottomAngle(),
       topAngle: camera.topAngle(),
       floor: this.floorKind,
@@ -807,12 +886,13 @@ export class Rain extends M.Effect {
 
   // each drop's distance, speed, phase and rows (its ceiling's and its trail's), and the wheel's
   // size (RainLayout.layout)
-  lay() {
+  lay(pose?: RainPose) {
     const trail = this.nextTrail;
     const spawn = this.spawnNow();
-    const r = RL.layout({ hashes: this.hashes!, near: this.nearest(), far: this.furthest(), trail, spawn: spawn || undefined, floor: this.floorView() });
+    const r = RL.layout({ hashes: this.hashes!, near: this.nearest(), far: this.furthest(), trail, spawn: spawn || undefined, floor: this.floorView(pose) });
     this.layoutSpawn = spawn;
-    this.installLayout(r.layout, trail, this.floorKind, this.camera.tilt(), this.camera.eyeY(), r.slots, this.camera.bottomAngle());
+    const view = pose ? RL.viewAt({ pitch: this.camera.pitch, eyeHeight: this.camera.eyeHeight }, pose) : { pitch: this.camera.tilt(), eyeHeight: this.camera.eyeY() };
+    this.installLayout(r.layout, trail, this.floorKind, view.pitch, view.eyeHeight, r.slots, this.camera.bottomAngle());
   }
 
   // ---- the wheel (models/rainwheel.ts): what the rain asks of it ----
@@ -1203,9 +1283,11 @@ export class Rain extends M.Effect {
   }
 
   // whether the view now (the eye's height and the pitch with the mouse parallax's shifts, and the angle of the shown window's bottom row, which the lens moves) is past the tolerance from the one the drops were laid out for
-  viewDrifted(): boolean {
-    const tolerance = M.MouseParallax.TOLERANCE;
-    return Math.abs(this.camera.tilt() - this.layoutPitch) > tolerance.pitch || Math.abs(this.camera.eyeY() - this.layoutEye) > tolerance.eye || Math.abs(this.camera.bottomAngle() - this.layoutAngle) > tolerance.pitch;
+  // (with a pose: the view of that pose instead)
+  viewDrifted(pose?: RainPose): boolean {
+    const camera = this.camera;
+    const view = pose ? RL.viewAt({ pitch: camera.pitch, eyeHeight: camera.eyeHeight }, pose) : { pitch: camera.tilt(), eyeHeight: camera.eyeY() };
+    return RL.viewDrifted({ pitch: this.layoutPitch, eye: this.layoutEye, angle: this.layoutAngle }, { pitch: view.pitch, eye: view.eyeHeight, angle: camera.bottomAngle() }, M.MouseParallax.TOLERANCE);
   }
 
   // the layout (when laid out) and the lives changed since the last time (their rows), uploaded

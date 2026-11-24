@@ -22,6 +22,7 @@
 // when the lens changed. The mirrored pass's block carries the lens clamped to the picture's margin (ReflectionFrame.clampLens); the view's own is not clamped.
 //
 // Changelog:
+// 2026-11-23: frameInput(..., pose) (the offsets of a target pose), hold / release / holding (answers made ahead for the pose the view shows at a release time; the newest due is offered, older ones dropped), made (updates that made the numbers here), viewVersion (the version not counting the parallax offsets' steps).
 // 2026-11-18: margin (the OLED margin, device pixels), setMargin, leftTan(), rightTan(); bottomAngle() and topAngle() are the margin's (the rain's world does not depend on the lens).
 // 2026-11-18: bottomAngle() and topAngle() (the extended window's bottom and top rows' angles from the optical axis, exactly halfFov at margin 0); topAt follows the extended top row.
 // 2026-11-18: the lens (lens, setLens, cx, cy; frameInput's lensX and lensY; the block 40 floats with cLens; the mirrored block carries the lens clamped to its margin).
@@ -57,6 +58,12 @@ export class Camera {
   viewProjection: Float32Array<ArrayBuffer>;
   version: number;
   baseVersion: number;
+  // the version not counting the parallax offsets' steps: up when the size, the pitch, the eye's height, the lens, the margin or the planes changed
+  viewVersion: number;
+  viewKey: number[];
+  // the answers made ahead for a release time (ms), in order, and the updates that made the numbers here
+  heldAnswers: { releaseMs: number; answer: { input: FrameInput; output: FrameOutput } }[];
+  made: number;
   dirty: boolean;
   pitch: number;
   yaw: number;
@@ -125,6 +132,10 @@ export class Camera {
     this.lens = { x: 0, y: 0 };
     this.margin = 0;
     this.baseKey = [];
+    this.viewVersion = 0;
+    this.viewKey = [];
+    this.heldAnswers = [];
+    this.made = 0;
     this.answered = null;
     this.taken = 0;
     this.viewProjection = new Float32Array(16);
@@ -156,16 +167,16 @@ export class Camera {
 
   // the inputs of the matrices and the block (models/frame.ts's compute) as they stand, at a size when given (the frame's fork asks before applySize has set it) and with the step
   // clock's inputs when given (the frame's step is computed with the matrices; the camera's own update does not use it)
-  frameInput(width = this.width, height = this.height, clock?: { base: number; from: number; rate: number }, time = 0): FrameInput {
+  frameInput(width = this.width, height = this.height, clock?: { base: number; from: number; rate: number }, time = 0, pose?: { yaw: number; pitch: number; eyeX: number; eyeY: number }): FrameInput {
     return {
       width,
       height,
       pitch: this.pitch,
       eyeHeight: this.eyeHeight,
-      yaw: this.yaw,
-      pitchShift: this.pitchShift,
-      eyeX: this.eyeX,
-      eyeShift: this.eyeShift,
+      yaw: pose ? pose.yaw : this.yaw,
+      pitchShift: pose ? pose.pitch : this.pitchShift,
+      eyeX: pose ? pose.eyeX : this.eyeX,
+      eyeShift: pose ? pose.eyeY : this.eyeShift,
       lensX: this.lens.x,
       lensY: this.lens.y,
       margin: this.margin,
@@ -182,6 +193,44 @@ export class Camera {
   // an answer made by a worker for the frame: update() uses it when its view inputs are the camera's own then, else makes the values itself
   offer(answer: { input: FrameInput; output: FrameOutput }) {
     this.answered = answer;
+  }
+
+  // an answer made ahead for the pose the view shows at releaseMs (ms on the clock of the parallax ticks), kept until release()
+  hold(releaseMs: number, answer: { input: FrameInput; output: FrameOutput }) {
+    this.heldAnswers.push({ releaseMs, answer });
+  }
+
+  // true when the base of the view (the size given, the pitch, the eye's height, the lens, the margin, the planes) is the one of the last update: the camera's only change is then the parallax offsets
+  steadyBase(width: number, height: number) {
+    const vk = this.viewKey;
+    return vk[0] === this.pitch && vk[1] === this.eyeHeight && vk[2] === width && vk[3] === height && vk[4] === this.lens.x && vk[5] === this.lens.y && vk[6] === this.margin && vk[7] === this.near && vk[8] === this.far;
+  }
+
+  // the held answers kept, not yet released
+  holding() {
+    return this.heldAnswers.length;
+  }
+
+  // the answers due at nowMs (tolerance 1e-6 ms) leave the held ones: the newest is offered to update(), the older are dropped; the count due
+  release(nowMs: number) {
+    const held = this.heldAnswers;
+    let due = 0;
+    let newest: { input: FrameInput; output: FrameOutput } | null = null;
+    let kept = 0;
+    for (let i = 0; i < held.length; i++) {
+      const h = held[i]!;
+      if (h.releaseMs <= nowMs + 1e-6) {
+        due++;
+        newest = h.answer;
+      } else {
+        held[kept++] = h;
+      }
+    }
+    held.length = kept;
+    if (newest) {
+      this.answered = newest;
+    }
+    return due;
   }
 
   // the mouse parallax's offsets (the camera is dirty only when one changed)
@@ -339,6 +388,19 @@ export class Camera {
       key[3] = this.height;
       this.baseVersion++;
     }
+    const vk = this.viewKey;
+    if (vk[0] !== this.pitch || vk[1] !== this.eyeHeight || vk[2] !== this.width || vk[3] !== this.height || vk[4] !== this.lens.x || vk[5] !== this.lens.y || vk[6] !== this.margin || vk[7] !== this.near || vk[8] !== this.far) {
+      vk[0] = this.pitch;
+      vk[1] = this.eyeHeight;
+      vk[2] = this.width;
+      vk[3] = this.height;
+      vk[4] = this.lens.x;
+      vk[5] = this.lens.y;
+      vk[6] = this.margin;
+      vk[7] = this.near;
+      vk[8] = this.far;
+      this.viewVersion++;
+    }
     // (the matrices and the block: models/frame.ts's compute, the one function; an answer a worker made under this very input is copied in, else it is made here, in place)
     const input = this.frameInput();
     const answered = this.answered;
@@ -350,6 +412,7 @@ export class Camera {
       this.viewProjection.set(answered.output.viewProjection);
       this.ubo.data.set(answered.output.block);
     } else {
+      this.made++;
       const own = this.own;
       own.view = this.view;
       own.projection = this.projection;
@@ -449,6 +512,7 @@ Camera.prototype.eyeShift = 0;
 Camera.prototype.lens = { x: 0, y: 0 };
 Camera.prototype.margin = 0;
 Camera.prototype.baseVersion = 0;
+Camera.prototype.viewVersion = 0;
 Camera.SPAN = 1.0;
 Camera.EYE = EYE;
 // a distance for nothing seen there (the farthest a half float holds)

@@ -83,6 +83,8 @@
 //   characters (their items are made cut by view) and the mask's clears are as before.
 //
 // Changelog:
+// 2026-11-23: qualityLeadKey (the quality job's lead: what the job reads at the release frame besides the view).
+// 2026-11-23: setListView (the view the quality lists were made for: the pose the view reaches at their release and the camera's view version); listValid compares it through BoltList.listFits, the camera's version when none.
 // 2026-11-15: crestHide and the uCrest sampler: the characters drawn after the water's pass are hidden behind a crest; the cover pass writes zero to the crest attachment; warmScene.
 // 2026-11-12: the foot of a strike (the lines' point at y = 0) rests on the water's live height at its place (uWaterWaves, waterWaves; shaders/bolt/foot.glsl, shaders/waves/lift.glsl), in the bands' and the characters' vertex shaders.
 // 2026-11-12: 3D Symbols (uSymbols3d, symbols3d): the characters' ink read at the relief's parallax uv (the depth offset only: no light), in the characters' fragment shader and the mask's.
@@ -165,6 +167,7 @@ import type { GlyphAtlas } from "../engine/glyphs";
 import type { ItemsOut, ItemsOptions, ItemsBuilt, ItemsLine, ItemsCounts } from "../models/boltitems";
 import type { MadeShape } from "../models/boltshape";
 import { QualityBolt } from "../models/quality/bolt";
+import { QualityLead } from "../models/quality/lead";
 import { BoltList } from "../models/boltlist";
 import { ReflectionFrame } from "../models/reflectionframe";
 import type { BoltListInput, BoltListOutput, BoltListSlot } from "../models/boltlist";
@@ -326,6 +329,8 @@ export class Bolt extends M.Effect {
   mirrorUploaded: boolean;
   listItems: number;
   listCamera: number;
+  // the view the lists were made for when it is a pose (the parallax's target pose and the camera's viewVersion), else null: the camera's version is compared
+  listView: { pose: { yaw: number; pitch: number; eyeX: number; eyeY: number }; viewVersion: number } | null;
   qualityParamValues: { inputs: QualityShared["inputs"] } | null;
   listBuffer!: WebGLBuffer;
   listArray!: WebGLVertexArrayObject;
@@ -424,6 +429,7 @@ export class Bolt extends M.Effect {
     this.listTotal = 0;
     this.listItems = -1;
     this.listCamera = -1;
+    this.listView = null;
     this.mirrorList = new Uint32Array(MOST_SEGMENTS);
     this.mirrorCounts = new Int32Array(SLOTS);
     this.mirrorListTotal = 0;
@@ -535,6 +541,22 @@ export class Bolt extends M.Effect {
 
   // ---- the quality job (models/quality/bolt.ts) ----
 
+  // what the job reads at the release frame besides the view (the pool's lead): the items' version, and which slots hold a strike (the job reads the view and the statics only; the strikes' growth and lights it does not read)
+  qualityLeadKey(): number {
+    const keys = [this.itemsVersion];
+    const slots = this.slots as unknown as ArrayLike<unknown> | undefined;
+    if (slots) {
+      let mask = 0;
+      for (let k = 0; k < slots.length; k++) {
+        if (slots[k]) {
+          mask |= 1 << k;
+        }
+      }
+      keys.push(mask);
+    }
+    return QualityLead.fold(keys);
+  }
+
   qualityKind(): string {
     return "bolt";
   }
@@ -617,9 +639,18 @@ export class Bolt extends M.Effect {
     this.listCamera = this.camera.dirty ? -1 : this.camera.version;
   }
 
+  // the view the lists the pool delivers were made for: the pose the view reaches at their release and the camera's viewVersion then (null: the camera's version, as the lists of setQuality are made for it)
+  setListView(pose: { yaw: number; pitch: number; eyeX: number; eyeY: number } | null, viewVersion: number): void {
+    this.listView = pose ? { pose, viewVersion } : null;
+  }
+
   // whether the lists are for the items and the view of this frame's drawing
   listValid(): boolean {
-    return this.listItems === this.itemsVersion && this.listCamera === this.camera.version && !(M.TEST && this.onlyPieces);
+    const camera = this.camera;
+    const view = this.listView;
+    const made = { version: this.listCamera, viewVersion: view ? view.viewVersion : 0, pose: view ? view.pose : null };
+    const now = { version: camera.version, viewVersion: camera.viewVersion, pose: view ? { yaw: camera.yaw, pitch: camera.pitchShift, eyeX: camera.eyeX, eyeY: camera.eyeShift } : null };
+    return this.listItems === this.itemsVersion && BoltList.listFits(made, now) && !(M.TEST && this.onlyPieces);
   }
 
   // whether this frame's drawing takes the filtered lists

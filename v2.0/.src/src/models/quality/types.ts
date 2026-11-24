@@ -41,6 +41,8 @@ export interface QualityShared {
   step: number;
   time: number;
   inputs: QualityViewInputs;
+  // the view's tilt (pitch plus the parallax's pitch shift) when the inputs are those of a target pose (the pool's lead), else undefined: the camera's own
+  tilt?: number;
 }
 
 // what an effect asks the pool to process each frame: its unit count and the least chunk worth a task

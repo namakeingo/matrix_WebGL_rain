@@ -22,6 +22,12 @@
 // time input.
 //
 // Changelog:
+// 2026-11-23: story M7b: a job's output is uploaded WHOLE with ONE texSubImage3D into a 2D-array texture of the chain (layer 2 k direct, 2 k + 1 mirrored: the job's order) and the blend is the program fogAccumBlendArray (uLayer = 2 min(k, covered - 1); a job holds only the slices under the plan's largest count); perSlice (the tests' option) keeps the per-slice upload into the pair; the probe reads the array's layers.
+// 2026-11-23: sliceSums(list): the tests' statistics, the direct volume's sums of the light and the optical depth over the cells the plan reads, by slice.
+// 2026-11-23: the tests' hooks: frame(..., job, gpuFactor) runs the GPU's fresh pass at a given reduction (the hop-by-hop comparison with a job's output at the same factor); probe lists slices whose uploaded planes are read back into probed.
+// 2026-11-23: frame(decision, index, base, fresh?) takes a job's output (M.BaseMistJob.columns, made ahead on a worker for the pose the view shows at the release frame) for an accumulating frame: each slice's direct and mirror plane is uploaded into the chain's pair k & 1 (texSubImage2D, RGBA, HALF_FLOAT) instead of the volume program's draw; the blend and the store are the same; an exact build ignores it. freshDraws counts the volume program's slice draws; geometry() gives the columns.
+// 2026-11-23: the chains' textures and framebuffers have one delete route: made without effect.own, deleted by release() (the size change and Fog.destroy); BaseMist.Volume exports the class.
+// 2026-11-23: cullView's inputs carry the fog's built lens (the volume's columns are built along its rays; the read is shifted by the lens delta, fLens), not the camera's.
 // 2026-11-22: Feature U3, story M5: the build's plan (M.BaseLod: the slices each column needs, the flat slices), the slice draws past the largest count skipped, scissor rectangles in the exact build, audit, slicesNeeded, cullView, VOLUME_GLSL.
 // 2026-11-22: new (Feature U3, story M2).
 import { M } from "./core";
@@ -78,6 +84,12 @@ interface Decision {
   draw: boolean;
   exact: boolean;
   alpha: number;
+}
+
+// a job's output for an accumulating frame: M.BaseMistJob.columns of the volume's columns at `factor` (the chain's reduction), jitter FogAccum.jitter(the frame's index)
+export interface BaseMistFresh {
+  factor: number;
+  output: Uint16Array;
 }
 
 // the builds' state machine
@@ -194,6 +206,8 @@ interface Pair {
 
 // the pictures of one reduction: the chain's two pairs (slice k in pair k & 1) at the reduced size
 interface Chain {
+  // the job's output as one texture array of 2 x SLICES layers (made at the first job-fed frame of the chain)
+  array: WebGLTexture | null;
   factor: number;
   across: number;
   down: number;
@@ -214,10 +228,18 @@ export class BaseMistVolume {
   schedule: Schedule;
   volume: ShaderProgram;
   blend: ShaderProgram;
+  blendArray: ShaderProgram;
   store: ShaderProgram;
+  // the tests' option: a job's output is uploaded slice by slice into the chain's pair and blended by the per-slice blend (the earlier path, the reference of the one-upload path)
+  perSlice: boolean;
   // the draws made (frames in which the volume was drawn) and the exact builds made, since the start
   drawFrames: number;
   exactBuilds: number;
+  // the volume program's slice draws made since the start (the GPU's fresh pass: an upload of a job's output makes none)
+  freshDraws: number;
+  // the tests' probe: the slices whose uploaded pair is read back right after the upload (null: none), and what was read (the pair's direct and mirror pictures, RGBA floats, rows from the bottom)
+  probe: number[] | null;
+  probed: Map<number, { direct: Float32Array; mirror: Float32Array }>;
   // the last build's culling counts (Feature U3, story M5): the builds made, the slice draws issued (the largest column count), the cells the plan needs (the sum of the columns' slice counts), the uncut cells,
   // the columns with fewer than SLICES slices, the slices drawn flat; slicesNeeded: the columns' slice counts (index row x across + column), SLICES everywhere with the level of detail off
   audit: { builds: number; slices: number; cells: number; full: number; culledColumns: number; flatSlices: number };
@@ -234,12 +256,19 @@ export class BaseMistVolume {
     this.effect = effect;
     this.gl = effect.gl;
     this.schedule = new Schedule();
-    this.volume = effect.ownPrograms(programs, ["baseMistVolume"])[0]!;
+    const owned = effect.ownPrograms(programs, ["baseMistVolume", "fogAccumBlendArray"]);
+    this.volume = owned[0]!;
     this.volume.samplers({ uNoise: M.UNITS.noise, uShade: M.UNITS.shade, uSumDirect: M.UNITS.fogSum, uSumMirror: M.UNITS.fogSumMirror });
+    this.blendArray = owned[1]!;
+    this.blendArray.samplers({ uHeld: M.UNITS.fogDirect, uHeldMirror: M.UNITS.fogMirror, uFreshArray: M.UNITS.fogSum });
+    this.perSlice = false;
     this.blend = blend;
     this.store = store;
     this.drawFrames = 0;
     this.exactBuilds = 0;
+    this.freshDraws = 0;
+    this.probe = null;
+    this.probed = new Map();
     this.audit = { builds: 0, slices: 0, cells: 0, full: 0, culledColumns: 0, flatSlices: 0 };
     this.slicesNeeded = new Uint16Array(0);
     this.lastBase = 0;
@@ -279,8 +308,9 @@ export class BaseMistVolume {
 
   private pair(width: number, height: number, filter: GLenum): Pair {
     const gl = this.gl;
-    const textures = [0, 1].map(() => this.effect.own(M.RenderTarget.storage(gl, gl.RGBA16F, width, height, filter), (t: WebGLTexture) => gl.deleteTexture(t)));
-    const framebuffer = this.effect.createFramebuffer();
+    // (made here and deleted by release() alone: not registered with the effect, whose destroy() would delete them a second time)
+    const textures = [0, 1].map(() => M.RenderTarget.storage(gl, gl.RGBA16F, width, height, filter));
+    const framebuffer = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, textures[0]!, 0);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, textures[1]!, 0);
@@ -299,7 +329,7 @@ export class BaseMistVolume {
     let chain = this.chains.find((c) => c.factor === factor);
     if (!chain) {
       const across = FogAccum.reduced(s.across, factor), down = FogAccum.reduced(s.down, factor);
-      chain = { factor, across, down, pairs: [this.pair(across, down, this.gl.LINEAR), this.pair(across, down, this.gl.LINEAR)] };
+      chain = { array: null, factor, across, down, pairs: [this.pair(across, down, this.gl.LINEAR), this.pair(across, down, this.gl.LINEAR)] };
       this.chains.push(chain);
       this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
     }
@@ -316,6 +346,11 @@ export class BaseMistVolume {
     for (const p of this.chains.flatMap((c) => c.pairs).concat(this.blended ? [this.blended] : [])) {
       p.textures.forEach((t) => gl.deleteTexture(t));
       gl.deleteFramebuffer(p.framebuffer);
+    }
+    for (const c of this.chains) {
+      if (c.array) {
+        gl.deleteTexture(c.array);
+      }
     }
     this.chains = [];
     this.blended = null;
@@ -334,7 +369,7 @@ export class BaseMistVolume {
   cullView(base: number = this.lastBase): { view: FogQualityView; focal: number } {
     const e = this.effect, c = e.camera, s = this.stack();
     const view: FogQualityView = {
-      inputs: { eyeY: c.eyeY(), focal: c.focal(), width: c.width, height: c.height, lensX: c.lens.x, lensY: c.lens.y, waterDrawn: e.waterDrawn, sigma: 0, air: AIR_EXTINCTION, mist: base },
+      inputs: { eyeY: c.eyeY(), focal: c.focal(), width: c.width, height: c.height, lensX: e.builtLens.x, lensY: e.builtLens.y, waterDrawn: e.waterDrawn, sigma: 0, air: AIR_EXTINCTION, mist: base },
       pitch: c.tilt(),
       margin: e.ubo.data[15]!,
       across: s.across,
@@ -369,15 +404,130 @@ export class BaseMistVolume {
     gl.uniform4f(u.uCoarse, c[0]!, c[1]!, c[2]!, c[3]!);
     gl.uniform1f(u.uBase, base);
     this.effect.quad.drawFull();
+    this.freshDraws++;
     return chain.pairs[k & 1]!.textures;
   }
 
+  // the volume's columns across and down (the job's view)
+  geometry(): { across: number; down: number } {
+    const s = this.stack();
+    return { across: s.across, down: s.down };
+  }
+
+  // THE SEAM, the job's way, per slice (the tests' reference path): slice k's two planes of a job's output uploaded into the pair the GPU's fresh pass would have drawn into (a slice past the output's is its last); returns that pair's textures
+  private upload(chain: Chain, k: number, output: Uint16Array): WebGLTexture[] {
+    const gl = this.gl;
+    const plane = chain.across * chain.down * 4, pair = chain.pairs[k & 1]!, covered = Math.floor(output.length / (2 * plane)), j = Math.min(k, covered - 1);
+    gl.activeTexture(gl.TEXTURE0 + M.UNITS.fogSum);
+    for (let m = 0; m < 2; m++) {
+      gl.bindTexture(gl.TEXTURE_2D, pair.textures[m]!);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, chain.across, chain.down, gl.RGBA, gl.HALF_FLOAT, output.subarray((j * 2 + m) * plane, (j * 2 + m + 1) * plane));
+    }
+    if (this.probe !== null && this.probe.indexOf(k) >= 0) {
+      this.probed.set(k, this.readPair(chain, pair));
+    }
+    return pair.textures;
+  }
+
+  // a job's whole output in ONE upload: the chain's texture array (2 x SLICES layers of the chain's size, made at the first use) takes the covered slices' layers (2 k direct, 2 k + 1 mirrored: the job's order); returns the slices covered
+  private uploadArray(chain: Chain, output: Uint16Array): number {
+    const gl = this.gl;
+    const plane = chain.across * chain.down * 4, layers = Math.floor(output.length / plane);
+    gl.activeTexture(gl.TEXTURE0 + M.UNITS.fogSum);
+    if (chain.array === null) {
+      chain.array = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, chain.array);
+      gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, gl.RGBA16F, chain.across, chain.down, 2 * SLICES);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    } else {
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, chain.array);
+    }
+    gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, 0, chain.across, chain.down, layers, gl.RGBA, gl.HALF_FLOAT, output);
+    const covered = Math.floor(layers / 2);
+    if (this.probe !== null) {
+      for (const k of this.probe) {
+        if (k < covered) {
+          this.probed.set(k, this.readLayers(chain, k));
+        }
+      }
+    }
+    return covered;
+  }
+
+  // slice k's two layers of the chain's array read back (the tests' probe)
+  private readLayers(chain: Chain, k: number): { direct: Float32Array; mirror: Float32Array } {
+    const gl = this.gl;
+    const framebuffer = gl.getParameter(gl.READ_FRAMEBUFFER_BINDING) as WebGLFramebuffer | null;
+    const buffer = gl.getParameter(gl.READ_BUFFER) as GLenum;
+    const scratch = gl.createFramebuffer();
+    const out = { direct: new Float32Array(chain.across * chain.down * 4), mirror: new Float32Array(chain.across * chain.down * 4) };
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, scratch);
+    gl.framebufferTextureLayer(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, chain.array, 0, 2 * k);
+    gl.readPixels(0, 0, chain.across, chain.down, gl.RGBA, gl.FLOAT, out.direct);
+    gl.framebufferTextureLayer(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, chain.array, 0, 2 * k + 1);
+    gl.readPixels(0, 0, chain.across, chain.down, gl.RGBA, gl.FLOAT, out.mirror);
+    gl.readBuffer(buffer);
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, framebuffer);
+    gl.deleteFramebuffer(scratch);
+    return out;
+  }
+
+  // the tests' statistics: for each slice of the list, the sums of the direct volume's light (rgb) and optical depth over the cells whose column's plan count is above the slice (the cells a read can reach), and their number
+  sliceSums(list: number[]): { slice: number; rgb: number; a: number; n: number }[] {
+    const gl = this.gl, s = this.stack();
+    const framebuffer = gl.getParameter(gl.READ_FRAMEBUFFER_BINDING) as WebGLFramebuffer | null;
+    const buffer = gl.getParameter(gl.READ_BUFFER) as GLenum;
+    const data = new Float32Array(s.across * s.down * 4), counts = this.slicesNeeded, planned = counts.length === s.across * s.down;
+    const out: { slice: number; rgb: number; a: number; n: number }[] = [];
+    for (const k of list) {
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, s.slices[layerOf(k)]!);
+      gl.readBuffer(gl.COLOR_ATTACHMENT0);
+      gl.readPixels(0, 0, s.across, s.down, gl.RGBA, gl.FLOAT, data);
+      let rgb = 0, a = 0, n = 0;
+      for (let i = 0; i < s.across * s.down; i++) {
+        if (planned && counts[i]! <= k) {
+          continue;
+        }
+        rgb += data[i * 4]! + data[i * 4 + 1]! + data[i * 4 + 2]!;
+        a += data[i * 4 + 3]!;
+        n++;
+      }
+      out.push({ slice: k, rgb, a, n });
+    }
+    gl.readBuffer(buffer);
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, framebuffer);
+    return out;
+  }
+
+  // a pair's two pictures read back (the tests' probe)
+  private readPair(chain: Chain, pair: Pair): { direct: Float32Array; mirror: Float32Array } {
+    const gl = this.gl;
+    const framebuffer = gl.getParameter(gl.READ_FRAMEBUFFER_BINDING) as WebGLFramebuffer | null;
+    const buffer = gl.getParameter(gl.READ_BUFFER) as GLenum;
+    const out = { direct: new Float32Array(chain.across * chain.down * 4), mirror: new Float32Array(chain.across * chain.down * 4) };
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, pair.framebuffer);
+    gl.readBuffer(gl.COLOR_ATTACHMENT0);
+    gl.readPixels(0, 0, chain.across, chain.down, gl.RGBA, gl.FLOAT, out.direct);
+    gl.readBuffer(gl.COLOR_ATTACHMENT1);
+    gl.readPixels(0, 0, chain.across, chain.down, gl.RGBA, gl.FLOAT, out.mirror);
+    gl.readBuffer(buffer);
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, framebuffer);
+    return out;
+  }
+
   // one frame's build as the schedule decided it: every slice produced, blended (an accumulation) or not (the exact build), and stored into the volume's layers
-  frame(decision: Decision, frameIndex: number, base: number): void {
+  frame(decision: Decision, frameIndex: number, base: number, job?: BaseMistFresh, gpuFactor?: number): void {
     const gl = this.gl;
     const s = this.stack();
     const exact = decision.exact;
-    const chain = this.chain(exact ? 1 : REDUCE);
+    // (a job's output feeds an accumulating frame only: the exact build is the GPU's)
+    const made = !exact && job ? job : null;
+    const chain = this.chain(exact ? 1 : made ? made.factor : gpuFactor || REDUCE);
+    // (a job's output: all of it in one upload, the blend reading the array; or, the tests' reference, slice by slice)
+    const covered = made && !this.perSlice ? this.uploadArray(chain, made.output) : 0;
     const jitter = exact ? [0.5, 0.5, 0.5] : FogAccum.jitter(frameIndex);
     const focal = this.focal;
     const guard = this.effect.guard;
@@ -425,13 +575,27 @@ export class BaseMistVolume {
         gl.scissor(boxes[k * 4]!, boxes[k * 4 + 1]!, boxes[k * 4 + 2]! - boxes[k * 4]!, boxes[k * 4 + 3]! - boxes[k * 4 + 1]!);
       }
       const timedFresh = time("fresh", k);
-      const fresh = this.fresh(chain, k, jitter, base, focal, active && plan.levels[k] === 0);
+      const fresh = made ? (this.perSlice ? this.upload(chain, k, made.output) : this.blended!.textures) : this.fresh(chain, k, jitter, base, focal, active && plan.levels[k] === 0);
       if (timedFresh) {
         guard.end();
       }
       gl.viewport(0, 0, s.across, s.down);
       if (exact) {
         this.bindSums(fresh);
+      } else if (made && !this.perSlice) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.blended!.framebuffer);
+        const timedBlend = time("blend", k);
+        const b = this.blendArray.use();
+        gl.uniform1i(b.uSlice, layerOf(k));
+        gl.uniform1i(b.uLayer, 2 * Math.min(k, covered - 1));
+        gl.uniform1f(b.uAlpha, decision.alpha);
+        gl.uniform4f(b.uMap, 1 / sx, 1 / sy, jitter[0]! - 0.5, jitter[1]! - 0.5);
+        gl.uniform4f(b.uSize, chain.across, chain.down, chain.across, chain.down);
+        this.effect.quad.drawFull();
+        if (timedBlend) {
+          guard.end();
+        }
+        this.bindSums(this.blended!.textures);
       } else {
         this.bindSums(fresh);
         gl.bindFramebuffer(gl.FRAMEBUFFER, this.blended!.framebuffer);
@@ -527,6 +691,6 @@ export class BaseMistVolume {
   }
 }
 
-export const BaseMist = { FAR, NEAR, SHARE, HB, SLICES, LAYERS, TOTAL_LAYERS, CUT_LAYER, clampSlice, readSums, cutLayer, FRONT_SLICES, LOG, ALBEDO, sliceStart, thickness, sliceOf, layerOf, Schedule, combine, colourWeight, albedo, gatherRay, VOLUME_GLSL: VOLUME_SOURCE };
+export const BaseMist = { Volume: BaseMistVolume, FAR, NEAR, SHARE, HB, SLICES, LAYERS, TOTAL_LAYERS, CUT_LAYER, clampSlice, readSums, cutLayer, FRONT_SLICES, LOG, ALBEDO, sliceStart, thickness, sliceOf, layerOf, Schedule, combine, colourWeight, albedo, gatherRay, VOLUME_GLSL: VOLUME_SOURCE };
 
 M.BaseMist = BaseMist;

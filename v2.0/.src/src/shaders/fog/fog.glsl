@@ -8,6 +8,7 @@ layout(std140) uniform Fog {
   vec4 fStrikes;  // each slot's light over STRIKE_SCALE
   vec4 fBolt;     // the strikes' color (rgb); w: the tests' march's segments
   vec4 fMoonGain; // the Orb's light's gain per channel (rgb), linear; w: the front cloud's tail scale Hf in metres
+  vec4 fLens;     // xy: the shift of the volume coordinate a lens other than the one the volume is built for needs (minus the delta over the volume's span); zw: that delta in pixels (lens - built lens, y up)
 };
 uniform highp sampler3D uFogDirect;
 uniform highp sampler3D uFogMirror;
@@ -64,13 +65,14 @@ float sliceAt(float u) {
   return SLICE_NEAR * (exp(u * SLICE_LOG) - 1.0);
 }
 // a place of the screen (pixels from the bottom left; past its sides as far as the margin) as the
-// volumes' coordinates across and down
+// volumes' coordinates across and down, moved by fLens.xy: the volume's rays are those of the lens it was built for (columnRay), so a place at another lens reads the column
+// whose ray it has (the place minus the lens delta); the volume's own space (the build's reads) never takes the shift
 vec2 columnAt(vec2 at) {
-  return (at / cScreen.xy + fVolume.w) / (1.0 + 2.0 * fVolume.w);
+  return (at / cScreen.xy + fVolume.w) / (1.0 + 2.0 * fVolume.w) + fLens.xy;
 }
-// the ray through a column's middle
+// the ray through a column's middle, for the lens the volume is built for: rayOf takes the camera's lens, so the pixel is moved by the delta (fLens.zw) to the built lens' ray
 vec3 columnRay(vec2 fc) {
-  return rayOf(((fc / fVolume.xy) * (1.0 + 2.0 * fVolume.w) - fVolume.w) * cScreen.xy);
+  return rayOf(((fc / fVolume.xy) * (1.0 + 2.0 * fVolume.w) - fVolume.w) * cScreen.xy + fLens.zw);
 }
 // a slot's light per unit (its color) at volume coordinates c, from its stack of slices
 vec3 strikeStack(vec3 c, float slot, bool mirrored) {

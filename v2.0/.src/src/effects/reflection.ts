@@ -36,6 +36,7 @@
 //   draws and the mip chain are skipped and the picture is not invalidated after the water has read it (reused and drawn count the frames).
 //
 // Changelog:
+// 2026-11-23: qualityLeadKey (the quality job's lead: what the job reads at the release frame besides the view).
 // 2026-11-12: the picture larger than the view by MARGIN on each side (frame), drawn with the mirrored pass's own camera block.
 // 2026-11-08: the picture reused while its inputs hold (level of detail on).
 // 2026-11-07: the pass skipped for a view whose nearest water the fog hides (level of detail on).
@@ -46,6 +47,7 @@
 import { M } from "../engine/core";
 import type { RenderTarget } from "../engine/gl";
 import { QualityWater } from "../models/quality/water";
+import { QualityLead } from "../models/quality/lead";
 import { ReflectionFrame } from "../models/reflectionframe";
 import type { ReflectionFrameOf } from "../models/reflectionframe";
 import { QualityRainReuse } from "../models/quality/rainreuse";
@@ -132,6 +134,11 @@ export class Reflection extends M.Effect {
   setQuality(q: EffectQuality) {
     super.setQuality(q);
     this.qualityFor = this.camera.dirty ? -1 : this.camera.version;
+  }
+
+  // what the job reads at the release frame besides the view (the pool's lead): the level of detail's switch
+  qualityLeadKey(): number {
+    return QualityLead.fold([this.lod ? 1 : 0]);
   }
 
   qualityKind(): string {

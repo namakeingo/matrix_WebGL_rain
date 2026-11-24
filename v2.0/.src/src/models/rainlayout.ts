@@ -23,8 +23,12 @@
 // - landingOf(data, i, fall, m): the first step in which drop i's fall `fall` has fallen to its last row less m rows (m = 0: the fall's landing, nextLanding's; m > 0: its head meets a
 //   surface m rows over the floor, earlier; m < 0: the surface is below the floor, later): the drop's path is the same, only the step its fall is taken to end in moves.
 // - compare(a, b): how many values of two arrays differ, and the first.
+// - The parallax's target pose (Feature P1): viewAt(base, pose) the pitch and the eye's height of a pose (what Camera.tilt() and eyeY() give after setParallax); viewDrifted(made, view, tolerance) whether a view is past the
+//   tolerance from the one a layout was made for (pitch, eye's height and the bottom row's angle); releaseStep(lastStep, most, clock, releaseTime) the step a layout is asked for: lastStep + most with no release time
+//   (today's), else the first step that starts at or after the release time (at least lastStep + 1).
 //
 // Changelog:
+// 2026-11-23: viewAt, viewDrifted, releaseStep (the layout for the pose of the release frame).
 // 2026-11-18: restartOf's topAngle (the shown top row's angle for the view's top; halfFov when absent), and its halfFov is the floor's (the shown bottom row's angle).
 // 2026-11-12: landingOf (the step a fall ends in when its head meets the water m rows over or under the floor).
 // 2026-11-12: the spawn plane the rain gives is the spawn box's top (comment only; the layout's arithmetic is unchanged).
@@ -145,6 +149,17 @@ const layout = ({ hashes: h, near, far, trail, floor, spawn }: LayoutInput): Lay
   return { layout: data, slots };
 };
 
+// the pitch and the eye's height of a view moved by the parallax's offsets
+const viewAt = (base: { pitch: number; eyeHeight: number }, pose: { pitch: number; eyeY: number }): { pitch: number; eyeHeight: number } => ({ pitch: base.pitch + pose.pitch, eyeHeight: base.eyeHeight + pose.eyeY });
+
+// whether a view is past the tolerance from the one a layout was made for (the angle's tolerance is the pitch's)
+const viewDrifted = (made: { pitch: number; eye: number; angle: number }, view: { pitch: number; eye: number; angle: number }, tolerance: { pitch: number; eye: number }): boolean =>
+  Math.abs(view.pitch - made.pitch) > tolerance.pitch || Math.abs(view.eye - made.eye) > tolerance.eye || Math.abs(view.angle - made.angle) > tolerance.pitch;
+
+// the step a layout is asked for: a frame's most ahead with no release time, else the first step starting at or after it (a step 1e-9 short of a boundary is on it)
+const releaseStep = (lastStep: number, most: number, clock: { at(time: number): number }, releaseTime: number | null): number =>
+  releaseTime === null ? lastStep + most : Math.max(lastStep + 1, Math.ceil(clock.at(releaseTime) - 1e-9));
+
 // how far drop i has fallen at a step, counted in rows since the start (in 32 bits)
 const total = (data: ArrayLike<number>, i: number, step: number): number => {
   const speed = data[i * 4 + 1];
@@ -263,6 +278,6 @@ const compare = (a: ArrayLike<number>, b: ArrayLike<number>): CompareResult => {
   return { wrong, first, a: first >= 0 ? (a[first] ?? 0) : 0, b: first >= 0 ? (b[first] ?? 0) : 0 };
 };
 
-export const RainLayout = { COUNT, CELL, SEED, SLOWEST, NONE, distanceAt, hashes, layout, restartOf, total, headY, falls, landed, nextLanding, landingOf, firstFrom, compare };
+export const RainLayout = { COUNT, CELL, SEED, SLOWEST, NONE, distanceAt, hashes, layout, restartOf, total, headY, falls, landed, nextLanding, landingOf, firstFrom, compare, viewAt, viewDrifted, releaseStep };
 
 M.RainLayout = RainLayout;

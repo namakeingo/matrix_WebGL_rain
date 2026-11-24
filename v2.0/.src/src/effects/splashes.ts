@@ -45,6 +45,7 @@
 // is read by the water). With lod false the floor is 0 and the draw is as without it.
 //
 // Changelog:
+// 2026-11-23: qualityLeadKey (the quality job's lead: the trail and the last jump, not the count or the serials), qualityUsesStep, qualityAskState and qualityCarry (the ask's levels carried to the live splashes by serial, a splash born since at full quality).
 // 2026-11-15: crestHide and the uCrest sampler: a splash behind a crest is discarded in the direct pass.
 // 2026-11-12: a splash starts at the water's live height at its launch place and lands there (uWaterWaves, waterWaves; shaders/waves/lift.glsl); placeAt takes the lift.
 // 2026-11-12: the glyphs' lights (the shade at the glyph and the strikes' light the fog gives, passed to the lit fragment shader: LIGHT_VERTEX_GLSL, uShade) and 3D Symbols (uSymbols3d, symbols3d).
@@ -68,6 +69,7 @@ import TURN_SCALE_USE_SOURCE from "../shaders/rain/turn_scale_use.glsl";
 import WAVE_LIFT_SOURCE from "../shaders/waves/lift.glsl";
 import WAVE_GRID_SOURCE from "../shaders/waves/grid.glsl";
 import { QualitySplashes } from "../models/quality/splashes";
+import { QualityLead } from "../models/quality/lead";
 import { SplashSim } from "../models/splashsim";
 import { SplashTick } from "../models/splashtick";
 import type { SplashPayload } from "../models/splashtick";
@@ -78,6 +80,7 @@ import type { SteppedTask } from "../platform/steppedtask";
 import { QualityUnit } from "../models/quality/unit";
 import { HEAD_GAIN } from "../materials/drops";
 import type { QualityJob, EffectQuality, QualityShared } from "../models/quality/types";
+import { QUALITY_LEVELS } from "../models/quality/types";
 import type { QualityStatics, QualityParams } from "../models/quality/jobs";
 import type { SplashQualityParams, SplashSphere } from "../models/quality/splashes";
 import type { SplashLanding } from "../models/splashsim";
@@ -622,6 +625,32 @@ export class Splashes extends M.Effect {
       cuts[k++] = cut;
     }
     return k === listed ? QualitySplashes.listedAges(cuts, k) : this.trail;
+  }
+
+  // the splashes' job reads the clock's step (the stamps' ages)
+  qualityUsesStep(): boolean {
+    return true;
+  }
+
+  // what the job reads at the release frame besides the view (the pool's lead): the trail and the last jump. Not the count or the ring serials: a splash is born or dies every step, and the units
+  // that exist at the ask and at the release keep the ask's levels (qualityCarry) while one born since gets full quality
+  qualityLeadKey(): number {
+    return QualityLead.fold([this.trail, this.from]);
+  }
+
+  // the serials of the live splashes at the ask (a copy)
+  qualityAskState(): unknown {
+    return Array.prototype.slice.call(this.serial, 0, this.count) as number[];
+  }
+
+  // the levels of the ask carried to the splashes that are live now, by serial (a splash born since: QUALITY_LEVELS)
+  qualityCarry(q: EffectQuality, askState: unknown): EffectQuality {
+    const asked = askState as ArrayLike<number> | null;
+    if (!q.levels || !asked || q.levels.length !== 2 * asked.length) {
+      return q;
+    }
+    const live = Array.prototype.slice.call(this.serial, 0, this.count) as number[];
+    return M.QualityFrame.summarize(QualityLead.carry(q.levels, asked, live, QUALITY_LEVELS));
   }
 
   qualityKind(): string {

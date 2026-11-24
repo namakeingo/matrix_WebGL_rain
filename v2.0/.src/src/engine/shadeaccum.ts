@@ -9,11 +9,16 @@
 // read them); the held grid stays on M.UNITS.shade (bound again here: the blend reads it).
 //
 // Changelog:
+// 2026-11-24: fillDelta(jitter, fresh, plan): the whole reduced grid uploaded in ONE texSubImage3D, then the blend (weight 1) and the store of each delta rectangle's draw under a scissor of the rectangle (the cells a view change adds): no fresh pass, no other cell touched (Feature P1, story P8d).
+// 2026-11-24: accumulateBand(jitter, alpha, fresh, band): one band of the fresh grid uploaded in ONE texSubImage3D at its layer, the blend and the store drawn for the held layers of the band's core only (Feature P1, story P8b, banded cyclic).
+// 2026-11-23: registered as M.ShadeAccumulation (the units' stand-in GL); a job-fed frame (accumulate's `fresh`) is ONE texSubImage3D of the whole reduced grid and no fresh draw (Feature P1, story P8b).
 // 2026-11-22: new (Feature U2, story V2).
 import { M } from "./core";
 import { fill } from "./glsl";
 import type { ProgramSources, ShaderProgram, Uniforms } from "./gl";
 import { ShadeAccumGpu } from "../models/shadeaccumgpu";
+import { ShadeBands } from "../models/shadebands";
+import type { ShadeBand } from "../models/shadebands";
 import type { Fog } from "../effects/fog";
 import FRESH_SOURCE from "../shaders/fog/shadeaccum_fresh.glsl";
 import BLEND_SOURCE from "../shaders/fog/shadeaccum_blend.glsl";
@@ -211,6 +216,84 @@ export class ShadeAccumulation {
     this.restore();
   }
 
+  // one band of the banded cyclic accumulation (M.ShadeBands): the job's output for the fresh layers [from, to) uploaded as ONE texSubImage3D at z = from (the other layers of the fresh texture hold older bands and are not read:
+  // the guard layer of the band keeps the blend's trilinear read inside it), the held layers of the band's core blended into the scratch grid and stored, in the draws that cover them (the band's core is a multiple of
+  // the draws' layers: the caller rounds it); no fresh pass
+  accumulateBand(jitter: number[], alpha: number, fresh: Uint16Array, band: ShadeBand) {
+    const gl = this.gl;
+    const guard = this.effect.guard;
+    const layers = this.layers;
+    const [fx, fy, fz] = ShadeAccumGpu.FRESH as [number, number, number];
+    this.bind();
+    gl.disable(gl.SCISSOR_TEST);
+    gl.activeTexture(gl.TEXTURE0 + M.UNITS.work);
+    gl.texSubImage3D(gl.TEXTURE_3D, 0, 0, 0, band.from, fx, fy, band.to - band.from, gl.RG, gl.HALF_FLOAT, fresh);
+    const [h0, h1] = ShadeBands.heldOf(band.core, ShadeAccumGpu.FRONT_LAYERS / fz) as [number, number];
+    gl.viewport(0, 0, FULL[0]!, FULL[1]!);
+    let u = this.blend.use();
+    gl.uniform1i(u.uLayers, layers);
+    gl.uniform1f(u.uAlpha, alpha);
+    gl.uniform3f(u.uJit, jitter[0]!, jitter[1]!, jitter[2]!);
+    const first = Math.floor(h0 / layers), last = Math.ceil(h1 / layers);
+    const each = Math.max(1, Math.floor(guard.size("shade blend", "slice") / layers));
+    guard.begin("shade blend", "slice");
+    for (let d = first; d < last; d++) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.scratchDraws[d]!);
+      gl.uniform1i(u.uLayer, d * layers);
+      this.effect.quad.drawFull();
+      if ((d - first) % each === each - 1 || d === last - 1) {
+        guard.piece();
+      }
+    }
+    guard.end();
+    u = this.store.use();
+    const plan = ShadeAccumGpu.storePlan(layers).filter((draw) => draw.from >= h0 && draw.to <= h1);
+    const eachStore = Math.max(1, Math.floor(guard.size("shade store", "slice") / layers));
+    guard.begin("shade store", "slice");
+    plan.forEach((draw, k) => {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.effect.shadeDraws[draw.from / layers]!);
+      gl.uniform1i(u.uLayer, draw.from);
+      this.effect.quad.drawFull();
+      if (k % eachStore === eachStore - 1 || k === plan.length - 1) {
+        guard.piece();
+      }
+    });
+    guard.end();
+    this.restore();
+  }
+
+  // the cells a view change adds, from the whole reduced grid the bands baked (jitter: the index the bands' nodes were baked at): the grid uploaded in ONE texSubImage3D, then for each plan entry (a draw and one rectangle of its delta: [first column,
+  // columns, rows, first row]) the blend at weight 1 into the scratch grid and the store into the draw's layers, both under a scissor of the rectangle, so that no other cell of the held grid is touched; no fresh pass
+  fillDelta(jitter: number[], fresh: Uint16Array, plan: { draw: number; rect: number[] }[]) {
+    const gl = this.gl;
+    const layers = this.layers;
+    const [fx, fy, fz] = ShadeAccumGpu.FRESH as [number, number, number];
+    this.bind();
+    gl.activeTexture(gl.TEXTURE0 + M.UNITS.work);
+    gl.texSubImage3D(gl.TEXTURE_3D, 0, 0, 0, 0, fx, fy, fz, gl.RG, gl.HALF_FLOAT, fresh);
+    gl.enable(gl.SCISSOR_TEST);
+    gl.viewport(0, 0, FULL[0]!, FULL[1]!);
+    let u = this.blend.use();
+    gl.uniform1i(u.uLayers, layers);
+    gl.uniform1f(u.uAlpha, 1);
+    gl.uniform3f(u.uJit, jitter[0]!, jitter[1]!, jitter[2]!);
+    for (const e of plan) {
+      gl.scissor(e.rect[0]!, e.rect[3]!, e.rect[1]!, e.rect[2]!);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.scratchDraws[e.draw]!);
+      gl.uniform1i(u.uLayer, e.draw * layers);
+      this.effect.quad.drawFull();
+    }
+    u = this.store.use();
+    for (const e of plan) {
+      gl.scissor(e.rect[0]!, e.rect[3]!, e.rect[1]!, e.rect[2]!);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.effect.shadeDraws[e.draw]!);
+      gl.uniform1i(u.uLayer, e.draw * layers);
+      this.effect.quad.drawFull();
+    }
+    gl.disable(gl.SCISSOR_TEST);
+    this.restore();
+  }
+
   // the draws of a grid's framebuffers (the program in use, its viewport set), as the guard's pass `name`
   private pass(name: string, draws: WebGLFramebuffer[], u: Uniforms) {
     const gl = this.gl;
@@ -228,3 +311,5 @@ export class ShadeAccumulation {
     guard.end();
   }
 }
+
+M.ShadeAccumulation = ShadeAccumulation;

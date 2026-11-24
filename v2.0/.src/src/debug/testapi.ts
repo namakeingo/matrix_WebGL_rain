@@ -4,6 +4,7 @@
 // in the wallpaper as shipped (supporttest.html ?test=plain, shipped).
 //
 // Changelog:
+// 2026-11-23: baseMistTask (the base mist's view-change columns task, for the kill spec).
 // 2026-11-04: out of index.js into a module of its own.
 import { M as Matrix3D } from "../engine/core";
 import type { Wallpaper, Parts } from "../index";
@@ -190,6 +191,8 @@ const makeTestApi = (wallpaper: Wallpaper, ready: Promise<void>) => {
     },
     reset: () => wallpaper.reset(),
     advanceTo: (t: number) => wallpaper.advanceTo(t),
+    // the frame's camera fork (the numbers asked of the frame worker, or ahead with a Parallax delay): a promise to await, or null
+    forkFrame: () => wallpaper.forkFrame(),
     advanceWaves: (seconds: number) => {
       wallpaper.guard.beginFrame();
       wallpaper.waves.run(seconds, true);
@@ -365,6 +368,10 @@ const makeTestApi = (wallpaper: Wallpaper, ready: Promise<void>) => {
     // the shade grid's fresh reduced grid task (the kill spec asks it with the fog's own input)
     get shadeAccumTask() {
       return wallpaper.shadeAccumTask;
+    },
+    // the base mist's view-change columns task (the kill spec asks it with a fixed input)
+    get baseMistTask() {
+      return wallpaper.baseMistTask;
     },
     // the atmosphere's tables task (the kill spec asks it with a fixed input)
     get atmosphereTask() {

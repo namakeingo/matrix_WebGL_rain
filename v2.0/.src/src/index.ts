@@ -31,6 +31,16 @@
 // platform/renderlink.ts.
 //
 // Changelog:
+// 2026-11-23: story P8a: the front volume's job (workers/frontvolumeworker.ts): M.FrontVolumeWorker.BANDS JobTasks 'frontvolume' (this.frontVolumeTasks, fog.frontTasks), not started until Fog.frontWorker is on, and their worker part.
+// 2026-11-23: story P8b: the shade grid's accumulation job in bands (this.shadeAccumTasks: M.ShadeAccumWorker.bandCount(4) JobTasks 'shadeaccum', fog.shadeTasks), asked a lead ahead by the Fog.
+// 2026-11-23: the lead's margin is asked with the waves' bound over the lead's steps (askMargin(highest, ceil(lead x clock.rate))).
+// 2026-11-23: the quality lead's per-effect validity (qualityViewKey, qualityLeadEffects: each effect's key with the version of its static data, its step when its job reads it; the margin asked with headroom; carry of the born units; verify counts unsafe units).
+// 2026-11-23: the quality pool's lead (host.lead: ahead, live, nowMs, verify; qualityParamsAhead, qualityLeadKey; qualityStats().lead; the camera updated before a result is applied).
+// 2026-11-23: story M7b: the JobTasks 'baseshade' (this.baseShadeTasks: the base mist's shade grid baked in bands on the CPU) and their worker part; the noise field, the shade grid and the feed registered.
+// 2026-11-23: the base mist's view-change job (workers/basemistworker.ts): the JobTask 'basemist' (this.baseMistTask, tasks.basemist, fog.baseTask) and its worker part.
+// 2026-11-23: forkFrame with a Parallax delay: the camera's numbers asked ahead for the pose the view shows at the release time (poseAt(lead)), held by the camera and released at the frame; delay 0 is the same-frame ask.
+// 2026-11-23: advanceTo gives the rain its parallax pose source (Rain.setAhead: the frame's time, the lead, poseAt) when the lead is over 0.
+// 2026-11-23: Parallax smoothing (p633, settings.parallax.smoothing) given to the parallax task with the Parallax delay (the lead); poseAt(msAhead): the pose the view will show msAhead from the last frame.
 // 2026-11-20: followSpawnBox gives the camera the OLED margin (Camera.setMargin(text.limit)) before the box is made, and reset() calls it first: the rain's world follows the limit at once, not a frame later.
 // 2026-11-19: Camera.setMargin(text.limit) each frame before camera.update (the OLED margin: the rain's floor, top and spawn box are the window extended by it, whatever the lens).
 // 2026-11-18: the scene's OLED shift is the camera's lens each frame (Text.stepShift, OledShift.lensOf, Camera.setLens before camera.update); no Exposure.shiftX; the rain reuse's shift key is 0 (the lens is in the camera's version).
@@ -88,6 +98,7 @@ import "./models/quality/waves";
 import "./models/quality/lightning";
 import "./models/textvisibility";
 import "./models/quality/water";
+import "./models/quality/lead";
 import "./models/quality/waterbands";
 import "./models/quality/rainreuse";
 import "./models/splashlaunch";
@@ -106,6 +117,7 @@ import "./models/musicrain";
 import "./models/musicidle";
 import "./models/mouseparallax";
 import "./models/parallaxlead";
+import "./models/parallaxpose";
 import "./models/spawnbox";
 import "./models/glyphrelief";
 import "./platform/workers";
@@ -127,6 +139,21 @@ import "./models/frame";
 import "./workers/frameworker";
 import "./workers/textlayoutworker";
 import "./workers/shadeaccumworker";
+import "./models/basemistjob";
+import "./models/frontvolumejob";
+import "./models/frontvolumelead";
+import "./workers/frontvolumeworker";
+import "./models/basemistlead";
+import "./models/shadeaccumlead";
+import "./models/shadebands";
+import "./models/shadedelta";
+import "./models/shadelod";
+import "./models/shadeviewbands";
+import "./workers/basemistworker";
+import "./models/noisefield";
+import "./models/baseshadegrid";
+import "./workers/baseshadeworker";
+import "./engine/basemistfeed";
 import "./workers/simmusicworker";
 import "./platform/steppedtask";
 import "./workers/qualityworker";
@@ -172,6 +199,7 @@ import type { Matrix3DNamespace } from "./engine/namespace";
 import type { Effect, PropertyValue, SharedGlsl } from "./engine/effect";
 import type { QualityReport, QualityJob, QualityShared } from "./models/quality/types";
 import type { QualityPool, QualityPoolTask, QualityResults } from "./engine/qualitypool";
+import type { LeadInputs } from "./models/quality/lead";
 import type { QualityFrame, QualityHost } from "./engine/qualityframe";
 import type { QualityStatics, QualityParams } from "./models/quality/jobs";
 import { AIR_EXTINCTION } from "./materials/fog";
@@ -189,6 +217,9 @@ import type { PerfMeter, FrameHealth, AudioRate, RatePacer } from "./debug/debug
 import type { SimMusicTask } from "./workers/simmusicworker";
 import type { LayoutJob, LayoutOut } from "./workers/textlayoutworker";
 import type { ShadeFreshJob } from "./workers/shadeaccumworker";
+import type { BaseMistInput } from "./models/basemistjob";
+import type { FrontVolumeInput } from "./models/frontvolumejob";
+import type { BaseShadeJob } from "./workers/baseshadeworker";
 import type { JobTask } from "./platform/jobtask";
 import type { SteppedTask } from "./platform/steppedtask";
 import type { RainSimPacket } from "./models/rainsimtick";
@@ -201,6 +232,7 @@ import type { MusicTask, MusicWorkerSettings } from "./workers/musicworker";
 import type { ParallaxTask } from "./workers/parallaxworker";
 import type { ThreadedTask } from "./platform/threadedtask";
 import type { ParallaxLimits } from "./models/mouseparallax";
+import type { ParallaxPoseOffsets } from "./models/parallaxpose";
 import type { AudioLevelsReport, PerformanceReport, MusicReport, MusicFollowerReport, OledReport } from "./platform/support";
 import type { Fog } from "./effects/fog";
 import type { Waves } from "./effects/waves";
@@ -259,8 +291,8 @@ interface OwnSettings {
   // the music's (p301 to p313): what the music worker is given with each audio array, and Music rain responsiveness
   music: MusicWorkerSettings;
   musicResponsiveness: number;
-  // the mouse parallax (p629 to p632): on, the mode ("rotation" or "translation"), Parallax amount and Parallax delay (0 to 1)
-  parallax: { on: boolean; mode: string; amount: number; delay: number };
+  // the mouse parallax (p629 to p633): on, the mode ("rotation" or "translation"), Parallax amount, Parallax delay (the lead time) and Parallax smoothing (the time constant) (0 to 1)
+  parallax: { on: boolean; mode: string; amount: number; delay: number; smoothing: number };
 }
 
 // a setting's setter: it takes the setting's own kind (project.json's: a number, a bool, a text),
@@ -436,10 +468,20 @@ export class Wallpaper implements WallpaperControl {
   atmosphereTask: JobTask<AtmosphereJob, Float32Array> | null = null;
   // the shade grid's fresh reduced grid task (workers/shadeaccumworker.ts), asked by Fog.fork when Fog.shadeWorker is on
   shadeAccumTask: JobTask<ShadeFreshJob, Uint16Array> | null = null;
+  // (the bands' tasks: shadeAccumTasks[0] is shadeAccumTask; M.ShadeAccumWorker.bandCount(4) of them, each band of the fresh grid asked of its own worker)
+  shadeAccumTasks: JobTask<ShadeFreshJob, Uint16Array>[] = [];
+  // the base mist's view-change job (workers/basemistworker.ts), asked by Fog.forkBase when Fog.baseWorker is on
+  baseMistTask: JobTask<BaseMistInput, Uint16Array> | null = null;
+  // the front volume's job (workers/frontvolumeworker.ts): a JobTask for each band of rows of the reduced columns, made here and started by Fog when Fog.frontWorker is on
+  frontVolumeTasks: JobTask<FrontVolumeInput, Uint16Array>[] = [];
+  // the base mist's shade grid bands (workers/baseshadeworker.ts): three tasks, each with its own worker
+  baseShadeTasks: JobTask<BaseShadeJob, Uint16Array>[] = [];
   // the bolt's piece lists task (workers/boltlistworker.ts), asked by Bolt.fork
   boltListTask: JobTask<BoltListInput, BoltListOutput> | null = null;
   frameTask: JobTask<FrameInput, FrameOutput> | null = null;
   frameAnswer: { input: FrameInput; output: FrameOutput } | null = null;
+  // the input the camera's numbers were last asked ahead for (the lead's pose), null before the first
+  frameAhead: FrameInput | null = null;
   // what the reflection's reuse reads: the settings changed so far, and the fog's builds so far (a stamp that changes with its volume)
   settingsStamp = 0;
   fogStamp = 0;
@@ -466,6 +508,10 @@ export class Wallpaper implements WallpaperControl {
   // the frame's shared view the effects' job parameters are made from, and those parameters by effect index
   qualityShared!: QualityShared;
   qualityParams: Record<number, QualityParams> = {};
+  // the shared view of the jobs asked a lead early (the inputs of a target pose), the inputs' arrays it keeps, and how many times the statics were given to the pool (a key of the view)
+  qualityAheadShared: QualityShared | null = null;
+  qualityAheadView: LeadInputs | null = null;
+  qualityEffectVersion: Record<number, number> = {};
 
   // platform: PagePlatform or WorkerPlatform (where it runs: everything else the same)
   constructor(platform: RenderPlatform) {
@@ -498,7 +544,7 @@ export class Wallpaper implements WallpaperControl {
       // idle animation off at 3 s; the columns, the fall and the rain's scale are set from the rain with each array)
       music: { useMusic: false, useIdle: false, idleSeconds: 3, sensitivity: 0.3, loud: 0.3, sudden: 0.7, tempo: 0.5, energy: 0.5, brightness: 0.5, multiplier: 5, lightIntensity: 0.5, columns: 1, fall: 1, above: 0, rainScale: 1 },
       musicResponsiveness: 2,
-      parallax: { on: true, mode: "translation", amount: 0.5, delay: 0.1 },
+      parallax: { on: true, mode: "translation", amount: 0.5, delay: 0.1, smoothing: 0.1 },
     };
     this.quality = new M.QualityFrame(this.qualityHost());
     this.ownSettings = this.ownTable();
@@ -693,6 +739,12 @@ export class Wallpaper implements WallpaperControl {
       },
       p632_setting_MouseParallaxDelay: (v: number) => {
         s.parallax.delay = v;
+        if (this.fog) {
+          this.fog.leadDelay = v;
+        }
+      },
+      p633_setting_MouseParallaxSmoothing: (v: number) => {
+        s.parallax.smoothing = v;
       },
       // (Advanced lightning tuning only shows the five weights' settings: the page's conditions read it, the code has nothing to do)
       p306_setting_AdvancedLightningTuning: () => {},
@@ -898,6 +950,12 @@ export class Wallpaper implements WallpaperControl {
       camera.setParallax(reply.yaw, reply.pitch, reply.eyeX, reply.eyeY);
       this.parallaxMoving = reply.moving;
     }
+  }
+
+  // the pose the view will show msAhead ms from the last frame (0 = now, up to the Parallax delay, the lead; a larger one is the lead's): { yaw, pitch, eyeX, eyeY }, known because the pose at a time depends only on
+  // the cursor events up to that time minus the lead. The one call the camera and the effects use to work ahead of the view; null before the parallax's client exists
+  poseAt(msAhead: number): ParallaxPoseOffsets | null {
+    return this.parallaxClient ? this.parallaxClient.poseAt(msAhead) : null;
   }
 
   // the rain's spawn box (models/spawnbox.ts, shared by the strikes): its inputs given to the rain each frame, the camera's base tilt and eye's height (never the parallax's live
@@ -1125,7 +1183,7 @@ export class Wallpaper implements WallpaperControl {
     // (the scene's one-off work in a Web Worker when one can be made, else here: the script's
     // hashes and their check, the rain's layouts, the characters)
     // (the tests may refuse a worker: window.Matrix3DTest { sceneWorker, boltWorker: "none" })
-    const refused = (name: "sceneWorker" | "boltWorker" | "musicWorker" | "parallaxWorker" | "textLayoutWorker" | "strikePlanWorker" | "fogPlanWorker" | "atmosphereWorker" | "boltListWorker" | "frameWorker" | "splashWorker" | "shadeAccumWorker") => testOptions()[name] || "";
+    const refused = (name: "sceneWorker" | "boltWorker" | "musicWorker" | "parallaxWorker" | "textLayoutWorker" | "strikePlanWorker" | "fogPlanWorker" | "atmosphereWorker" | "boltListWorker" | "frameWorker" | "splashWorker" | "shadeAccumWorker" | "baseMistWorker" | "baseShadeWorker" | "frontVolumeWorker") => testOptions()[name] || "";
     const scene = new M.SceneTask({
       base: this.platform.base,
       force: refused("sceneWorker"),
@@ -1276,8 +1334,75 @@ export class Wallpaper implements WallpaperControl {
       },
     });
     this.shadeAccumTask = shadeAccum;
+    this.shadeAccumTasks.push(shadeAccum);
     this.tasks.shadeaccum = shadeAccum as unknown as ThreadedTask;
     shadeAccum.start();
+    // (the other bands: a JobTask each over the same pure job, so that the fresh grid's bands run on the pool's workers but the reserved last one: M.ShadeAccumWorker.bandCount(4) bands in all)
+    for (let i = 1; i < M.ShadeAccumWorker.bandCount(4); i++) {
+      const band = new M.JobTask({
+        fn: M.ShadeAccumWorker.job,
+        name: M.ShadeAccumWorker.NAME,
+        base: this.platform.base,
+        force: refused("shadeAccumWorker"),
+        observe: (event) => {
+          if (event.name === "adopt") {
+            this.mark("shadeAccumWorker");
+          }
+        },
+      });
+      this.shadeAccumTasks.push(band);
+      band.start();
+    }
+    // (the base mist's view-change columns: a JobTask over models/basemistjob.ts, asked ahead by Fog.forkBase with the lead as its deadline and released by Fog.update; inline until its worker is made)
+    const baseMist = new M.JobTask({
+      fn: M.BaseMistWorker.job,
+      name: M.BaseMistWorker.NAME,
+      base: this.platform.base,
+      force: refused("baseMistWorker"),
+      observe: (event) => {
+        if (event.name === "adopt") {
+          this.mark("baseMistWorker");
+        }
+      },
+    });
+    this.baseMistTask = baseMist;
+    this.tasks.basemist = baseMist as unknown as ThreadedTask;
+    baseMist.start();
+    // (the front volume's fresh columns: M.FrontVolumeWorker.BANDS JobTasks over models/frontvolumejob.ts, one worker each; made, not started: Fog starts them when its frontWorker option is on)
+    for (let i = 0; i < M.FrontVolumeWorker.BANDS; i++) {
+      this.frontVolumeTasks.push(
+        new M.JobTask({
+          fn: M.FrontVolumeWorker.job,
+          name: M.FrontVolumeWorker.NAME,
+          base: this.platform.base,
+          force: refused("frontVolumeWorker"),
+          observe: (event) => {
+            if (event.name === "adopt") {
+              this.mark("frontVolumeWorker");
+            }
+          },
+        })
+      );
+    }
+    // (the base mist's shade grid: three JobTasks over models/baseshadegrid.ts, each band asked by Fog while the grid is owed; none is run inline unless its worker was lost)
+    for (let i = 0; i < 3; i++) {
+      const shade = new M.JobTask({
+        fn: M.BaseShadeWorker.job,
+        name: M.BaseShadeWorker.NAME,
+        base: this.platform.base,
+        force: refused("baseShadeWorker"),
+        observe: (event) => {
+          if (event.name === "adopt") {
+            this.mark("baseShadeWorker");
+          }
+        },
+      });
+      this.baseShadeTasks.push(shade);
+      if (i === 0) {
+        this.tasks.baseshade = shade as unknown as ThreadedTask;
+      }
+      shade.start();
+    }
     // (the bolt's piece lists: a JobTask over models/boltlist.ts, asked in Bolt.fork with the frame's inputs and awaited by the draw; inline until its worker is made)
     const boltList = new M.JobTask({
       fn: M.BoltList.run,
@@ -1508,6 +1633,8 @@ export class Wallpaper implements WallpaperControl {
     this.clock = new M.StepClock(this.stepRate());
     const context = { gl, quad: this.quad, camera: this.camera, atlas: this.atlas, guard: this.guard, caps, seed: M.Rain.SEED, clock: this.clock };
     this.fog = new M.Fog(context);
+    this.fog.leadDelay = this.settings.parallax.delay;
+    this.fog.poseSource = (msAhead: number) => this.poseAt(msAhead);
     this.waves = new M.Waves(context, M.Rain.FURTHEST);
     this.lightning = new M.Lightning(
       context,
@@ -1524,6 +1651,10 @@ export class Wallpaper implements WallpaperControl {
     this.fog.planTask = this.fogPlanTask;
     this.fog.atmosphereTask = this.atmosphereTask;
     this.fog.shadeTask = this.shadeAccumTask;
+    this.fog.shadeTasks = this.shadeAccumTasks;
+    this.fog.baseTask = this.baseMistTask;
+    this.fog.frontTasks = this.frontVolumeTasks;
+    this.fog.baseShadeTasks = this.baseShadeTasks;
     this.lightning.onPlanned = (s) => this.fog.announceStrike(s.uid!, s.start, s.flash!);
     // (an unexpected error in the lightning's asynchronous answers: reported as a failure of the wallpaper, as a frame's error is)
     this.lightning.onFailure = (error) => this.fail(error);
@@ -1765,6 +1896,9 @@ export class Wallpaper implements WallpaperControl {
     this.followMusic();
     this.followParallax();
     this.followSpawnBox();
+    // (the rain's layouts for the pose the view shows a lead later; no lead: none given, the layouts are for the view now)
+    const aheadLead = this.settings.parallax.on && !this.parallaxHold && this.M ? this.M.ParallaxLead.lead(this.settings.parallax.delay) : 0;
+    this.rain.setAhead(aheadLead > 0 ? { time, lead: aheadLead, poseAt: (seconds: number) => this.poseAt(seconds * 1000) } : null);
     for (let i = 0; i < this.effects!.length; i++) {
       if (forked && this.effects![i] === this.waves) {
         this.wavesDeferred = true;
@@ -1805,6 +1939,38 @@ export class Wallpaper implements WallpaperControl {
     const size = this.platform.size();
     const width = Math.max(1, size[0]);
     const height = Math.max(1, size[1]);
+    const lead = this.settings.parallax.on && !this.parallaxHold && this.M ? this.M.ParallaxLead.lead(this.settings.parallax.delay) * 1000 : 0;
+    if (lead > 0 && camera.steadyBase(width, height)) {
+      // (the Parallax delay is the lead: the numbers of the pose the view shows `lead` from now are asked now, held, and released at the frame that shows it; the answer is not awaited here)
+      const now = performance.now();
+      if (camera.release(now) > 0) {
+        // (the live view at the release frame shows the released pose: the camera's offsets are the answer's, the pose of its release time)
+        const answered = camera.answered;
+        if (answered) {
+          const a = answered.input;
+          const shown = this.M.Frame.atPose(camera.frameInput(width, height, this.clock, this.time), { yaw: a.yaw, pitch: a.pitchShift, eyeX: a.eyeX, eyeY: a.eyeShift });
+          if (this.M.Frame.sameView(a, shown)) {
+            camera.setParallax(a.yaw, a.pitchShift, a.eyeX, a.eyeShift);
+          }
+        }
+      }
+      const pose = this.poseAt(lead);
+      if (pose) {
+        const ahead = camera.frameInput(width, height, this.clock, this.time, pose);
+        const last = this.frameAhead;
+        if (!last || !this.M.Frame.sameView(last, ahead)) {
+          this.frameAhead = ahead;
+          const releaseMs = now + lead;
+          task.ask(ahead, lead).then((output) => camera.hold(releaseMs, { input: ahead, output }));
+        }
+        return null;
+      }
+    }
+    if (lead === 0 && (camera.holding() > 0 || this.frameAhead)) {
+      // (no lead: nothing is held for a later frame; what a lead left is forgotten)
+      camera.heldAnswers.length = 0;
+      this.frameAhead = null;
+    }
     if (!camera.dirty && width === camera.width && height === camera.height) {
       return null;
     }
@@ -2299,10 +2465,24 @@ export class Wallpaper implements WallpaperControl {
           }
         }
       },
-      apply: (results) => {
+      apply: (results, fromLead) => {
+        // (a result made ahead is applied at a frame whose camera has just taken its offsets: made current, so that the effects take it as the camera now)
+        this.camera.update();
+        // (the bolt's lists: a list made ahead fits the frame that shows its pose, by the pose and the camera's viewVersion; a same-frame result by the camera's version, as before)
+        const camera = this.camera;
+        this.bolt.setListView(fromLead ? { yaw: camera.yaw, pitch: camera.pitchShift, eyeX: camera.eyeX, eyeY: camera.eyeShift } : null, camera.viewVersion);
         for (const key of Object.keys(results.levels)) {
           this.effects![+key].setQuality(this.M.QualityFrame.summarize(results.levels[+key]));
         }
+      },
+      lead: {
+        delayMs: () => this.qualityLeadMs(),
+        nowMs: () => performance.now(),
+        ahead: (msAhead) => this.qualityAhead(msAhead),
+        live: () => ({ key: this.qualityViewKey({ yaw: this.camera.yaw, pitch: this.camera.pitchShift, eyeX: this.camera.eyeX, eyeY: this.camera.eyeShift }), effects: this.qualityLeadEffects(this.time), margin: this.qualityHighest() }),
+        carry: (results, state) => this.qualityCarry(results, state as Record<number, unknown>),
+        // (this host is made in the constructor, before this.M is set: M.TEST is read when a result is checked)
+        verify: (results) => (this.M.TEST ? this.qualityVerify(results) : { checked: 0, unsafe: 0 }),
       },
       fail: (error) => this.fail(error),
     };
@@ -2328,6 +2508,8 @@ export class Wallpaper implements WallpaperControl {
       const arrays = effect.qualityStatics();
       if (arrays) {
         this.qualityStatics[effect.qualityIndex] = { kind, arrays };
+        // (the version of this effect's static data: a change of the data its job reads, for the lead's key)
+        this.qualityEffectVersion[effect.qualityIndex] = (this.qualityEffectVersion[effect.qualityIndex] || 0) + 1;
         if (pool && this.qualitySentTo === pool) {
           pool.setStatic(effect.qualityIndex, arrays, kind);
         }
@@ -2380,6 +2562,151 @@ export class Wallpaper implements WallpaperControl {
       }
     }
     return this.qualityParams;
+  }
+
+  // the lead of the quality jobs in ms: the Parallax delay (as forkFrame's), 0 with the parallax off or held
+  qualityLeadMs(): number {
+    return this.settings.parallax.on && !this.parallaxHold && this.M ? this.M.ParallaxLead.lead(this.settings.parallax.delay) * 1000 : 0;
+  }
+
+  // the highest wave the jobs add to every unit's radius (the shared inputs' margin)
+  qualityHighest(): number {
+    return this.waterState.wavesStepped && this.waves ? this.waves.highest : 0;
+  }
+
+  // the key of a view for the pool's lead (models/quality/lead.ts FIELDS): the pose, a fold of the camera's pitch and eye height, its lens and its size
+  qualityViewKey(pose: { yaw: number; pitch: number; eyeX: number; eyeY: number }): Record<string, number> {
+    const camera = this.camera;
+    return {
+      yaw: pose.yaw,
+      pitch: pose.pitch,
+      eyeX: pose.eyeX,
+      eyeY: pose.eyeY,
+      baseVersion: this.M.QualityLead.fold([camera.pitch, camera.eyeHeight]),
+      lensX: camera.lens.x,
+      lensY: camera.lens.y,
+      width: camera.width,
+      height: camera.height,
+    };
+  }
+
+  // what each effect's result is made for: its key (its own key, the version of its static data, the fog's extinction and whether the water is drawn, which every job reads) and the step of the frame at
+  // `time` when its job reads the step
+  qualityLeadEffects(time: number): Record<number, { key: number; step: number | null }> {
+    const L = this.M.QualityLead;
+    const shared = L.fold([this.fog.sigma(), this.waterState.waterDrawn ? 1 : 0]);
+    const step = this.clock.stepAt(time);
+    const out: Record<number, { key: number; step: number | null }> = {};
+    for (const effect of this.effects!) {
+      if (effect.qualityKind() !== "") {
+        out[effect.qualityIndex] = { key: L.effectKey(effect.qualityLeadKey(), L.fold([this.qualityEffectVersion[effect.qualityIndex] || 0, shared])), step: effect.qualityUsesStep() ? step : null };
+      }
+    }
+    return out;
+  }
+
+  // the jobs, their parameters, the view key, the effects' keys and the margin for the pose the view shows msAhead from now (the quality pool's lead): the shared inputs of that pose
+  // (QualityLead.inputsAt: the camera is not touched) with the highest wave's margin asked with headroom, the step of the frame that will show it; null when no pose is known
+  qualityAhead(msAhead: number): { key: Record<string, number>; jobs: QualityJob[]; params: Record<number, object>; effects: Record<number, { key: number; step: number | null }>; margin: number; state: Record<number, unknown> } | null {
+    const pose = this.poseAt(msAhead);
+    if (!pose || !this.effects) {
+      return null;
+    }
+    this.qualitySend();
+    const time = this.time + msAhead / 1000;
+    const margin = this.M.QualityLead.askMargin(this.qualityHighest(), Math.ceil((msAhead / 1000) * this.clock.rate));
+    const jobs: QualityJob[] = [];
+    const state: Record<number, unknown> = {};
+    for (const effect of this.effects) {
+      for (const job of effect.qualityJobs()) {
+        jobs.push(job);
+      }
+      const kept = effect.qualityKind() !== "" ? effect.qualityAskState() : null;
+      if (kept !== null) {
+        state[effect.qualityIndex] = kept;
+      }
+    }
+    return { key: this.qualityViewKey(pose), jobs, params: this.qualityParamsAhead(pose, time, margin), effects: this.qualityLeadEffects(time), margin, state };
+  }
+
+  // the results of an ask carried to the units that are live now (each effect with a state: Effect.qualityCarry), a new results object
+  qualityCarry(results: QualityResults, state: Record<number, unknown>): QualityResults {
+    const levels: Record<number, Uint8Array> = Object.assign({}, results.levels);
+    for (const key of Object.keys(state)) {
+      const index = +key;
+      const made = levels[index];
+      if (made) {
+        const carried = this.effects![index].qualityCarry(this.M.QualityFrame.summarize(made), state[index]);
+        if (carried.levels) {
+          levels[index] = carried.levels;
+        }
+      }
+    }
+    return { frame: results.frame, levels };
+  }
+
+  // the effects' job parameters for a target pose: qualityParamsOf's, with the view of the pose (the camera's own state is not changed)
+  qualityParamsAhead(pose: { yaw: number; pitch: number; eyeX: number; eyeY: number }, time: number, margin: number): Record<number, object> {
+    const camera = this.camera;
+    const view = (this.qualityAheadView = this.M.QualityLead.inputsAt(camera, pose, this.qualityAheadView || undefined));
+    let shared = this.qualityAheadShared;
+    if (!shared) {
+      shared = this.qualityAheadShared = {
+        step: 0,
+        time: 0,
+        inputs: { viewProjection: view.viewProjection, eyeX: 0, eyeY: 0, eyeZ: 0, focal: 1, width: 1, height: 1, sigma: 0, air: AIR_EXTINCTION, waterDrawn: true, waterY: this.M.Floor.WATER_Y, margin: 0, blur: 1, occluders: new Float32Array(0), occluderCount: 0 },
+      };
+    }
+    shared.step = this.clock.stepAt(time);
+    shared.time = time;
+    shared.tilt = camera.pitch + pose.pitch;
+    const inputs = shared.inputs;
+    inputs.viewProjection = view.viewProjection;
+    inputs.eyeX = view.eyeX;
+    inputs.eyeY = view.eyeY;
+    inputs.focal = view.focal;
+    inputs.width = view.width;
+    inputs.height = view.height;
+    inputs.lensX = view.lensX;
+    inputs.lensY = view.lensY;
+    inputs.sigma = this.fog.sigma();
+    inputs.waterDrawn = this.waterState.waterDrawn;
+    inputs.margin = margin;
+    inputs.mirror = view.mirror;
+    for (const effect of this.effects!) {
+      if (effect.qualityKind() !== "") {
+        this.qualityParams[effect.qualityIndex] = effect.qualityParams(shared);
+      }
+    }
+    return this.qualityParams;
+  }
+
+  // the tests': the units of a result made ahead that differ from the same frame's own jobs (the inputs of the live camera)
+  qualityVerify(results: QualityResults): { checked: number; unsafe: number } {
+    const jobs: QualityJob[] = [];
+    for (const effect of this.effects!) {
+      for (const job of effect.qualityJobs()) {
+        jobs.push(job);
+      }
+    }
+    const own = this.qualityInline(jobs, this.qualityParamsOf());
+    let checked = 0;
+    let unsafe = 0;
+    for (const job of jobs) {
+      const a = results.levels[job.effect];
+      const b = own.levels[job.effect];
+      if (!a || !b || a.length !== b.length) {
+        continue;
+      }
+      for (let i = 0; i < b.length; i++) {
+        checked++;
+        // (a unit the result hides that the frame's own job shows: the unsafe side; the margin's headroom and a splash born since may show more, never less)
+        if (a[i] === 0 && b[i]! > 0) {
+          unsafe++;
+        }
+      }
+    }
+    return { checked, unsafe };
   }
 
   // a job run here, into arrays kept between frames
@@ -2455,8 +2782,8 @@ export class Wallpaper implements WallpaperControl {
   }
 
   // for the tests: the controller's counts and the pool's workers alive
-  qualityStats(): { mode: string; applied: number; skipped: number; late: number; workers: number } {
-    return { mode: this.quality.mode, applied: this.quality.applied, skipped: this.quality.skipped, late: this.quality.late, workers: this.qualityPool ? this.qualityPool.alive : 0 };
+  qualityStats(): { mode: string; applied: number; skipped: number; late: number; workers: number; lead: { asked: number; released: number; fallback: number; dropped: number; partial: number; checked: number; unsafe: number; noneDue: number; fields: Record<string, number>; staleBy: Record<string, number> } } {
+    return { mode: this.quality.mode, applied: this.quality.applied, skipped: this.quality.skipped, late: this.quality.late, workers: this.qualityPool ? this.qualityPool.alive : 0, lead: this.quality.lead };
   }
 
   // the effects' quality for the Performance readout (null while the effects are not made)
@@ -2712,6 +3039,12 @@ if (inWorker()) {
     M.TextLayoutWorker.serve();
   } else if (name === "shadeaccum") {
     M.ShadeAccumWorker.serve();
+  } else if (name === "basemist") {
+    M.BaseMistWorker.serve();
+  } else if (name === "baseshade") {
+    M.BaseShadeWorker.serve();
+  } else if (name === "frontvolume") {
+    M.FrontVolumeWorker.serve();
   }
 } else if (document.getElementById("gl")) {
   // (the bundle's URL: its workers are made from it; read while it runs, as it loads)

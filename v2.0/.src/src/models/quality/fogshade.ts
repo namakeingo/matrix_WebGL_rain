@@ -15,8 +15,11 @@
 // worker bakes the grid for the time it will be shown); at the turn a kept reply of the current version whose time is within MAX_TIME_ERROR of the frame's is
 // uploaded, else the GPU bakes it (a late reply is simply the earlier behaviour). A frame with `view` (a view, setting or gap change) bakes every draw on the
 // GPU and posts a job for each draw k for the time + (k + 1) / rate.
+// The LOD (Feature P1, story P10; models/shadelod.ts): bakeLod bakes one layer's cells of the absolute lattice of the layer's stride and fills the rest by bilinear interpolation (stride 1 and 1: bake itself); the Schedule takes
+// optional periods (a draw due every N sweeps, the credit scaled by the due fraction) and force(draws) (draws owed in the next slots, in order, the credit at the full rate while they wait).
 //
 // Changelog:
+// 2026-11-24: bakeLod; the Schedule's periods, usePeriods and force (the sweep is a walk over the due draws); the priority queue (prioritize, expect) removed (Feature P1, story P10).
 // 2026-11-21: viewRays, columnsFor, boxesFor (the shadow grid's boxes from the view's rays, the mouse parallax's yaw, eye offset and drift included).
 // 2026-11-22: Feature U3, story M4: the density's profile is StaticMist.frontProfile (the front's two scales); bake and bakeAt take a trailing optional front { tail, scale } (absent: the shipped defaults).
 // 2026-11-22: bakeAt: the cells at fractional grid coordinates (the shade grid's jittered, reduced bake: Feature U2, story V1).
@@ -28,6 +31,7 @@ import { Frame } from "../frame";
 import { AIR_EXTINCTION } from "../../materials/fog";
 import { StaticMist } from "../staticmist";
 import { MOON_DIR, MoonDisc } from "../../materials/sky";
+import { ShadeLod } from "../shadelod";
 
 const ACROSS = 128;
 const UP = 64;
@@ -289,7 +293,32 @@ function bakeAt(noise: Float32Array, sigma: number, time: number, out: Uint16Arr
   }
 }
 
-// the draws of the grid: which a worker's reply serves
+// one layer's cells of the box like bake (half pairs, out[(y * nx + x) * 2 + c], the first row of the box first), by the LOD lattice (models/shadelod.ts): the cells of the absolute lattice are baked (bakeAt: the values of bake at integer
+// coordinates) and the rest filled by the separable interpolation. sx, sy: the lattice's strides in columns and rows; 0 takes the rule's own (the layer's colSamples, the grid's rowSamples); 1 and 1 is bake itself, bit for bit
+function bakeLod(noise: Float32Array, sigma: number, time: number, out: Uint16Array, layer: number, x0: number, nx: number, rows: number, y0: number, sx: number, sy: number, front?: FrontProfile): void {
+  const cs = sx > 0 ? ShadeLod.lattice(ACROSS, sx) : ShadeLod.colSamples(layer);
+  const rs = sy > 0 ? ShadeLod.lattice(UP, sy) : ShadeLod.rowSamples();
+  if (cs.length === ACROSS && rs.length === UP) {
+    bake(noise, sigma, time, out, layer, layer + 1, x0, nx, rows, undefined, y0, front);
+    return;
+  }
+  const cc = ShadeLod.cover(cs, x0, nx);
+  const rr = ShadeLod.cover(rs, y0, rows);
+  const cells = new Uint16Array(cc.length * rr.length * 2);
+  bakeAt(noise, sigma, time, cells, [layer], rr, cc, undefined, front);
+  const vals = new Float32Array(cells.length);
+  for (let i = 0; i < cells.length; i++) {
+    vals[i] = fromHalf(cells[i]);
+  }
+  ShadeLod.spread(vals, cc, rr, x0, nx, y0, rows, out, toHalf);
+}
+
+// the draws of the grid: which a worker's reply serves. The sweep walks the draws in order; a draw is DUE in a sweep when its sweep index has come (nextSweep), and each owed slot takes the next due draw (the draws not due cost no slot), so a draw
+// with the period N is owed every N sweeps. The credit accrues at rate x the due fraction (the mean of 1 / period) a second, so that a sweep of due draws still takes draws / rate seconds on average and a draw of the period 1 is refreshed at the
+// earlier rate. force(draws): draws owed at once (a band fill wrote cells of them), before the sweep's own, one a slot in the order given, their phase starting again; their jobs are posted by the next frame like the sweep's own (one job a
+// draw: no more than a sweep posts), and while any wait the credit accrues at the full rate, so that all of them are refreshed within one sweep (draws / rate seconds)
+const NEVER_BEFORE = -(1 << 20);
+
 class Schedule {
   draws: number;
   rate: number;
@@ -310,8 +339,22 @@ class Schedule {
   uploadDraws: number;
   lateDraws: number;
   staleDraws: number;
+  // the sweep's place: the index of the sweep in progress, and per draw its period and the sweep it is next due in
+  sweep: number;
+  period: Int32Array;
+  nextSweep: Int32Array;
+  // the share of the draws due in a sweep (the mean of 1 / period); scaled: periods are on (the job times are the walk's prediction, else the earlier rule's)
+  dueFrac: number;
+  scaled: boolean;
+  // the forced draws: 1 waiting for their job to be posted, 2 posted and queued (forcedQ, in order) for their turn
+  forced: Uint8Array;
+  forcedQ: number[];
+  private scratch: Int32Array;
+  private maxPeriod: number;
+  private takenSweep: number;
+  private frameS: number;
 
-  constructor(draws: number, rate: number) {
+  constructor(draws: number, rate: number, periods?: number[]) {
     this.draws = draws;
     this.rate = rate;
     this.credit = 0;
@@ -321,8 +364,8 @@ class Schedule {
     this.drawOf = new Int32Array(draws);
     this.uploaded = new Uint8Array(draws);
     this.postCount = 0;
-    this.postDraw = new Int32Array(draws);
-    this.postTime = new Float64Array(draws);
+    this.postDraw = new Int32Array(draws * 2);
+    this.postTime = new Float64Array(draws * 2);
     this.jobState = new Uint8Array(draws);
     this.jobVersion = new Int32Array(draws);
     this.jobTime = new Float64Array(draws);
@@ -330,6 +373,111 @@ class Schedule {
     this.uploadDraws = 0;
     this.lateDraws = 0;
     this.staleDraws = 0;
+    this.sweep = 0;
+    this.period = new Int32Array(draws).fill(1);
+    this.nextSweep = new Int32Array(draws);
+    this.dueFrac = 1;
+    this.scaled = false;
+    this.forced = new Uint8Array(draws);
+    this.forcedQ = [];
+    this.scratch = new Int32Array(draws);
+    this.maxPeriod = 1;
+    this.takenSweep = 0;
+    this.frameS = 1 / 60;
+    this.usePeriods(periods || null);
+  }
+
+  // the periods of the draws on (an array of draws numbers, each 1 or more) or off (null: every draw every sweep, the earlier schedule exactly); the draws are all due again from the sweep in progress on
+  usePeriods(periods: number[] | null): void {
+    const on = periods !== null && periods.length === this.draws;
+    for (let k = 0; k < this.draws; k++) {
+      this.period[k] = on ? Math.max(1, Math.floor(periods![k]!)) : 1;
+      this.nextSweep[k] = Math.min(this.nextSweep[k], this.sweep + this.period[k] - 1);
+    }
+    this.maxPeriod = Math.max(1, ...Array.from(this.period));
+    this.scaled = on;
+    this.dueFrac = on ? ShadeLod.dueFraction(this.period) : 1;
+  }
+
+  // draws owed in the next slots whatever their period (a band fill wrote cells of them): their phase starts again at their turn
+  force(draws: number[]): void {
+    for (const k of draws) {
+      if (Number.isInteger(k) && k >= 0 && k < this.draws && this.forced[k] === 0) {
+        this.forced[k] = 1;
+        this.nextSweep[k] = NEVER_BEFORE;
+      }
+    }
+  }
+
+  // the draw's turn: due when its sweep has come and it is not held waiting for its job
+  private due(k: number, sweep: number): boolean {
+    return this.nextSweep[k]! <= sweep && this.forced[k] === 0;
+  }
+
+  // the next due draw of the walk (-1: none within the longest period); the sweep's place moves past it
+  private take(): number {
+    if (this.forcedQ.length > 0) {
+      const k = this.forcedQ.shift()!;
+      this.forced[k] = 0;
+      this.takenSweep = this.sweep;
+      return k;
+    }
+    const limit = this.draws * (this.maxPeriod + 2);
+    for (let step = 0; step < limit; step++) {
+      const k = this.part;
+      const sweep = this.sweep;
+      const due = this.due(k, sweep);
+      if (++this.part === this.draws) {
+        this.part = 0;
+        this.sweep++;
+      }
+      if (due) {
+        this.takenSweep = sweep;
+        return k;
+      }
+    }
+    return -1;
+  }
+
+  // how many owed slots away draw k's next turn is, the walk simulated from the sweep's place (k counted as due; the held draws are not, the others by their sweep); the walk's state is not touched
+  private slotsTo(k: number): number {
+    const s = this.scratch;
+    s.set(this.nextSweep);
+    let sweep = this.sweep;
+    let part = this.part;
+    let count = 0;
+    const limit = this.draws * (this.maxPeriod + 2);
+    for (let step = 0; step < limit; step++) {
+      if (s[part]! <= sweep && (this.forced[part] === 0 || part === k)) {
+        count++;
+        s[part] = sweep + this.period[part]!;
+        if (part === k) {
+          return count;
+        }
+      }
+      if (++part === this.draws) {
+        part = 0;
+        sweep++;
+      }
+    }
+    return count + this.draws;
+  }
+
+  // the job for draw k posted for the time of its next turn
+  private post(k: number, time: number, version: number, when: number): void {
+    this.jobState[k] = 1;
+    this.jobVersion[k] = version;
+    this.jobTime[k] = when;
+    this.postDraw[this.postCount] = k;
+    this.postTime[this.postCount] = when;
+    this.postCount++;
+  }
+
+  // the time of draw k's next turn from the walk: the slots away (the credit's remainder is spent first), at the due draws' rate, in the middle of the frame the turn falls in
+  private turnTime(k: number, time: number): number {
+    const queued = this.forcedQ.indexOf(k);
+    const slots = queued >= 0 ? queued + 1 : this.slotsTo(k) + this.forcedQ.length;
+    return time + (slots - this.credit) / (this.rate * (this.forcedQ.length > 0 ? 1 : this.dueFrac)) + 0.5 * this.frameS;
   }
 
   // once a frame: the draws owed (in order; drawOf, uploaded for the first owedCount) and the jobs to post (postDraw, postTime for the first postCount)
@@ -337,21 +485,39 @@ class Schedule {
     const draws = this.draws;
     const passed = this.last === this.last ? time - this.last : 0;
     this.last = time;
-    this.credit += view ? 0 : Math.max(0, passed) * this.rate;
-    const owed = view ? draws : Math.min(draws, Math.floor(this.credit + 1e-6));
+    if (passed > 0) {
+      this.frameS = Math.min(passed, 0.1);
+    }
+    this.credit += view ? 0 : Math.max(0, passed) * this.rate * (this.forcedQ.length > 0 ? 1 : this.dueFrac);
+    let owed = view ? draws : Math.min(draws, Math.floor(this.credit + 1e-6));
     this.credit = view ? 0 : Math.max(0, this.credit - owed);
-    const from = view ? 0 : this.part;
-    this.part = (from + owed) % draws;
-    this.owedCount = owed;
     this.postCount = 0;
+    if (view) {
+      // (a whole-grid bake: every draw baked now, the sweep starts again from draw 0 with each draw next due a period on)
+      this.forced.fill(0);
+      this.forcedQ.length = 0;
+      this.sweep++;
+      this.part = 0;
+      for (let k = 0; k < draws; k++) {
+        this.nextSweep[k] = this.sweep + this.period[k]! - 1;
+      }
+    }
+    let taken = 0;
     for (let n = 0; n < owed; n++) {
-      const k = (from + n) % draws;
+      const k = view ? n : this.take();
+      if (k < 0) {
+        break;
+      }
+      taken++;
+      if (!view) {
+        this.nextSweep[k] = this.takenSweep + this.period[k]!;
+      }
       this.drawOf[n] = k;
       let up = 0;
       if (!view) {
         const state = this.jobState[k];
         if (state === 2 && this.jobVersion[k] === version) {
-          if (Math.abs(this.jobTime[k] - time) <= MAX_TIME_ERROR + 1e-9) {
+          if (Math.abs(this.jobTime[k]! - time) <= MAX_TIME_ERROR + 1e-9) {
             up = 1;
           } else {
             this.staleDraws++;
@@ -366,13 +532,24 @@ class Schedule {
       } else {
         this.gpuDraws++;
       }
-      const when = view ? time + (k + 1) / this.rate : time + draws / this.rate;
-      this.jobState[k] = 1;
-      this.jobVersion[k] = version;
-      this.jobTime[k] = when;
-      this.postDraw[this.postCount] = k;
-      this.postTime[this.postCount] = when;
-      this.postCount++;
+    }
+    owed = taken;
+    this.owedCount = owed;
+    // (the jobs for the draws' next turns: the earlier rule's time while no periods are on, else the walk's prediction)
+    for (let n = 0; n < owed; n++) {
+      const k = this.drawOf[n]!;
+      const when = this.scaled ? this.turnTime(k, time) : view ? time + (k + 1) / this.rate : time + draws / this.rate;
+      this.post(k, time, version, when);
+    }
+    // (the forced draws: queued in the order given, a job each for the time of their turn)
+    if (!view) {
+      for (let k = 0; k < draws; k++) {
+        if (this.forced[k] === 1) {
+          this.forced[k] = 2;
+          this.forcedQ.push(k);
+          this.post(k, time, version, this.turnTime(k, time));
+        }
+      }
     }
   }
 
@@ -385,7 +562,6 @@ class Schedule {
     return true;
   }
 }
-
 // the depth (m) of layer n's node (the shader's z: NEAR e^(n / (DEEP - 1) LOG)); 0 under the first layer, whose reads begin at 0
 function depthOf(layer: number): number {
   return layer < 0 ? 0 : NEAR * Math.exp((layer / (DEEP - 1)) * LOG);
@@ -504,6 +680,6 @@ function boxesFor(rays: ArrayLike<number>, count: number, eyeX: number, eyeY: nu
   return boxes;
 }
 
-export const QualityFogShade = { bakeAt, depthOf, rowFrom, viewRays, columnsFor, boxesFor, VIEW_RAYS, ACROSS, UP, DEEP, TOP, NEAR, FAR, SPAN, MOON_KERNEL, MIP_FROM, MIP_LAST, MIP_TEXELS, MAX_TIME_ERROR, mipOffset, packMips, toHalf, fromHalf, slabBytes, bake, Schedule };
+export const QualityFogShade = { bakeAt, bakeLod, depthOf, rowFrom, viewRays, columnsFor, boxesFor, VIEW_RAYS, ACROSS, UP, DEEP, TOP, NEAR, FAR, SPAN, MOON_KERNEL, MIP_FROM, MIP_LAST, MIP_TEXELS, MAX_TIME_ERROR, mipOffset, packMips, toHalf, fromHalf, slabBytes, bake, Schedule };
 
 M.QualityFogShade = QualityFogShade;

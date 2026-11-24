@@ -5,6 +5,9 @@
 // run here) or with the answer its fork asked of the worker in the same frame, so the picture does not depend on where the plan ran.
 //
 // Changelog:
+// 2026-11-23: ViewLead.asked: the decision of the last ask (its `moved` at ask time orders the base mist's jobs).
+// 2026-11-23: the view's decision for the pose of the release frame (Parallax delay as lead time): ahead() (the move decision and the pose a build is ordered for, pure), the input's `ahead` (the decision the lead released), the output's builtFor, offsetsOfPose, ViewLead (the schedule of the asks, M.ParallaxLead.Lane's rule).
+// 2026-11-23: the lens is no move of the view: the block is 32 floats, fLens at 28 to 31 (lensShift: the read's shift and the lens delta in pixels, against the lens the volume is built for); a rebuild (any cause) is built for the lens now: no delta in the block, the periods for the lens now, else the built one.
 // 2026-11-22: no refresh periods (`every`, due): the volume is blended by the temporal accumulation, every slice the time passed owes is built; the octaves read as their mean (`drop`) stay.
 // 2026-11-20: the block is 28 floats: no sky gain, the Orb's gain at 24 (Feature S1, story A2).
 // 2026-11-18: the lens (lensX, lensY, builtLensX, builtLensY): a lens other than the one the volume was built for is a move of the view; the periods' view carries the lens.
@@ -15,11 +18,13 @@ import { QualityFog } from "./quality/fog";
 import type { FogQualityView } from "./quality/fog";
 import { MouseParallax } from "./mouseparallax";
 import { StaticMist } from "./staticmist";
+import { ParallaxLead } from "./parallaxlead";
 import type { ParallaxOffsets } from "./mouseparallax";
+import type { ParallaxPoseOffsets } from "./parallaxpose";
 
 // the length of the uniform block's data (floats)
-// (7 vec4: the flat sky's gain vec4 is gone with the flat sky; the Orb's gain is at 24)
-export const FOG_UBO_LENGTH = 28;
+// (8 vec4: the flat sky's gain vec4 is gone with the flat sky; the Orb's gain is at 24; fLens, the lens shift of the read, is at 28)
+export const FOG_UBO_LENGTH = 32;
 
 export interface FogPlanInput {
   // the frame's time, the time of the last frame planned, whether a setting changed since (Fog.stale), whether the passes are made and the fog on (the schedule is only worked out then)
@@ -56,7 +61,9 @@ export interface FogPlanInput {
   baseChanged: boolean;
   offsets: ParallaxOffsets;
   builtFor: ParallaxOffsets;
-  // the camera's lens now and the one the volume was built for (device pixels, Camera.lens; absent: 0): a different lens moves the volume's rays, so it is a move of the view
+  // the decision the lead released for this frame (ViewLead.release): whether the offsets of the frame are a move and the pose the build was ordered for; absent: decided here from offsets and builtFor
+  ahead?: ViewDecision;
+  // the camera's lens now and the one the volume was built for (device pixels, Camera.lens; absent: 0): a lens other than the built one is no move of the view: the read is shifted by the delta (lensShift, the block's floats 28 to 31)
   lensX?: number;
   lensY?: number;
   builtLensX?: number;
@@ -87,6 +94,12 @@ export interface FogPlanInput {
   waterDrawn: boolean;
 }
 
+// the view's decision: moved, and the pose a build is for
+export interface ViewDecision {
+  moved: boolean;
+  builtFor: ParallaxOffsets;
+}
+
 export interface FogPlanOutput {
   // the uniform block's data
   ubo: Float32Array;
@@ -95,6 +108,8 @@ export interface FogPlanOutput {
   settings: boolean;
   jump: boolean;
   moved: boolean;
+  // the pose a rebuild is for: the lead's ordered pose when it moved, else the offsets when the base changed, else the one built before (Fog.update keeps it as builtFor)
+  builtFor: ParallaxOffsets;
   switched: boolean;
   view: boolean;
   cpu: boolean;
@@ -117,11 +132,32 @@ export interface FogPlanOutput {
   drawn: number;
 }
 
+// the pose as ParallaxPose gives it, as the plan's offsets (Camera.setParallax's names); the values are untouched
+function offsetsOfPose(p: ParallaxPoseOffsets): ParallaxOffsets {
+  return { yaw: p.yaw, pitchShift: p.pitch, eyeX: p.eyeX, eyeShift: p.eyeY };
+}
+
+// the move decision for a pose (the offsets the view shows at a frame, or the target pose asked ahead): moved when the base changed or the pose is far from the one the build is for; builtFor the pose then
+function ahead(input: { offsets: ParallaxOffsets; builtFor: ParallaxOffsets; baseChanged: boolean }): ViewDecision {
+  const moved = input.baseChanged || MouseParallax.farFrom(input.offsets, input.builtFor);
+  const b = moved ? input.offsets : input.builtFor;
+  return { moved, builtFor: { yaw: b.yaw, pitchShift: b.pitchShift, eyeX: b.eyeX, eyeShift: b.eyeShift } };
+}
+
 const SLICES = QualityFog.SLICES;
 const VOLUME_RATE = SLICES / QualityFog.SWEEP_SECONDS;
 
+// the read's compensation for a lens other than the one the volume was built for: [sx, sy, dx, dy] with dx, dy the lens delta in pixels (lens - built lens, y up as the camera's) and sx, sy the shift of the
+// volume's coordinate, minus the delta over the volume's span (the window and its margin on each side: size x (1 + 2 margin), the volume's own margin). A fragment at the lens l reads the column built
+// for the ray it has, the fragment minus the delta. The coordinate stays inside the volume while |delta| <= margin x size (0.1 x size: 50 px, the OLED's whole range, for a window of 500 px or more); past
+// it the texture's edge clamps the read. Absent lenses count as 0
+function lensShift(lensX: number, lensY: number, builtLensX: number, builtLensY: number, width: number, height: number, margin: number): number[] {
+  const dx = (lensX || 0) - (builtLensX || 0), dy = (lensY || 0) - (builtLensY || 0);
+  return [-dx / (width * (1 + 2 * margin)), -dy / (height * (1 + 2 * margin)), dx, dy];
+}
+
 // the octaves each slice's gather reads as their mean for the view: none with lod off; made again only when the camera's version or the columns changed (or `all`); by the slice's level
-function periods(input: FogPlanInput, all: boolean, drop: Uint8Array): { everyVersion: number; everyAcross: number } {
+function periods(input: FogPlanInput, all: boolean, drop: Uint8Array, lensX: number, lensY: number): { everyVersion: number; everyAcross: number } {
   if (!input.lod) {
     drop.fill(0);
     return { everyVersion: -1, everyAcross: input.everyAcross };
@@ -130,7 +166,7 @@ function periods(input: FogPlanInput, all: boolean, drop: Uint8Array): { everyVe
     return { everyVersion: input.everyVersion, everyAcross: input.everyAcross };
   }
   const view: FogQualityView = {
-    inputs: { eyeY: input.eyeY, focal: input.focal, width: input.width, height: input.height, lensX: input.lensX || 0, lensY: input.lensY || 0, waterDrawn: input.waterDrawn, sigma: input.sigma, air: input.air, mist: input.mist || 0, tail: input.tail, tailScale: input.tailScale },
+    inputs: { eyeY: input.eyeY, focal: input.focal, width: input.width, height: input.height, lensX, lensY, waterDrawn: input.waterDrawn, sigma: input.sigma, air: input.air, mist: input.mist || 0, tail: input.tail, tailScale: input.tailScale },
     pitch: input.tilt,
     margin: input.margin,
     across: input.columns[0],
@@ -163,6 +199,7 @@ function plan(input: FogPlanInput): FogPlanOutput {
   d.set(input.moonGain, 24);
   d[7] = input.tail === undefined ? StaticMist.TAIL_SHARE : input.tail;
   d[27] = input.tailScale === undefined ? StaticMist.TAIL_SCALE : input.tailScale;
+  d.set(lensShift(input.lensX || 0, input.lensY || 0, input.builtLensX || 0, input.builtLensY || 0, input.width, input.height, input.margin), 28);
   // (the block's floats 7 and 27 (fMain.w, fMoonGain.w) are the front cloud's tail share and scale since Feature U3, story M4; fSecond.w, float 11, is the effect's base-volume flag)
   const drop = input.drop.slice();
   const out: FogPlanOutput = {
@@ -171,6 +208,8 @@ function plan(input: FogPlanInput): FogPlanOutput {
     settings: false,
     jump: false,
     moved: false,
+    // (the offsets are read only when the passes are made: a caller of the block alone may give none)
+    builtFor: input.builtFor ? { yaw: input.builtFor.yaw, pitchShift: input.builtFor.pitchShift, eyeX: input.builtFor.eyeX, eyeShift: input.builtFor.eyeShift } : input.builtFor,
     switched: false,
     view: false,
     cpu: false,
@@ -196,7 +235,14 @@ function plan(input: FogPlanInput): FogPlanOutput {
   const settings = input.stale;
   const passed = input.time - input.lastTime;
   const jump = Math.abs(passed) > input.gap;
-  const moved = input.baseChanged || MouseParallax.farFrom(input.offsets, input.builtFor) || (input.lensX || 0) !== (input.builtLensX || 0) || (input.lensY || 0) !== (input.builtLensY || 0);
+  const poseMoved = input.ahead ? input.ahead.moved : MouseParallax.farFrom(input.offsets, input.builtFor);
+  const moved = input.baseChanged || poseMoved;
+  if (moved) {
+    // (the pose the lead ordered the build for when it moved; the frame's own offsets for a base change alone, or without a lead)
+    const b = input.ahead && input.ahead.moved ? input.ahead.builtFor : input.offsets;
+    out.builtFor = { yaw: b.yaw, pitchShift: b.pitchShift, eyeX: b.eyeX, eyeShift: b.eyeShift };
+  }
+  // (the lens is no move of the view: the read follows it, lensShift)
   const cpu = input.lod && input.hasSched;
   const switched = cpu !== input.shadeCpu;
   const view = settings || jump || moved || switched;
@@ -205,6 +251,10 @@ function plan(input: FogPlanInput): FogPlanOutput {
   out.moved = moved;
   out.switched = switched;
   out.view = view;
+  // (a rebuild is for the lens now, which the fog re-bases builtLens to in this frame: no delta in the block)
+  if (view) {
+    d.fill(0, 28);
+  }
   out.cpu = cpu;
   // the shade grid's draws (the GPU alone): the time passed owes them at the rate, all after a change of the view, a setting or a gap
   const draws = input.draws;
@@ -231,7 +281,8 @@ function plan(input: FogPlanInput): FogPlanOutput {
   const slices = view ? SLICES : Math.min(SLICES, Math.floor(credit + 1e-6));
   credit = view ? 0 : Math.max(0, credit - slices);
   const sliceFrom = view ? 0 : input.sliceNext;
-  const made = periods(input, view, drop);
+  // (the periods' view carries the lens the volume is built for: the lens now in a rebuild, which the fog re-bases to, else the built one)
+  const made = periods(input, view, drop, (view ? input.lensX : input.builtLensX) || 0, (view ? input.lensY : input.builtLensY) || 0);
   out.everyVersion = made.everyVersion;
   out.everyAcross = made.everyAcross;
   let sweep = input.sweep;
@@ -306,6 +357,81 @@ function same(a: unknown, b: unknown): boolean {
   return true;
 }
 
-export const FogPlan = { plan, same, FOG_UBO_LENGTH };
+const sameOffsets = (a: ParallaxOffsets, b: ParallaxOffsets): boolean => a.yaw === b.yaw && a.pitchShift === b.pitchShift && a.eyeX === b.eyeX && a.eyeShift === b.eyeShift;
+const copyOffsets = (o: ParallaxOffsets): ParallaxOffsets => ({ yaw: o.yaw, pitchShift: o.pitchShift, eyeX: o.eyeX, eyeShift: o.eyeShift });
+
+interface Ask {
+  id: number;
+  releaseMs: number;
+  target: ParallaxOffsets;
+  from: ParallaxOffsets;
+  decision: ViewDecision;
+}
+
+interface ViewRelease {
+  moved: boolean;
+  builtFor: ParallaxOffsets;
+  by: "lead" | "inline";
+  obsolete: boolean;
+  taken: number;
+}
+
+// the schedule of the view's decision with the Parallax delay as lead: ask(ms, target pose) decides at once against the pose the last asked build is ordered for (`ordered`) and releases that decision a lead later
+// (M.ParallaxLead.Lane's rule: each ask once, in order, when its time has come); release(ms, shown) gives the frame's decision: the last due ask's when its target is the pose shown (within the plan's own
+// tolerance: frame times are only predicted) and it was decided against the pose released before (`built`), else an inline decision from the shown pose, which drops the asks waiting. The ms are the clock the
+// caller keeps (Fog.update's time x 1000); only differences between them are read
+class ViewLead {
+  delay: number;
+  ordered: ParallaxOffsets = { yaw: 0, pitchShift: 0, eyeX: 0, eyeShift: 0 };
+  built: ParallaxOffsets = { yaw: 0, pitchShift: 0, eyeX: 0, eyeShift: 0 };
+  // the decision of the last ask (at ask time: moved says a view change is ordered for the target pose)
+  asked: ViewDecision = { moved: false, builtFor: { yaw: 0, pitchShift: 0, eyeX: 0, eyeShift: 0 } };
+  private queue: Ask[] = [];
+  private serial = 0;
+
+  constructor(delay: number) {
+    this.delay = delay;
+  }
+
+  ask(ms: number, target: ParallaxOffsets, baseChanged: boolean): number {
+    const decision = ahead({ offsets: target, builtFor: this.ordered, baseChanged });
+    const id = ++this.serial;
+    this.queue.push({ id, releaseMs: ms + ParallaxLead.lead(this.delay) * 1000, target: copyOffsets(target), from: this.ordered, decision });
+    this.ordered = decision.builtFor;
+    this.asked = decision;
+    return id;
+  }
+
+  release(ms: number, shown: ParallaxOffsets, baseChanged: boolean): ViewRelease {
+    const due: Ask[] = [];
+    while (this.queue.length > 0 && this.queue[0]!.releaseMs <= ms + ParallaxLead.TOLERANCE_MS) {
+      due.push(this.queue.shift()!);
+    }
+    const last = due.length > 0 ? due[due.length - 1]! : null;
+    // (the chain: the first due ask was decided against the pose released before it)
+    if (last && !MouseParallax.farFrom(last.target, shown) && sameOffsets(due[0]!.from, this.built)) {
+      const anyMoved = due.some((a) => a.decision.moved);
+      const builtFor = anyMoved ? copyOffsets(last.decision.builtFor) : baseChanged ? copyOffsets(shown) : copyOffsets(this.built);
+      this.built = builtFor;
+      return { moved: anyMoved || baseChanged, builtFor: copyOffsets(builtFor), by: "lead", obsolete: false, taken: due.length };
+    }
+    const d = ahead({ offsets: shown, builtFor: this.built, baseChanged });
+    this.built = d.builtFor;
+    const obsolete = last !== null;
+    if (obsolete) {
+      this.queue = [];
+    }
+    if (this.queue.length === 0) {
+      this.ordered = this.built;
+    }
+    return { moved: d.moved, builtFor: copyOffsets(d.builtFor), by: "inline", obsolete, taken: due.length };
+  }
+
+  pending(): number {
+    return this.queue.length;
+  }
+}
+
+export const FogPlan = { plan, same, FOG_UBO_LENGTH, lensShift, offsetsOfPose, ahead, ViewLead };
 
 M.FogPlan = FogPlan;

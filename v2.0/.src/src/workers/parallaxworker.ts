@@ -1,16 +1,18 @@
 // The mouse parallax worker: the smoothing of the cursor's follow, off the main thread (the worker part "parallax" of the bundle: src/index.ts routes it here; one state a worker).
 // Main -> worker, a message when something changed (the task below): { type: "parallax", x, y (the cursor across the window, -1 to 1, y up), inside (the cursor is in the
-//   window), now (ms), on (Mouse parallax), mode ("rotation" or "translation"), amount, delay (0 to 1), limits { yaw, pitch, eyeX, eyeY } (MouseParallax.limitsFor), seed? { x, y } }.
+//   window), now (ms), on (Mouse parallax), mode ("rotation" or "translation"), amount, delay (0 to 1: Parallax delay, the lead), smoothing (0 to 1: Parallax smoothing, the time constant), limits { yaw, pitch, eyeX, eyeY } (MouseParallax.limitsFor), seed? { x, y } }.
 // Worker -> main: { type: "parallax", yaw, pitch, eyeX, eyeY, moving, x, y } (the model's offsets at `now` and its position; moving: it is not at its target yet, so more messages
 //   are wanted); { type: "failed", error }.
 // A message may carry `seed` { x, y }: the model starts from that position (the inline model hands its position over when the worker is made, and the worker's last position goes
 // back to the inline model when the worker fails, so the view does not jump). With `on` false the model is reset and the offsets are 0 (the picture as without the parallax).
 // ParallaxTask is a ThreadedTask (platform/threadedtask.ts): inline from the first moment, the worker made as soon as possible and taking over with the position, inline again with it
 // when the worker fails (its error, a `failed` message, no answer to the ping), the worker made again after 20 ms, 40, 80 ... The task posts a message only when the cursor, a
-// setting or a limit changed or the last reply was still moving, so a view that is still costs no message.
+// setting or a limit changed or the last reply was still moving, so a view that is still costs no message. The model is M.ParallaxPose (the follower: the cursor of `delay` ago smoothed by `smoothing`); the task also keeps a
+// mirror of it fed with the same cursor and settings each tick, which answers poseAt(msAhead), the pose the view will show msAhead from the last tick (0 to the lead), with no reply needed.
 //
 // Changelog:
 // 2026-11-09: new.
+// 2026-11-23: the model is M.ParallaxPose (the follower; the message carries the smoothing apart from the delay, the lead); ParallaxTask.poseAt(msAhead) from a mirror pose.
 // 2026-11-10: the client became ParallaxTask, a ThreadedTask (the handover, the fallback and the retry are the superclass's); the worker's side is serveTask's; a ping answered.
 import { M } from "../engine/core";
 import { workerScope } from "../platform/scope";
@@ -18,7 +20,7 @@ import { serveTask } from "../platform/servetask";
 import { Workers } from "../platform/workers";
 import { ThreadedTask } from "../platform/threadedtask";
 import type { TaskOptions, TaskWorker } from "../platform/threadedtask";
-import { MouseParallax } from "../models/mouseparallax";
+import { ParallaxPose } from "../models/parallaxpose";
 import type { ParallaxLimits } from "../models/mouseparallax";
 
 type Message = Record<string, unknown>;
@@ -31,6 +33,7 @@ export interface ParallaxSettings {
   mode: string;
   amount: number;
   delay: number;
+  smoothing: number;
 }
 
 export interface ParallaxPointer {
@@ -52,7 +55,7 @@ export interface ParallaxReply {
 }
 
 export interface ParallaxState {
-  model: MouseParallax;
+  model: ParallaxPose;
 }
 
 export interface ParallaxAnswer {
@@ -61,7 +64,7 @@ export interface ParallaxAnswer {
 }
 
 function create(): ParallaxState {
-  return { model: new MouseParallax() };
+  return { model: new ParallaxPose() };
 }
 
 // the worker's whole reaction to a message
@@ -85,13 +88,15 @@ function handle(state: ParallaxState, message: Message): ParallaxAnswer {
   model.mode = String(message.mode);
   model.amount = message.amount as number;
   model.delay = message.delay as number;
+  model.smoothing = message.smoothing as number;
   model.limits = message.limits as ParallaxLimits;
+  const now = message.now as number;
   if (message.inside) {
-    model.point(message.x as number, message.y as number);
+    model.point(now, message.x as number, message.y as number);
   } else {
-    model.leave();
+    model.leave(now);
   }
-  model.step(message.now as number);
+  model.step(now);
   return { reply: { type: "parallax", yaw: model.yaw, pitch: model.pitch, eyeX: model.eyeX, eyeY: model.eyeY, moving: model.moving, x: model.x, y: model.y }, transfer: [] };
 }
 
@@ -153,6 +158,9 @@ export class ParallaxTask extends ThreadedTask<ParallaxState, ParallaxHandle> {
   private seeded: { x: number; y: number } | null;
   private sent: string;
   private moving: boolean;
+  // the pose model fed with every tick (poseAt), and the time of the last tick
+  private mirror: ParallaxPose;
+  private mirrorNow: number;
 
   constructor(options: ParallaxTaskOptions = {}) {
     const state = create();
@@ -165,6 +173,8 @@ export class ParallaxTask extends ThreadedTask<ParallaxState, ParallaxHandle> {
     this.seeded = null;
     this.sent = "";
     this.moving = false;
+    this.mirror = new ParallaxPose();
+    this.mirrorNow = 0;
   }
 
   protected spawn(slot: number, force: string): Promise<ParallaxHandle | null> {
@@ -214,8 +224,10 @@ export class ParallaxTask extends ThreadedTask<ParallaxState, ParallaxHandle> {
       mode: settings.mode,
       amount: settings.amount,
       delay: settings.delay,
+      smoothing: settings.smoothing,
       limits,
     };
+    this.feedMirror(pointer, now, settings, limits);
     const live = this.liveSlots();
     if (live.length === 0) {
       this.arrive(handle(this.model, message).reply as unknown as ParallaxReply);
@@ -227,7 +239,7 @@ export class ParallaxTask extends ThreadedTask<ParallaxState, ParallaxHandle> {
       this.sent = "";
     }
     // (what the worker's answer depends on besides the time: the cursor, the settings, the limits)
-    const key = `${pointer.x},${pointer.y},${pointer.inside},${settings.on},${settings.mode},${settings.amount},${settings.delay},${limits.yaw},${limits.pitch},${limits.eyeX},${limits.eyeY}`;
+    const key = `${pointer.x},${pointer.y},${pointer.inside},${settings.on},${settings.mode},${settings.amount},${settings.delay},${settings.smoothing},${limits.yaw},${limits.pitch},${limits.eyeX},${limits.eyeY}`;
     if (key === this.sent && !this.moving) {
       return;
     }
@@ -247,7 +259,33 @@ export class ParallaxTask extends ThreadedTask<ParallaxState, ParallaxHandle> {
     return this.last;
   }
 
+  // the pose the view will show msAhead from the last tick: 0 = now, up to the lead (the Parallax delay); null-free: the centre before the first tick
+  poseAt(msAhead: number): { yaw: number; pitch: number; eyeX: number; eyeY: number } {
+    return this.mirror.poseAt(this.mirrorNow, msAhead);
+  }
+
+  private feedMirror(pointer: ParallaxPointer, now: number, settings: ParallaxSettings, limits: ParallaxLimits): void {
+    const m = this.mirror;
+    this.mirrorNow = now;
+    if (!settings.on) {
+      m.reset();
+      return;
+    }
+    m.mode = settings.mode;
+    m.amount = settings.amount;
+    m.delay = settings.delay;
+    m.smoothing = settings.smoothing;
+    m.limits = limits;
+    if (pointer.inside) {
+      m.point(now, pointer.x, pointer.y);
+    } else {
+      m.leave(now);
+    }
+    m.step(now);
+  }
+
   seed(x: number, y: number): void {
+    this.mirror.seed(x, y);
     this.seeded = { x, y };
   }
 

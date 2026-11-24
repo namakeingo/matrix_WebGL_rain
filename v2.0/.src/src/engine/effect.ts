@@ -23,6 +23,7 @@
 //   qualityKind()                the pool's job kind its units run as (models/quality/jobs.ts: "rain", "units", ...); "" when it has no job
 //   qualityStatics()             the job's static arrays (what the workers keep between frames), only when they changed since the last
 //                                call, else null
+//   qualityLeadKey()             the job's lead key (see the method)
 //   qualityParams(shared)        the job's parameters for this frame (an object the effect keeps and fills in place), from the frame's
 //                                shared view (QualityShared); the effect's index in the order is qualityIndex
 //   static QUALITY_UNIT          the noun for its units in the Performance readout ("units" by default;
@@ -34,6 +35,7 @@
 // Changelog:
 // 2026-11-04: TypeScript, a module of src/engine/ (was engine/effect.js).
 // 2026-11-06: quality(), setQuality(), qualityJobs() and QUALITY_UNIT (the quality contract, default full quality).
+// 2026-11-23: qualityLeadKey() (default 0), qualityUsesStep(), qualityAskState(), qualityCarry().
 // 2026-11-11: destroy() runs every remover and rethrows the first error after; apply() looks the setting up by own property only.
 import { M } from "./core";
 import type { RenderTarget, MultisampleTarget, UniformBlock, Quad, ProgramSources, Programs, InstanceAttribute, TargetOptions, MultisampleOptions, BlockName } from "./gl";
@@ -181,6 +183,27 @@ export class Effect {
   // the job's parameters for this frame, filled in place into an object the effect keeps
   qualityParams(shared: QualityShared): QualityParams {
     return {};
+  }
+
+  // a number that changes whenever something the job reads at the release frame, other than the view's key (the pose, the step, the lens, the size), differs from what it was when the job was asked
+  // (the pool's lead, M.QualityLead); 0 for an effect with nothing of its own to say
+  qualityLeadKey(): number {
+    return 0;
+  }
+
+  // whether the job reads the clock's step (rain, splashes): a result made for another step does not fit (the pool's lead); false: its result holds across steps
+  qualityUsesStep(): boolean {
+    return false;
+  }
+
+  // what the effect must keep of its units at the ask to carry the result to the frame that shows it (the pool's lead): null when its units do not change
+  qualityAskState(): unknown {
+    return null;
+  }
+
+  // the result of a job asked early, made for the units of the ask (askState), carried to the units that are live now (born since: full quality); the result itself by default
+  qualityCarry(q: EffectQuality, askState: unknown): EffectQuality {
+    return q;
   }
 
   // applies a setting if it owns it

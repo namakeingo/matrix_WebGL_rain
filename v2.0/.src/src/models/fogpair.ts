@@ -63,7 +63,7 @@ const frontSigma = (i: number): number => StaticMist.splitStrengths(i, BaseMist.
 
 const defaults = (): State => ({ noise: 5, colour: 1.6, base: null, front: null, hb: 45, hf: 100, tail: 0.3 });
 
-// the layers' intensities in tenths: a moved slider's (raw: it bypasses the halving), or the single Fog intensity's, halved (M.StaticMist.layerIntensity), for one that follows
+// the layers' intensities in tenths: a moved slider's (raw: it bypasses the halving; 1 is a faint layer, the factor raw / 101), or the single Fog intensity's, halved (M.StaticMist.layerIntensity), for one that follows
 function effective(state: State, single: number): { base: number; front: number } {
   const followed = StaticMist.layerIntensity(single);
   return { base: tenths(state.base === null ? followed : state.base), front: tenths(state.front === null ? followed : state.front) };

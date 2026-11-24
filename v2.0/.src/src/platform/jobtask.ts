@@ -10,6 +10,7 @@
 // serveJob is the worker's side: `{ type: "job", id, input }` answered with `{ type: "result", id, output }` (the output's transferables given by transferOf).
 //
 // Changelog:
+// 2026-11-23: warmWith(input) and `warmed`: the task posts {type: 'warm', input} to each worker it makes (and to the live ones now) and the worker's serveJob(scope, fn, transferOf, warm) runs warm(input) and answers {type: 'warmed'}; warmed is true only while a worker is alive and every live worker has answered (a worker busy preparing its data is not asked: the caller waits for `warmed`).
 // 2026-11-11: the late answer of a job asked by `ask` (after its timeout) is dropped in arrive, no longer kept for take().
 // 2026-11-10: new.
 import { M } from "../engine/core";
@@ -35,6 +36,8 @@ export interface JobResult<O> {
 
 class JobHandle implements TaskWorker {
   onFail: ((why: string | undefined) => void) | null;
+  // answered the warm message (true until a warm message is posted)
+  warmed = true;
   link: JobLink;
   constructor(link: JobLink, onResult: (id: number, output: unknown) => void) {
     this.link = link;
@@ -43,6 +46,8 @@ class JobHandle implements TaskWorker {
       const data = (event as { data: Message }).data;
       if (data && data.type === "failed") {
         this.fail(String(data.error));
+      } else if (data && data.type === "warmed") {
+        this.warmed = true;
       } else if (data && data.type === "result") {
         onResult(data.id as number, data.output);
       }
@@ -86,6 +91,7 @@ export class JobTask<I, O> extends ThreadedTask<null, JobHandle> {
   private lateRun: number;
   private waiters: Map<number, Waiter<I, O>>;
   private fn: (input: I) => O;
+  private warmInput: unknown;
   private workerName: string;
   private base: string;
   private makeLink: JobTaskOptions<I, O>["makeLink"];
@@ -116,7 +122,34 @@ export class JobTask<I, O> extends ThreadedTask<null, JobHandle> {
     const link: Promise<JobLink | null> = this.makeLink
       ? this.makeLink(slot, force)
       : Workers.start(this.base, { name: this.workerName, force }).then((made) => (made ? (made.worker as unknown as JobLink) : null));
-    return link.then((l) => (l ? new JobHandle(l, (id, output) => this.arrive(id, output as O)) : null));
+    return link.then((l) => {
+      if (!l) {
+        return null;
+      }
+      const handle = new JobHandle(l, (id, output) => this.arrive(id, output as O));
+      if (this.warmInput !== undefined) {
+        handle.warmed = false;
+        l.postMessage({ type: "warm", input: this.warmInput });
+      }
+      return handle;
+    });
+  }
+
+  // the data the workers prepare before their first job (a message {type: 'warm', input} to each worker made, and to the live ones now); `warmed` says when every live worker has answered
+  warmWith(input: unknown): void {
+    this.warmInput = input;
+    for (const slot of this.liveSlots()) {
+      const handle = this.workerOf(slot);
+      if (handle) {
+        handle.warmed = false;
+        handle.link.postMessage({ type: "warm", input });
+      }
+    }
+  }
+
+  get warmed(): boolean {
+    const live = this.liveSlots();
+    return live.length > 0 && live.every((slot) => this.workerOf(slot)!.warmed);
   }
 
   // the jobs in flight are lost with the worker: the caller asks again
@@ -215,11 +248,17 @@ export class JobTask<I, O> extends ThreadedTask<null, JobHandle> {
 }
 
 // the worker's side: each job's input run through fn, the output answered (its transferables from transferOf)
-export function serveJob<I, O>(scope: TaskScope, fn: (input: I) => O, transferOf?: (output: O) => Transferable[]): void {
+export function serveJob<I, O>(scope: TaskScope, fn: (input: I) => O, transferOf?: (output: O) => Transferable[], warm?: (input: unknown) => void): void {
   serveTask(
     scope,
     () => null,
     (_state, message) => {
+      if (message.type === "warm") {
+        if (warm) {
+          warm(message.input);
+        }
+        return { reply: { type: "warmed" }, transfer: [] };
+      }
       if (message.type !== "job") {
         return { reply: { type: "failed", error: "unknown message kind: " + String(message.type) }, transfer: [] };
       }

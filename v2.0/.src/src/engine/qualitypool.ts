@@ -26,6 +26,8 @@
 // Changelog:
 // 2026-11-06: new.
 // 2026-11-06: start waits for every worker's pong; warm-up (30 frames, late bound 25 ms) outside the watchdog.
+// 2026-11-23: run(frame, jobs, params, { leadMs }): with a lead several frames are in flight (a map by frame number), each asked the lead before the frame that shows it, its late bound counted from the ask + leadMs,
+//   its replies matched by frame, a lost worker's tasks of every frame in flight done inline, destroy answering every frame null; without a lead (0 or none) a frame asked while another is in flight is null at once, as before.
 // 2026-11-10: a worker lost is told (onLost) and a worker given later (adopt) replaces the pool's own remake once; QualityPoolTask.
 import { M } from "./core";
 import { Workers } from "../platform/workers";
@@ -94,6 +96,8 @@ interface Frame {
   timer: ReturnType<typeof setTimeout> | null;
   resolve: (results: QualityResults | null) => void;
   params: Record<number, QualityParams>;
+  // the tasks each slot owes for this frame (by slot index)
+  tasks: Map<number, QualityTask[]>;
   start: number;
   posted: number;
 }
@@ -128,7 +132,8 @@ export class QualityPool {
   readyMs: number;
   now: () => number;
   options: PoolOptions;
-  frame: Frame | null;
+  // the frames in flight, by the frame number the caller gave
+  frames: Map<number, Frame>;
   late: number;
   dead: number;
   alive: number;
@@ -159,7 +164,7 @@ export class QualityPool {
     this.readyMs = options.readyMs === undefined ? QualityPool.READY_MS : options.readyMs;
     this.now = options.now || (() => performance.now());
     this.statics = new Map();
-    this.frame = null;
+    this.frames = new Map();
     this.late = 0;
     this.dead = 0;
     this.alive = 0;
@@ -301,7 +306,9 @@ export class QualityPool {
   }
 
   // the levels of the jobs' units for a frame: an object of levels by effect, or null when a worker is late
-  run(frame: number, jobs: QualityJob[], params: Record<number, QualityParams>): Promise<QualityResults | null> {
+  // options.overlap: the frame goes beside the frames in flight (the controller's own run of a frame in the lead mode). options.leadMs: the frame is asked that many ms before the one that shows it (the Parallax delay as lead time): other frames may be in flight with it and its late bound counts from the ask + leadMs
+  run(frame: number, jobs: QualityJob[], params: Record<number, QualityParams>, options?: { leadMs?: number; overlap?: boolean }): Promise<QualityResults | null> {
+    const leadMs = options && options.leadMs ? options.leadMs : 0;
     const start = this.now();
     // (each call is a frame of the warm-up of the workers that are ready: its late bound is wider and it is not counted by the watchdog)
     let warm = false;
@@ -312,10 +319,12 @@ export class QualityPool {
         warm = true;
       }
     }
-    if (this.frame) {
+    if (leadMs === 0 && !(options && options.overlap) && this.frames.size > 0) {
       // (a late frame's replies are still owed: nothing starts, the workers owing them are one frame later)
       this.late++;
-      Array.from(this.frame.waiting).forEach((index) => this.lateFrame(this.slots[index]));
+      const owed = new Set<number>();
+      this.frames.forEach((other) => other.waiting.forEach((index) => owed.add(index)));
+      owed.forEach((index) => this.lateFrame(this.slots[index]));
       return Promise.resolve(null);
     }
     const results: QualityResults = { frame, levels: {} };
@@ -336,10 +345,11 @@ export class QualityPool {
     const tasks = M.QualityTasks.build(jobs, live.length);
     const lists = M.QualityTasks.assign(tasks, live.length);
     return new Promise((resolve) => {
-      const state: Frame = { frame, results, waiting: new Set(), timedOut: false, timer: null, resolve, params, start, posted: 0 };
-      this.frame = state;
+      const state: Frame = { frame, results, waiting: new Set(), timedOut: false, timer: null, resolve, params, tasks: new Map(), start, posted: 0 };
+      this.frames.set(frame, state);
       live.forEach((slot, i) => {
         slot.tasks = lists[i];
+        state.tasks.set(slot.index, lists[i]);
         if (!lists[i].length) {
           return;
         }
@@ -356,13 +366,13 @@ export class QualityPool {
       state.posted = this.now();
       state.timer = setTimeout(() => {
         state.timer = null;
-        if (this.frame === state && state.waiting.size) {
+        if (this.frames.get(state.frame) === state && state.waiting.size) {
           state.timedOut = true;
           this.late++;
           state.resolve(null);
           Array.from(state.waiting).forEach((index) => this.lateFrame(this.slots[index]));
         }
-      }, warm ? Math.max(this.warmLateMs, this.lateMs) : this.lateMs);
+      }, leadMs + (warm ? Math.max(this.warmLateMs, this.lateMs) : this.lateMs));
       this.settle(state);
     });
   }
@@ -458,8 +468,8 @@ export class QualityPool {
       }
       return;
     }
-    const state = this.frame;
-    if (!m || m.type !== "result" || !state || m.frame !== state.frame || !state.waiting.has(slot.index)) {
+    const state = m && m.type === "result" ? this.frames.get(m.frame as number) : undefined;
+    if (!state || !state.waiting.has(slot.index)) {
       return;
     }
     state.waiting.delete(slot.index);
@@ -478,21 +488,21 @@ export class QualityPool {
 
   // the tasks a worker owed, done here
   redo(slot: Slot, state: Frame): void {
-    for (const task of slot.tasks) {
+    for (const task of state.tasks.get(slot.index) || []) {
       this.inline(task.effect, task.from, task.to, state.params, state.results);
     }
   }
 
   // the frame is done when nothing is owed
   settle(state: Frame): void {
-    if (this.frame !== state || state.waiting.size) {
+    if (this.frames.get(state.frame) !== state || state.waiting.size) {
       return;
     }
     if (state.timer !== null) {
       clearTimeout(state.timer);
       state.timer = null;
     }
-    this.frame = null;
+    this.frames.delete(state.frame);
     if (!state.timedOut) {
       const end = this.now();
       this.lastMs = end - state.start;
@@ -541,13 +551,14 @@ export class QualityPool {
     if (worker) {
       worker.terminate();
     }
-    const state = this.frame;
-    if (state && state.waiting.has(slot.index)) {
-      state.waiting.delete(slot.index);
-      if (!state.timedOut) {
-        this.redo(slot, state);
+    for (const state of Array.from(this.frames.values())) {
+      if (state.waiting.has(slot.index)) {
+        state.waiting.delete(slot.index);
+        if (!state.timedOut) {
+          this.redo(slot, state);
+        }
+        this.settle(state);
       }
-      this.settle(state);
     }
     slot.restarted = true;
     if (this.options.onLost && !this.destroyed) {
@@ -593,6 +604,15 @@ export class QualityPool {
       slot.lateFrames = 0;
       this.readyIs(slot);
     }
+    // (the frames in flight lose their workers: answered null, so that no frame stays owed to a worker that is gone)
+    const open = Array.from(this.frames.values());
+    this.frames.clear();
+    for (const state of open) {
+      if (state.timer !== null) {
+        clearTimeout(state.timer);
+      }
+      state.resolve(null);
+    }
     this.alive = 0;
     this.dead = 0;
     this.restarts = 0;
@@ -614,9 +634,9 @@ export class QualityPool {
       this.readyIs(slot);
     }
     this.alive = 0;
-    const state = this.frame;
-    if (state) {
-      this.frame = null;
+    const open = Array.from(this.frames.values());
+    this.frames.clear();
+    for (const state of open) {
       if (state.timer !== null) {
         clearTimeout(state.timer);
       }
