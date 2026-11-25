@@ -88,8 +88,8 @@
 //   from reduced, jittered columns), so no slice is replaced at once; a change of the view, a setting or a gap in time builds the whole volume exactly (Froxels.build) and starts the average again.
 //
 // Changelog:
-// 2026-11-24: story P10, the LOD of the front shade grid by distance on the pool path (shadeLod: the pool jobs, their inline twin and the band jobs bake the lattice of each layer's stride; shadeLodRefresh: the sweep's periods, the draws a band fill wrote cells of forced due; M.ShadeLod, QualityFogShade.bakeLod, Schedule periods and force); both default on, the GPU fallback bake stays full resolution.
-// 2026-11-24: the sweep priority after a band fill removed (its urgent jobs for every delta draw held the pool's reserved worker for about 0.6 s and the sweep's own draws were baked by the GPU): the takeover is the plain sweep. Schedule.prioritize and expect were removed with it (Schedule.force, story P10, is the due-at-once).
+// 2026-11-24: story P10, the LOD of the front shade grid by distance on the pool path (shadeLod: the pool jobs, their inline twin and the band jobs bake the lattice of each layer's stride; shadeLodRefresh: the sweep's periods, the draws a band fill wrote cells of marked due; M.ShadeLod, QualityFogShade.bakeLod, Schedule periods and markDue); both default on, the GPU fallback bake stays full resolution.
+// 2026-11-24: the sweep priority after a band fill removed (its urgent jobs for every delta draw held the pool's reserved worker for about 0.6 s and the sweep's own draws were baked by the GPU): the takeover is the plain sweep. Schedule.prioritize and expect were removed with it (Schedule.markDue, story P10, is the due-next-pass).
 // 2026-11-24: story P8d, the band worker as the default handler of view changes on the pool path (shadeViewBands default true, shadeViewBandsState, shadeVbAsk, shadeVbStart, shadeVbServe, shadeVbRelease, shadeVbFill, shadeVbGpu, shadeVbReset): at the lead the whole reduced grid is asked as bands over the shadeaccum tasks (one set in flight), the delta cells are filled from it at the release frame, and the draws holding them are the sweep's next; the order of handlers is the bands, the pool delta worker, today's whole-grid GPU bake.
 // 2026-11-24: story P8d: a continuous band mode on the default path (shadePoolBands, its hysteresis and weight) was written and removed again for the on-demand view-change handler below.
 // 2026-11-24: story P8c, the shipped path's view change as a delta (shadeViewWorker, default true: shadeViewAsk, shadeViewDue, shadeViewServe, uploadShadeRects, shadeMargin; viewBoxes(target) with the margin M.ShadeDelta.margin): a view change owes only the cells the new boxes add, served by the workers a lead ahead, one draw a frame inline, the rest to the GPU after a deadline; today's whole-grid GPU bake for a settings, jump, switch or size change, an over-budget delta and the delay 0.
@@ -100,6 +100,22 @@
 // 2026-11-23: qualityLeadKey (the quality job's lead: the built lens, the columns and which strikes shine).
 // 2026-11-23: baseLive (the tests' option, null by default): the front snapshot is read again and again while a change's jobs run, at that epoch, and the jobs ask while armed whatever the snapshot's age.
 // 2026-11-23: baseSnapshot(time) and baseJobRun(options): the tests' hooks (the shade snapshot read back with real waits; the job run here for the live pose at a factor, jitter and rows) for the light's isolation.
+// 2026-11-25: the cut's retire cap applies only to an ask past the accumulation's FIRST index (baseStartIdx, the index the first ask of a view change starts at: a late start continues at the schedule's frames), and the first applied job or band of an accumulation (of its rows) is flagged first to the volume, which refreshes the retired slices with it.
+// 2026-11-25: baseWarm warms each base mist task with the shade grid as well (the slot's shipper is told: the first ask of a slot sends nothing).
+// 2026-11-25: the band sizing uses the measured worker ms a step (basePerStep, the answer's latency of a band asked of an idle task) and a band takes at most a quarter of the lead; a band whose answer is late at its release is run by the stream on the render thread, the same band job a worker runs (the inline path mirrors the worker's).
+// 2026-11-25: a row band belongs to the accumulation (baseEpoch, raised when a view change is asked) it was asked for: a band released after a newer accumulation began is dropped, never applied at its old pass or counted by the new schedule.
+// 2026-11-25: story B (M.BaseMistBands): the base mist's view-change asks are ROW BANDS of the finest class's lattice, one a frame, spread over baseTasks (K = 3 'basemist' JobTasks: band i on task i mod K) and applied by BaseMistVolume.frame as they are released (baseBands default true, baseBandRows 0 = the largest band that fits
+//   the lead; baseBandPlanNow); the inline fn of the stream is the same job function on the same band input; accumulation counters bands, passes, inlineBandMs; the passes advance the schedule at their last band.
+// 2026-11-24: story 2 of the base mist's resolution by distance: baseJobInput passes the factor of each slice's lattice (M.BaseLodRes.table at the job's factor, input.factors) and the full-resolution counts as the cut when BaseMistVolume.baseLodRes and the level of detail are on; the factors
+//   of an ask are kept by ask id (baseFactors) and given to BaseMistVolume.frame with the job's output at its release.
+// 2026-11-24: baseJobInput caps the cut at the first retired slice from the accumulation's index 1 on (BaseMistVolume.retireFrom): the flat slices are blended once, in index 0.
+// 2026-11-24: frontTiming also holds the accumulation's firstDraw_<program> (the first draw of each program), uploadCallMs / uploadCallBytes / uploadCallMax / arrayMs (the texSubImage3D calls and the array's creation) and exact (the exact build's ms); the front's
+//   array is warmed at the effect's warm-up with the option on.
+// 2026-11-24: the front path allocates nothing in its steady state: the front grid's two bake buffers made once, the grid shipped to the tasks one task a frame as the front's 96 layers alone (warmWith: the base's 96 only when it changed; the worker composes the
+//   192), the band outputs recycled (each task's buffer sent back with the next ask and returned as its output), the upload buffers reused; a late or lost answer is never run on the main thread (the stream's function answers nothing) and the frames the
+//   jobs do not feed are the GPU's fresh pass (fresh false once no job was uploaded for 0.5 s).
+// 2026-11-24: frontTiming (M.TEST only): the front path's per-section ms and bytes, cumulative (the tests read their change per frame): frame, grid, gridAlloc, gridAssemble, ask, input, dispatch, ship, take, inline, assemble, upload, build; the bytes
+//   shipBytes, assembleBytes, gridBytes; lateBands (the tasks' answers that were late: each ran its band inline on the main thread).
 // 2026-11-24: the front volume's job output is uploaded for the slices the frame blends and the frames until the next job (FrontVolumeJob.extents, sliceCount from the stream's nextReleaseMs), the bands laid out for those slices only (assembleParts).
 // 2026-11-23: the front volume's jobs are made for the time of the middle of the sweep that blends them (the release frame's time + half the sweep): the GPU path builds each slice at its own frame's time, the jobs one time for all the slices of a sweep.
 // 2026-11-23: frontTimeOffset (M.TEST only: seconds added to the jobs' time, 0 by default).
@@ -154,6 +170,7 @@ import { M } from "../engine/core";
 import { fill } from "../engine/glsl";
 import { BaseMist, BaseMistVolume, baseMistPrograms } from "../engine/basemist";
 import { StaticMist } from "../models/staticmist";
+import { StallCause } from "../models/stallcause";
 import { FogPair } from "../models/fogpair";
 import { BaseMistShade } from "../models/basemistshade";
 import type { ShaderProgram, UniformBlock, Uniforms, Programs, ProgramSources } from "../engine/gl";
@@ -231,6 +248,8 @@ import { QualityLead } from "../models/quality/lead";
 const NOISE = 128;
 // the slices a job computes past the last build's plan for a column (the view has moved since the plan was made; a read past a column's cut clamps to it)
 const CUT_SLACK = 4;
+// the cost a band's own rows are sized to where the lattice allows (ms: what the render thread pays when the stream runs a late band itself; the coarse part is cached once for the bands of a pass)
+const INLINE_BAND_MS = 3;
 // the front volume's jobs in flight at most (a burst after a change of the view asks every frame: the workers' queue is bounded)
 const FRONT_PENDING_MOST = 4;
 // a front volume job's answer: the whole output (an inline run) or the bands' outputs and their rows (laid out for the slices uploaded: FrontVolumeJob.assembleParts)
@@ -260,6 +279,36 @@ const DRIFT_EYE = 0.033;
 // the wait after the last change of the Sky/Orb settings before the atmosphere's tables are built, and how many main-thread task times are kept
 const ATMOSPHERE_DEBOUNCE_MS = 100;
 const ATMOSPHERE_TASKS_KEPT = 256;
+// the stall probe's slots of the fog's own main-thread sections (models/stallcause.ts: an array write at a section's end) and the event of a view change
+const STALL = StallCause.probe;
+const S_ASK = STALL.section("shade view ask");
+const S_FILL = STALL.section("shade band fill");
+const S_DELTA = STALL.section("shade delta serve");
+const S_UPLOAD = STALL.section("shade upload");
+const S_FRONT = STALL.section("front worker frame (rest)");
+const S_F_GRID = STALL.section("front grid update and ship");
+const S_F_ASK = STALL.section("front job ask and dispatch");
+const S_F_TAKE = STALL.section("front job take");
+const S_F_ASSEMBLE = STALL.section("front answer assemble");
+const S_F_UPLOAD = STALL.section("front volume upload");
+const S_U_ATMOS = STALL.section("fog update: atmosphere");
+const S_U_PLAN = STALL.section("fog update: view lead and plan");
+const S_U_UBO = STALL.section("fog update: uniform block upload");
+const S_U_VIEW = STALL.section("fog update: view boxes and delta due");
+const S_U_SHADE = STALL.section("fog update: shade sweep (schedule, uploads, bakes)");
+const S_U_BASESHADE = STALL.section("fog update: base mist shade bake");
+const S_U_STRIKES = STALL.section("fog update: strikes' grids");
+const S_U_VOLUME = STALL.section("fog update: volume build (CPU side)");
+const S_U_BASEMIST = STALL.section("fog update: base mist (rest: schedule, GPU-path frame call)");
+const S_B_GRID = STALL.section("base mist: shade grid update (the base shade tasks' asks)");
+const S_B_WORKER = STALL.section("base mist: worker frame (rest)");
+const S_B_ASK = STALL.section("base mist: job ask and dispatch (input build, postMessage)");
+const S_B_TAKE = STALL.section("base mist: job take and apply (rest)");
+const S_U_REST = STALL.section("fog update: the rest");
+const S_BAKE = STALL.section("fog shade draws submitted (bake)");
+const E_VIEW = STALL.event("viewChange");
+const E_UP_CALLS = STALL.event("uploadCalls");
+const E_UP_BYTES = STALL.event("uploadBytes");
 // the shadow grid (fixed in the world): its cells, its top (m: the densest medium there is
 // 0.3 e^(-12) per metre) and its nearest distance (m)
 const SHADE_ACROSS = 128;
@@ -677,11 +726,11 @@ export class Fog extends M.Effect {
   shadeNoisePacked: Float32Array | null;
   shadeMarginKey: string;
   // the band worker as the default handler of VIEW CHANGES on the pool path (Feature P1, story P8d; M.ShadeViewBands): shadeViewBands (default true) with the Parallax delay over 0 asks, at the lead, the whole reduced grid as bands over the
-  // 'shadeaccum' tasks (one set in flight: shadeVbCoalescer, shadeVbSet), and the delta cells of a view change are filled from it at the release frame (fillDelta, shadeVbRelease); the draws holding filled cells are then forced due in the sweep when the periods are on (Schedule.
-  // force); the order of handlers is the bands, the pool delta worker (shadeViewWorker), today's whole-grid GPU bake. shadeVbWaiting: jobs whose set is not whole yet; shadeViewBandsState: the tests' counters
+  // 'shadeaccum' tasks (one set in flight: shadeVbCoalescer, shadeVbSet), and the delta cells of a view change are filled from it at the release frame (fillDelta, shadeVbRelease); the draws holding filled cells are then marked due in the sweep when the periods are on (Schedule.
+  // markDue); the order of handlers is the bands, the pool delta worker (shadeViewWorker), today's whole-grid GPU bake. shadeVbWaiting: jobs whose set is not whole yet; shadeViewBandsState: the tests' counters
   shadeViewBands: boolean;
   // the LOD of the shade grid on the pool path (Feature P1, story P10; M.ShadeLod): shadeLod (default true) bakes each layer's lattice of its stride (the pool jobs, their inline twin, the band jobs); shadeLodRefresh (default true) gives the sweep's draws their
-  // periods (shadePeriods: every N sweeps by distance) and forces the draws a band fill wrote cells of; shadePeriodsOn: the periods the schedule has now
+  // periods (shadePeriods: every N sweeps by distance) and marks due the draws a band fill wrote cells of; shadePeriodsOn: the periods the schedule has now
   shadeLod: boolean;
   shadeLodRefresh: boolean;
   shadePeriods: number[];
@@ -712,7 +761,26 @@ export class Fog extends M.Effect {
   baseStream: BaseMistStream<BaseMistInput, Uint16Array> | null;
   baseFeed: BaseMistFeed | null;
   baseReady: Map<number, Uint16Array>;
-  baseShipGen: string;
+  // the factors of each ask's job by ask id (the output's layout), and the table made for a focal (kept while it is the same)
+  baseFactors: Map<number, Uint8Array>;
+  baseTableFocal: number;
+  baseTable: Uint8Array | null;
+  // the row bands (story B, M.BaseMistBands): the option (default on), the lattice rows of a band (0: the most that fit the lead), the base mist's tasks (one 'basemist' JobTask for each slot: K = 3), what each slot's worker was told (its generation), each ask's band by ask id and the plan made for the view (kept while its inputs are the same)
+  baseBands: boolean;
+  baseBandRows: number;
+  baseTasks: JobTask<BaseMistInput, Uint16Array>[];
+  baseShipGens: string[];
+  baseBandOf: Map<number, { from: number; to: number; core: number[]; head: boolean; pass: number; last: boolean; epoch: number; first: boolean }>;
+  // the accumulation the asks belong to: raised when a view change is asked (a band asked before it is stale when it is released)
+  baseEpoch: number;
+  // the index the first ask of the accumulation started at (0, or the schedule's frames for a late start), and the asks (unbanded) that are its first index
+  baseStartIdx: number;
+  baseFirstIds: Set<number>;
+  baseBandKey: number[];
+  baseBandCached: { rows: number; per: number; count: number; spr: number; coarse: number } | null;
+  // the worker's measured ms a node-slice step (from the answers of bands asked of an idle task) and the asks outstanding for each task
+  basePerStep: number;
+  baseSlotBusy: number[];
   // the view change whose jobs are being started: when it was asked and whether the schedule has restarted for it (a late start continues at the schedule's frames), and whether the stream is armed for it
   baseStart: { time: number; released: boolean } | null;
   baseArmed: boolean;
@@ -726,7 +794,7 @@ export class Fog extends M.Effect {
   baseWarmed: string;
   baseGridVersion: InstanceType<typeof BaseShadeGrid.Version>;
   baseGrid: { version: number; started: boolean; strength: number; front: boolean; size: boolean; halves: Uint16Array | null; queue: number[]; total: number; done: number; busy: boolean[]; time: number };
-  baseAccumState: { asks: number; uploads: number; dropped: number; byWorker: number; byInline: number; gpuFrames: number; why: Record<string, number>; inlineMs: { n: number; sum: number; max: number }; workerMs: { n: number; sum: number; max: number } };
+  baseAccumState: { asks: number; uploads: number; dropped: number; byWorker: number; byInline: number; gpuFrames: number; bands: number; passes: number; inlineBandMs: number[]; why: Record<string, number>; inlineMs: { n: number; sum: number; max: number }; workerMs: { n: number; sum: number; max: number } };
   // the front volume's accumulation on a worker (Feature P1, story P8a = V6): frontWorker (default false) with the Parallax delay over 0 and the frontTasks (a band of rows each, started when it is first on) makes the accumulating frames' fresh
   // columns the tasks', asked ahead by frontStream for the pose the view shows at the release frame and uploaded at it (FogAccumulation.upload); the exact builds and every frame with no lead are the GPU's. frontGrid is the front's shade grid
   // on the CPU (policy: M.FrontVolumeJob.GridPolicy; halves: the 192 layers in use; version: the shipped version; building: the bake in progress; seen: the settings it was baked for); frontAnswers the assembled outputs by ask id;
@@ -736,14 +804,20 @@ export class Fog extends M.Effect {
   frontTasks: JobTask<FrontVolumeInput, Uint16Array>[];
   frontStream: FrontVolumeStream<FrontVolumeInput, FrontResult | null> | null;
   frontAnswers: Map<number, FrontResult>;
-  frontShippers: InstanceType<typeof FrontVolumeJob.Shipper>[];
-  frontShipGen: string[];
+  // (the band outputs returned to be written into again, by task; the buffers the upload's parts are assembled in; the frame time of the last job uploaded)
+  frontPool: Uint16Array[][];
+  frontUploadBuffers: Uint16Array[];
+  frontLastUpload: number;
   frontStarted: boolean;
   frontWarmed: string;
   frontMoved: boolean;
   frontGridLag: number;
   // (the tests' switch of the jitter the jobs are made with: 0 the job's own index k, 1 the accumulation's frame counter at the ask (the GPU's per-frame index), 2 held at index 0; frontJitters: the jitter of each job in flight, by ask id)
   frontJitterMode: number;
+  // (the tests' timing of the front path: cumulative ms and bytes by section; frontTime adds the ms since t0)
+  frontTiming: Record<string, number>;
+  // (the same for the shade grid's view path: cumulative ms (and bytes or counts under the key + Bytes) of shadeViewAsk and its parts, shadeVbStart, shadeVbServe, the inline run and the join, shadeVbFill, uploadShadeRects, postShade, the schedule's frame, the delta's inline draw)
+  shadeTiming: Record<string, number>;
   // (the tests' switches: the jobs' column reduction (0: M.FrontVolumeJob.FACTOR), and the jobs' time held at the first ask's (frontTimeMode 1; frontTimeHeld the time held, null until the first ask))
   frontFactor: number;
   frontTimeMode: number;
@@ -751,7 +825,7 @@ export class Fog extends M.Effect {
   frontTimeOffset: number;
   frontTimeHeld: number | null;
   frontJitters: Map<number, number[]>;
-  frontGrid: { policy: InstanceType<typeof FrontVolumeJob.GridPolicy>; started: boolean; halves: Uint16Array | null; version: number; building: { front: Uint16Array; queue: number[]; total: number; done: number; busy: boolean[]; time: number; sigma: number; tail: number; scale: number } | null; seen: { sigma: number; tail: number; scale: number; base: number } };
+  frontGrid: { policy: InstanceType<typeof FrontVolumeJob.GridPolicy>; started: boolean; front: Uint16Array | null; buffers: (Uint16Array | null)[]; shipQueue: number[]; baseShipped: number[]; version: number; building: { front: Uint16Array; queue: number[]; total: number; done: number; busy: boolean[]; time: number; sigma: number; tail: number; scale: number } | null; seen: { sigma: number; tail: number; scale: number; base: number } };
   frontAccumState: { asks: number; early: number; uploads: number; dropped: number; superseded: number; byWorker: number; byInline: number; gpuSweeps: number; blends: number; skipped: number; gridBakes: number; gpuReads: number; why: Record<string, number>; inlineMs: { n: number; sum: number; max: number }; workerMs: { n: number; sum: number; max: number } };
   // the base mist's shade (Feature U3, story M3): its grid is the layers SHADE_DEEP.. of the shade texture, baked once (BaseMistShade.Schedule decides) by the GPU; bakes counts the grids baked since the start and strength is the one the
   // grid holds (the tests read both); baseShadeDraws are the framebuffers of its layers
@@ -853,7 +927,21 @@ export class Fog extends M.Effect {
     this.baseStream = null;
     this.baseFeed = null;
     this.baseReady = new Map();
-    this.baseShipGen = "";
+    this.baseFactors = new Map();
+    this.baseTableFocal = 0;
+    this.baseTable = null;
+    this.baseBands = true;
+    this.baseBandRows = 0;
+    this.baseTasks = [];
+    this.baseShipGens = [];
+    this.baseBandOf = new Map();
+    this.baseEpoch = 0;
+    this.baseStartIdx = 0;
+    this.baseFirstIds = new Set();
+    this.baseBandKey = [];
+    this.baseBandCached = null;
+    this.basePerStep = M.BaseMistBands.PER_STEP_MS;
+    this.baseSlotBusy = [];
     this.baseStart = null;
     this.baseArmed = false;
     this.baseLive = null;
@@ -862,24 +950,27 @@ export class Fog extends M.Effect {
     this.baseGridVersion = new BaseShadeGrid.Version();
     this.baseWarmed = "";
     this.baseGrid = { version: 0, started: false, strength: NaN, front: false, size: false, halves: null, queue: [], total: 0, done: 0, busy: [], time: 0 };
-    this.baseAccumState = { asks: 0, uploads: 0, dropped: 0, byWorker: 0, byInline: 0, gpuFrames: 0, why: {}, inlineMs: { n: 0, sum: 0, max: 0 }, workerMs: { n: 0, sum: 0, max: 0 } };
+    this.baseAccumState = { asks: 0, uploads: 0, dropped: 0, byWorker: 0, byInline: 0, gpuFrames: 0, bands: 0, passes: 0, inlineBandMs: [], why: {}, inlineMs: { n: 0, sum: 0, max: 0 }, workerMs: { n: 0, sum: 0, max: 0 } };
     this.frontWorker = true;
     this.frontTasks = [];
     this.frontStream = null;
     this.frontAnswers = new Map();
-    this.frontShippers = [];
-    this.frontShipGen = [];
+    this.frontPool = [];
+    this.frontUploadBuffers = [];
+    this.frontLastUpload = -Infinity;
     this.frontStarted = false;
     this.frontWarmed = "";
     this.frontMoved = true;
     this.frontGridLag = 0;
     this.frontJitterMode = 0;
+    this.frontTiming = {};
+    this.shadeTiming = {};
     this.frontFactor = 0;
     this.frontTimeMode = 0;
     this.frontTimeOffset = 0;
     this.frontTimeHeld = null;
     this.frontJitters = new Map();
-    this.frontGrid = { policy: new FrontVolumeJob.GridPolicy(), started: false, halves: null, version: 1, building: null, seen: { sigma: NaN, tail: NaN, scale: NaN, base: -1 } };
+    this.frontGrid = { policy: new FrontVolumeJob.GridPolicy(), started: false, front: null, buffers: [null, null], shipQueue: [], baseShipped: [], version: 1, building: null, seen: { sigma: NaN, tail: NaN, scale: NaN, base: -1 } };
     this.frontAccumState = { asks: 0, early: 0, uploads: 0, dropped: 0, superseded: 0, byWorker: 0, byInline: 0, gpuSweeps: 0, blends: 0, skipped: 0, gridBakes: 0, gpuReads: 0, why: {}, inlineMs: { n: 0, sum: 0, max: 0 }, workerMs: { n: 0, sum: 0, max: 0 } };
     this.baseShade = { bakes: 0, strength: null };
     this.shadeSchedule = new BaseMistShade.Schedule();
@@ -1664,9 +1755,11 @@ export class Fog extends M.Effect {
       return;
     }
     const sched = this.shadeSched!;
+    const t0 = M.TEST ? performance.now() : 0;
     for (let i = 0; i < sched.postCount; i++) {
       this.postShadeDraw(sched.postDraw[i], sched.postTime[i], this.boxes[sched.postDraw[i]], true);
     }
+    this.shadeTime("post", t0, sched.postCount * this.layers);
   }
 
   // the job of draw k over `box` for the frame `time`, one message a layer (the sweep's: low priority; a view change's priority draws: urgent, posted at the ask)
@@ -1713,18 +1806,29 @@ export class Fog extends M.Effect {
   // last ordered), the rectangles added per draw asked of the pool's reserved worker a lead ahead (a message a layer a rectangle, urgent: the low-priority queue drops the oldest); nothing for a move inside the margin, today's
   // whole-grid bake (fallback) for a delta over the workers' budget
   shadeViewAsk(target: ParallaxOffsets, time: number): void {
+    const t0 = performance.now();
+    this.shadeViewAskRun(target, time);
+    STALL.add(S_ASK, performance.now() - t0);
+    this.shadeTime("ask", t0);
+  }
+
+  shadeViewAskRun(target: ParallaxOffsets, time: number): void {
     const pool = this.shadePool, st = this.shadeViewState, vb = this.shadeViewBandsState;
     if (!(this.shadeViewWorker || this.shadeViewBands) || !pool || !this.shadeSched || !this.shadeCpu || !this.lod || this.moonKernel !== 0 || !(this.leadDelay > 0) || this.boxes.length === 0) {
       return;
     }
     st.changes++;
     vb.changes++;
+    const tBoxes = M.TEST ? performance.now() : 0;
     const lead = M.ParallaxLead.lead(this.leadDelay), boxes = this.viewBoxes(target);
+    this.shadeTime("askBoxes", tBoxes);
     const queue = this.shadeViewQueue, base = queue.length > 0 ? queue[queue.length - 1]!.boxes : this.boxes;
     // (the tests' report: three draws' baked box and target box, and the margin)
     const mg = this.shadeMargin();
     st.last = { base: [0, 4, 8].map((i) => (base[i] ? base[i]!.slice() : [])), target: [0, 4, 8].map((i) => (boxes[i] ? boxes[i]!.slice() : [])), margin: [mg.columns, mg.rows] };
+    const tDelta = M.TEST ? performance.now() : 0;
     const delta = ShadeDelta.deltaOf(base, boxes), cells = ShadeDelta.cellsIn(delta, this.layers), workers = pool.alive >= 2 ? 1 : pool.alive;
+    this.shadeTime("askDelta", tDelta);
     const job: ShadeViewJob = { releaseMs: (time + lead) * 1000, servedAt: -1, boxes, fallback: false, draws: new Map(), kind: "delta", delta, set: null };
     st.deltaCells += cells;
     if (cells === 0) {
@@ -1733,10 +1837,12 @@ export class Fog extends M.Effect {
       return;
     }
     // (the order of handlers: the bands over the tasks, the pool's delta worker, today's whole-grid GPU bake)
+    const tFits = M.TEST ? performance.now() : 0;
     const tasks = this.shadeTasks.length, core = this.shadeCore(4), leadMs = lead * 1000;
     const fitsDelta = ShadeDelta.fits(cells, leadMs, workers), fitsBands = tasks > 0 && ShadeViewBands.fits(leadMs, tasks, M.ShadeAccumWorker.LAYERS, core, this.shadeLod);
     const choice = ShadeViewBands.choose({ bands: this.shadeViewBands, warmed: this.shadeWarmed(), fitsBands, delta: this.shadeViewWorker, fitsDelta, delay: this.leadDelay, moved: true, settings: false, jump: false, switched: false, size: false });
     st.fits = choice !== "gpu";
+    this.shadeTime("askFits", tFits);
     if (choice === "bands") {
       job.kind = "bands";
       job.set = this.shadeVbAsk(target, time, core);
@@ -1782,6 +1888,7 @@ export class Fog extends M.Effect {
   // a set of bands asked: the whole reduced grid (the 48 layers) as the bands of M.ShadeViewBands.assign over the tasks (band i on task i mod tasks), each band baked at the jitter 0 for the time of the release; a task with no warmed worker is not
   // asked: its bands run inline when the release comes (one a frame)
   shadeVbStart(time: number, core: number): void {
+    const t0 = M.TEST ? performance.now() : 0;
     const vb = this.shadeViewBandsState, tasks = this.shadeTasks, lead = M.ParallaxLead.lead(this.leadDelay), at = time + lead;
     const plans: ShadeBand[] = [], inputs: ShadeFreshJob[] = [], owners: number[] = [];
     ShadeViewBands.assign(M.ShadeAccumWorker.LAYERS, core, tasks.length).forEach((list, ti) => {
@@ -1794,6 +1901,8 @@ export class Fog extends M.Effect {
     const set: ShadeVbSet = { plans, inputs, outputs: new Array(plans.length).fill(undefined), releaseMs: at * 1000, done: false, failed: false, grid: null };
     this.shadeVbSet = set;
     vb.sets++;
+    this.shadeTime("vbInputs", t0);
+    const t1 = M.TEST ? performance.now() : 0;
     inputs.forEach((input, i) => {
       const task = tasks[owners[i]!]!;
       if (task.inline || !task.warmed) {
@@ -1806,11 +1915,20 @@ export class Fog extends M.Effect {
         }
       }, () => undefined);
     });
+    this.shadeTime("vbAsk", t1, vb.asks);
   }
 
   // every frame: the set in flight whole when its release has come (the bands the workers did not answer run inline, ONE a frame; past the deadline the set has failed and the jobs waiting for it go to the GPU bake), the whole grid joined and kept, the next
   // pending set started; and the jobs waiting for their set filled when it is whole
   shadeVbServe(time: number, program: ShaderProgram): void {
+    const t0 = performance.now();
+    STALL.push();
+    this.shadeVbServeRun(time, program);
+    STALL.pop(S_FILL);
+    this.shadeTime("vbServe", t0);
+  }
+
+  shadeVbServeRun(time: number, program: ShaderProgram): void {
     const vb = this.shadeViewBandsState, ms = time * 1000, deadline = Math.max(100, 2 * M.ParallaxLead.lead(this.leadDelay) * 1000);
     const set = this.shadeVbSet;
     if (set && !set.done && !set.failed && ms >= set.releaseMs - 1e-3) {
@@ -1823,15 +1941,19 @@ export class Fog extends M.Effect {
       if (missing.length > 0) {
         const step = ShadeDelta.inlineStep(missing, ms, set.releaseMs, deadline);
         if (step.inline !== null) {
+          const tIn = M.TEST ? performance.now() : 0;
           set.outputs[step.inline] = M.ShadeAccumWorker.job(set.inputs[step.inline]!);
+          this.shadeTime("vbInline", tIn, set.outputs[step.inline]!.length * 2);
           vb.inlineBands++;
         } else if (step.gpu.length > 0) {
           set.failed = true;
         }
       }
       if (!set.failed && set.outputs.every((o) => o !== undefined)) {
+        const tJoin = M.TEST ? performance.now() : 0;
         const whole = new Uint16Array(M.ShadeAccumWorker.LENGTH);
         ShadeViewBands.joinBands(set.outputs as Uint16Array[], set.plans, M.ShadeAccumWorker.LAYER, whole);
+        this.shadeTime("vbJoin", tJoin, whole.length * 2);
         set.grid = whole;
         set.done = true;
       }
@@ -1864,19 +1986,23 @@ export class Fog extends M.Effect {
   }
 
   // the delta cells written from the set's whole reduced grid (the blend at weight 1 and the store under a scissor of each rectangle); the sweep then refreshes them in its own turns (within one sweep, about half a second; with the periods on the draws that hold them are
-  // forced due: Schedule.force posts their jobs two at a time, low priority like the sweep's own)
+  // marked due: Schedule.markDue, the sweep's order and jobs unchanged)
   shadeVbFill(job: ShadeViewJob): void {
     const vb = this.shadeViewBandsState;
     const plan = ShadeViewBands.fillPlan(job.delta);
     if (plan.length === 0 || !job.set || !job.set.grid) {
       return;
     }
+    const tFill = M.TEST ? performance.now() : 0;
     this.shadeAccumulation!.fillDelta(M.FogAccum.jitter(0), job.set.grid, plan);
+    STALL.count(E_UP_CALLS);
+    STALL.count(E_UP_BYTES, job.set.grid.byteLength);
+    this.shadeTime("vbFill", tFill, job.set.grid.length * 2);
     vb.fills++;
     vb.lastRects = job.delta.map((r) => r.map((x) => x.slice()));
-    // (the cells are the reduced grid's look: the draws that hold them are due in the sweep at once, whatever their period)
+    // (the cells are the reduced grid's look: the draws that hold them are due the next time the sweep reaches them, whatever their period; no job is added)
     if (this.shadeSched && this.shadeSched.scaled) {
-      this.shadeSched.force(plan.map((e) => e.draw));
+      this.shadeSched.markDue(plan.map((e) => e.draw));
     }
   }
 
@@ -1936,6 +2062,15 @@ export class Fog extends M.Effect {
     if (this.shadeViewActive.length === 0) {
       return;
     }
+    STALL.push();
+    this.shadeViewServeRun(time, program);
+    STALL.pop(S_DELTA);
+  }
+
+  shadeViewServeRun(time: number, program: ShaderProgram): void {
+    if (this.shadeViewActive.length === 0) {
+      return;
+    }
     const st = this.shadeViewState, ms = time * 1000, deadline = Math.max(100, 2 * M.ParallaxLead.lead(this.leadDelay) * 1000), layers = this.layers;
     let inline = 0;
     for (const job of this.shadeViewActive) {
@@ -1957,7 +2092,9 @@ export class Fog extends M.Effect {
           const sigma = this.sigma(), front = { tail: this.frontTail(), scale: this.frontScale() };
           const slabs = d.rects.map((r) => {
             const out = new Uint16Array(layers * r[2]! * r[1]! * 2);
+            const tB = M.TEST ? performance.now() : 0;
             this.bakeRect(out, k, r, sigma, time, front);
+            this.shadeTime("deltaInline", tB, out.length * 2);
             return out;
           });
           this.uploadShadeRects(k, d.rects, slabs);
@@ -1999,6 +2136,7 @@ export class Fog extends M.Effect {
 
   // a draw's delta rectangles from their slabs into the grid: one texSubImage3D a rectangle, at its column, its row and the draw's first layer
   uploadShadeRects(k: number, rects: number[][], slabs: Uint16Array[]): void {
+    const t0 = performance.now();
     const gl = this.gl;
     gl.activeTexture(gl.TEXTURE0 + M.UNITS.work);
     gl.bindTexture(gl.TEXTURE_3D, this.shade);
@@ -2006,16 +2144,24 @@ export class Fog extends M.Effect {
       gl.texSubImage3D(gl.TEXTURE_3D, 0, r[0]!, r[3]!, k * this.layers, r[1]!, r[2]!, this.layers, gl.RG, gl.HALF_FLOAT, slabs[i]!);
     });
     gl.bindTexture(gl.TEXTURE_3D, null);
+    STALL.add(S_UPLOAD, performance.now() - t0);
+    STALL.count(E_UP_CALLS, rects.length);
+    STALL.count(E_UP_BYTES, slabs.reduce((a, x) => a + x.byteLength, 0));
+    this.shadeTime("uploadRects", t0, slabs.reduce((a, x) => a + x.length * 2, 0));
   }
 
   // draw k's layers from its worker's reply into the grid, over the box the reply was baked for
   uploadShade(k: number): void {
+    const t0 = performance.now();
     const gl = this.gl;
     const data = this.shadeSlabView[k]!;
     gl.activeTexture(gl.TEXTURE0 + M.UNITS.work);
     gl.bindTexture(gl.TEXTURE_3D, this.shade);
     gl.texSubImage3D(gl.TEXTURE_3D, 0, this.shadeBox[k * 4], this.shadeBox[k * 4 + 3], k * this.layers, this.shadeBox[k * 4 + 1], this.shadeBox[k * 4 + 2], this.layers, gl.RG, gl.HALF_FLOAT, data);
     gl.bindTexture(gl.TEXTURE_3D, null);
+    STALL.add(S_UPLOAD, performance.now() - t0);
+    STALL.count(E_UP_CALLS);
+    STALL.count(E_UP_BYTES, data.byteLength);
   }
 
   // a 3D texture (wrap: how it is read past its sides)
@@ -2159,6 +2305,12 @@ export class Fog extends M.Effect {
 
   // its values for this frame, and its pictures refreshed (after the camera's values)
   update(time: number) {
+    STALL.mark();
+    this.updateRun(time);
+    STALL.lap(S_U_REST);
+  }
+
+  updateRun(time: number) {
     const gl = this.gl;
     // (the atmosphere's tables: an answer landed, or owed tables built here at once at the first update and in the tests' build; before anything reads them)
     this.pollAtmosphere();
@@ -2166,6 +2318,7 @@ export class Fog extends M.Effect {
       this.flushAtmosphere();
     }
     this.atmosphereUpdated = true;
+    STALL.lap(S_U_ATMOS);
     // (the tests' switch of the base mist's shade: a change of it is a setting's, every volume reads the shade)
     if (this.baseShadeOn !== this.baseShadeSeen) {
       this.baseShadeSeen = this.baseShadeOn;
@@ -2188,6 +2341,7 @@ export class Fog extends M.Effect {
     this.answer = null;
     const plan = answered && FogPlan.same(answered.input, input) ? answered.output : FogPlan.plan(input);
     const built = input.built;
+    STALL.lap(S_U_PLAN);
     this.ubo.data.set(plan.ubo);
     // (the base mist's volume is read where there is one: its strength over 0 and Distance fog on: fSecond.w, the second colour's fourth float)
     const baseOn = this.baseMist !== null && this.on && this.baseStrength() > 0;
@@ -2195,6 +2349,7 @@ export class Fog extends M.Effect {
     const shadeOwed = built && this.baseMist !== null && this.shadeSchedule.frame(this.baseStrength(), this.on);
     this.ubo.data[11] = !baseOn ? 0 : this.shadeSchedule.bakes >= 1 && (!M.TEST || this.baseShadeOn) ? 2 : 1;
     this.ubo.upload();
+    STALL.lap(S_U_UBO);
     if (!built) {
       return;
     }
@@ -2210,6 +2365,9 @@ export class Fog extends M.Effect {
     const jump = plan.jump;
     const camera = this.camera;
     const moved = plan.moved;
+    if (moved && !(this.leadDelay > 0)) {
+      STALL.count(E_VIEW);
+    }
     const cpu = plan.cpu;
     this.shadeCpu = cpu;
     const view = plan.view;
@@ -2241,6 +2399,7 @@ export class Fog extends M.Effect {
       }
     }
     // (built: the passes are made)
+    STALL.lap(S_U_VIEW);
     const passes = this.passes!;
     // (the slices the job's levels say some column holds: only for the view they were made for)
     this.heldNow = this.heldAny && this.heldVersion === this.camera.version && !this.camera.dirty ? this.held : null;
@@ -2270,7 +2429,9 @@ export class Fog extends M.Effect {
         this.shadePeriodsOn = this.shadeLodRefresh;
         sched.usePeriods(this.shadePeriodsOn ? this.shadePeriods : null);
       }
+      const tSched = M.TEST ? performance.now() : 0;
       sched.frame(time, view && !viewOnly, this.shadeVersion);
+      this.shadeTime("sched", tSched);
       owed = sched.owedCount;
       for (let i = 0; i < owed; ) {
         const k = sched.drawOf[i];
@@ -2315,10 +2476,12 @@ export class Fog extends M.Effect {
       this.shadeCredit = plan.shadeCredit;
       this.shadePart = plan.shadePart;
     }
+    STALL.lap(S_U_SHADE);
     // the base mist's shade, baked once (on the start, a base strength change, a size change: shadeSchedule) before any volume reads it
     if (shadeOwed) {
       this.bakeBaseShade();
     }
+    STALL.lap(S_U_BASESHADE);
     // the strikes' grids baked ahead: the schedule's view of the frame (a setting's change drops them all), its jobs posted
     if (this.strikeSched && this.lod) {
       if (settings) {
@@ -2360,6 +2523,7 @@ export class Fog extends M.Effect {
         this.onShaded(active);
       }
     }
+    STALL.lap(S_U_STRIKES);
     // the fog's volume: the slices the time passed owes (from where the last frame stopped), all
     // of them when the view changed
     // (the plan's slices: the periods made again when the view's numbers changed, the runs of slices due built, a sweep done counted)
@@ -2377,25 +2541,32 @@ export class Fog extends M.Effect {
       this.refreshAll();
     }
     // (the front volume's job: the released jobs uploaded before the builds; an exact build's frame drops the output of the old view)
+    STALL.push();
     const fresh = this.frontWorkerFrame(time, settings, jump, view, leadNow, plan.sliceFrom);
+    STALL.pop(S_FRONT);
     if (accumulating) {
       this.accumulator!.begin();
+      const buildStart = M.TEST ? performance.now() : 0;
       for (let i = 0; i < plan.runs.length; i += 2) {
         this.accumulator!.build(this.light, plan.runs[i], plan.runs[i + 1], this.heldNow, this.lod ? this.drop : null, this.accum, fresh);
       }
+      this.frontTime("build", buildStart);
       if (!fresh) {
         this.frontAccumState.gpuSweeps++;
       }
       this.accumFrames = this.accumulator!.frames;
     } else {
+      const exactStart = M.TEST ? performance.now() : 0;
       for (let i = 0; i < plan.runs.length; i += 2) {
         this.light.build("fog volume", passes.volume, passes.copy, plan.runs[i], plan.runs[i + 1], 0, this.heldNow, this.lod ? this.drop : null);
       }
+      this.frontTime("exact", exactStart);
       this.accumFrames = 0;
       if (this.accumulator !== null) {
         this.accumulator.reset(this.accum);
       }
     }
+    STALL.lap(S_U_VOLUME);
     // the base mist: an exact build on a setting's or a size change, an accumulation on a change of the view, nothing once converged and still (no time input; a strike does not touch it); no draw where it is not read
     if (this.baseMist !== null) {
       if (settings) {
@@ -2406,9 +2577,14 @@ export class Fog extends M.Effect {
       if (baseOn) {
         // (the base shade grid on the CPU: baked in bands while it is owed; the job's frame: asked a lead ahead and released here when baseWorker is on and there is a lead; otherwise, or when no job is due, the GPU's own)
         if (this.baseWorker) {
+          STALL.push();
           this.baseGridUpdate(time);
+          STALL.pop(S_B_GRID);
         }
-        if (!this.baseWorkerFrame(time, settings, leadNow)) {
+        STALL.push();
+        const tookWorker = this.baseWorkerFrame(time, settings, leadNow);
+        STALL.pop(S_B_WORKER);
+        if (!tookWorker) {
           const index = this.baseMist.schedule.frames;
           const decision = this.baseMist.schedule.next();
           if (decision.draw) {
@@ -2422,6 +2598,7 @@ export class Fog extends M.Effect {
         this.baseDrop();
       }
     }
+    STALL.lap(S_U_BASEMIST);
     const drawn = plan.drawn;
     this.sweep = plan.sweep;
     this.sliceNext = plan.sliceNext;
@@ -2451,7 +2628,7 @@ export class Fog extends M.Effect {
   // frame (FogAccumulation.upload) and blended and stored once per upload by the accumulation (build with fresh). Returns whether the accumulating frame's builds are the job's. The exact builds stay the GPU's; a frame with no lead, the
   // option off, no usable front grid or a worker not warmed is the GPU's fresh pass (today's path); a late or lost answer is the stream's own fn run inline (the ThreadedTask rule)
   frontWorkerFrame(time: number, settings: boolean, jump: boolean, view: boolean, lead: { time: number; ahead: ViewDecision; askMoved: boolean; target: ParallaxOffsets } | null, sliceFrom: number): boolean {
-    const acc = this.accumulator, state = this.frontAccumState, tasks = this.frontTasks, feed = this.baseFeed;
+    const acc = this.accumulator, state = this.frontAccumState, tasks = this.frontTasks, feed = this.baseFeed, frameStart = M.TEST ? performance.now() : 0;
     if (!this.frontWorker || acc === null || !(this.accum > 0) || tasks.length === 0 || !lead || !(this.leadDelay > 0) || feed === null) {
       if (M.TEST) {
         this.frontWhy(!this.frontWorker ? "optionOff" : acc === null || tasks.length === 0 || feed === null ? "noTask" : !(this.accum > 0) ? "exactOnly" : !lead ? "noLead" : "noDelay");
@@ -2470,12 +2647,14 @@ export class Fog extends M.Effect {
         task.start();
       }
     }
-    while (this.frontShippers.length < tasks.length) {
-      this.frontShippers.push(new FrontVolumeJob.Shipper());
-    }
     feed.setNoiseStretch(NOISE_STRETCH);
     this.frontWarm();
+    const gridStart = M.TEST ? performance.now() : 0;
+    STALL.push();
     this.frontGridUpdate(time);
+    this.frontShipStep();
+    STALL.pop(S_F_GRID);
+    this.frontTime("grid", gridStart);
     if (settings || jump) {
       this.frontDrop();
       acc.dropFresh();
@@ -2483,13 +2662,8 @@ export class Fog extends M.Effect {
       acc.dropFresh();
     }
     if (this.frontStream === null) {
-      this.frontStream = new FrontVolumeLead.Stream((input: FrontVolumeInput): FrontResult | null => {
-        try {
-          return { whole: FrontVolumeJob.columns(input), bands: [], ranges: [], input };
-        } catch {
-          return null;
-        }
-      }, this.leadDelay);
+      // (an ask the tasks did not answer by its release is not run here: the job is hundreds of ms of script; the GPU's fresh pass builds the frame's slices)
+      this.frontStream = new FrontVolumeLead.Stream((): FrontResult | null => null, this.leadDelay);
     }
     const stream = this.frontStream;
     stream.delay = this.leadDelay;
@@ -2497,26 +2671,44 @@ export class Fog extends M.Effect {
       this.frontMoved = true;
     }
     const ms = time * 1000;
+    STALL.push();
     if (!settings && stream.pending() < FRONT_PENDING_MOST && this.frontReady()) {
       let made: FrontVolumeInput | null = null;
       const shaded = this.ubo.data[11]! > 1.5, ahead = M.ParallaxLead.lead(this.leadDelay) + FrontVolumeJob.PERIOD_SECONDS / 2;
-      const id = stream.ask(ms, lead.target, this.frontMoved, (k) => (made = this.frontJobInput(k, lead.target, time + ahead, shaded)));
+      const askStart = M.TEST ? performance.now() : 0;
+      const id = stream.ask(ms, lead.target, this.frontMoved, (k) => {
+        const inputStart = M.TEST ? performance.now() : 0;
+        made = this.frontJobInput(k, lead.target, time + ahead, shaded);
+        this.frontTime("input", inputStart);
+        return made;
+      });
+      this.frontTime("ask", askStart);
       const input = made as FrontVolumeInput | null;
       if (id !== null && input !== null) {
         this.frontMoved = false;
         state.asks++;
+        const dispatchStart = M.TEST ? performance.now() : 0;
         this.frontDispatch(id, input);
+        this.frontTime("dispatch", dispatchStart);
       }
     }
+    STALL.pop(S_F_ASK);
     const c = this.camera, live: ParallaxOffsets = { yaw: c.yaw, pitchShift: c.pitchShift, eyeX: c.eyeX, eyeShift: c.eyeShift };
-    for (const t of stream.take(ms, live, (id) => this.frontAnswers.get(id))) {
+    STALL.push();
+    const takeStart = M.TEST ? performance.now() : 0, taken = stream.take(ms, live, (id) => this.frontAnswers.get(id));
+    this.frontTime("take", takeStart);
+    STALL.pop(S_F_TAKE);
+    for (const t of taken) {
+      const answer = this.frontAnswers.get(t.id);
       this.frontAnswers.delete(t.id);
       if (!t.apply) {
         state.dropped++;
+        this.frontRelease(answer);
         continue;
       }
       if (t.superseded) {
         state.superseded++;
+        this.frontRelease(answer);
         continue;
       }
       if (!t.output) {
@@ -2525,8 +2717,18 @@ export class Fog extends M.Effect {
       // (the slices the frame blends and those of the frames until the next job's release: the whole output when the next one is a sweep away)
       const next = stream.nextReleaseMs(), jitter = this.frontJitters.get(t.id) || FogAccum.jitter(t.k), result = t.output;
       const ranges = FrontVolumeJob.extents(sliceFrom, FrontVolumeJob.sliceCount(next === null ? FrontVolumeJob.PERIOD_SECONDS : Math.max(0, next - ms) / 1000));
-      const parts = result.whole ? ranges.map((r) => result.whole!.subarray(r[0]! * 2 * this.frontPlane(), r[1]! * 2 * this.frontPlane())) : FrontVolumeJob.assembleParts(result.bands, result.ranges, result.input, ranges);
+      STALL.push();
+      const assembleStart = M.TEST ? performance.now() : 0;
+      const parts = result.whole ? ranges.map((r) => result.whole!.subarray(r[0]! * 2 * this.frontPlane(), r[1]! * 2 * this.frontPlane())) : FrontVolumeJob.assembleParts(result.bands, result.ranges, result.input, ranges, this.frontUploadBuffers);
+      this.frontTime("assemble", assembleStart, result.whole ? 0 : parts.reduce((a, p) => a + p.byteLength, 0), "assembleBytes");
+      STALL.pop(S_F_ASSEMBLE);
+      STALL.push();
+      const uploadStart = M.TEST ? performance.now() : 0;
       ranges.forEach((r, i) => acc.upload(parts[i]!, { factor: this.frontFactorNow(), covered: SLICES, jitter, first: r[0]! }, [r]));
+      this.frontTime("upload", uploadStart);
+      STALL.pop(S_F_UPLOAD);
+      this.frontRelease(result);
+      this.frontLastUpload = time;
       this.frontJitters.delete(t.id);
       state.uploads++;
       if (t.by === "worker") {
@@ -2535,12 +2737,63 @@ export class Fog extends M.Effect {
         state.byInline++;
         if (M.TEST) {
           this.baseTime(state.inlineMs, t.inlineMs);
+          this.frontTiming.inline = (this.frontTiming.inline || 0) + t.inlineMs;
         }
+      }
+    }
+    if (M.TEST) {
+      this.frontTiming.lateBands = tasks.reduce((a, task) => a + task.late, 0);
+      this.frontTime("frame", frameStart);
+    }
+    if (M.TEST) {
+      const st = acc.uploadStats;
+      this.frontTiming.uploadCallMs = Math.round(st.ms * 100) / 100;
+      this.frontTiming.uploadCallBytes = st.bytes;
+      this.frontTiming.uploadCallMax = Math.round(st.max * 100) / 100;
+      this.frontTiming.arrayMs = Math.round(st.array * 100) / 100;
+      for (const name in acc.firstDraw) {
+        this.frontTiming["firstDraw_" + name] = acc.firstDraw[name]!;
       }
     }
     state.blends = acc.blends;
     state.skipped = acc.skipped;
-    return acc.freshValid;
+    // (the frames no job fed for half a second are the GPU's fresh pass: a late or lost answer, a worker not warm, a grid being shipped)
+    return acc.freshValid && time - this.frontLastUpload <= 0.5;
+  }
+
+  // the band buffers of an answer sent back to their tasks' pools (a task is sent one with its next ask)
+  frontRelease(answer: FrontResult | undefined): void {
+    if (!answer) {
+      return;
+    }
+    answer.bands.forEach((band, i) => {
+      const pool = (this.frontPool[i] = this.frontPool[i] || []);
+      if (band.length > 0 && pool.length < 3) {
+        pool.push(band);
+      }
+    });
+  }
+
+  // the tests' timing of a section of the shade grid's view path: the ms since `since` (and `bytes`, a byte or message count, under key + Bytes) added to the cumulative figures (M.TEST only)
+  shadeTime(key: string, since: number, bytes = 0): void {
+    if (!M.TEST) {
+      return;
+    }
+    this.shadeTiming[key] = (this.shadeTiming[key] || 0) + (performance.now() - since);
+    if (bytes > 0) {
+      this.shadeTiming[key + "Bytes"] = (this.shadeTiming[key + "Bytes"] || 0) + bytes;
+    }
+  }
+
+  // the tests' timing of a section of the front path: the ms since `since` (and `bytes` under `bytesKey`) added to the cumulative figures (M.TEST only)
+  frontTime(key: string, since: number, bytes = 0, bytesKey = ""): void {
+    if (!M.TEST) {
+      return;
+    }
+    this.frontTiming[key] = (this.frontTiming[key] || 0) + (performance.now() - since);
+    if (bytes > 0) {
+      this.frontTiming[bytesKey] = (this.frontTiming[bytesKey] || 0) + bytes;
+    }
   }
 
   // the halves of one layer of a job's output (the reduced columns x 4)
@@ -2580,7 +2833,7 @@ export class Fog extends M.Effect {
   // whether a job can be asked: every task's worker warmed, the noise's stretch known, the front grid held at the current settings and no older than its bound, an exact build made
   frontReady(): boolean {
     const acc = this.accumulator, feed = this.baseFeed, g = this.frontGrid;
-    return this.frontTasks.length > 0 && this.frontTasks.every((t) => t.warmed) && acc !== null && acc.made && feed !== null && feed.noiseStretch !== null && g.halves !== null && g.policy.usable(this.lastTime);
+    return this.frontTasks.length > 0 && this.frontTasks.every((t) => t.warmed) && acc !== null && acc.made && feed !== null && feed.noiseStretch !== null && g.front !== null && g.shipQueue.length === 0 && g.policy.usable(this.lastTime);
   }
 
   // the warm message of the tasks (the noise's stretch and version): given once, again if either changes
@@ -2592,16 +2845,46 @@ export class Fog extends M.Effect {
     const key = feed.noiseStretch + ":" + feed.noiseVersion;
     if (key !== this.frontWarmed) {
       this.frontWarmed = key;
-      for (const task of this.frontTasks) {
-        task.warmWith({ stretch: feed.noiseStretch, version: feed.noiseVersion });
+      if (this.frontGrid.front === null) {
+        for (const task of this.frontTasks) {
+          task.warmWith({ stretch: feed.noiseStretch, version: feed.noiseVersion });
+        }
+      } else {
+        // (the grid is sent again with it, a task a frame)
+        this.frontGrid.shipQueue = this.frontTasks.map((_t, i) => i);
+        this.frontGrid.baseShipped = [];
       }
     }
+  }
+
+  // the base's 96 layers of the grid (a view of the base grid's own array)
+  frontBaseView(): Uint16Array | null {
+    const bg = this.baseGrid;
+    return bg.halves ? (bg.front ? bg.halves.subarray(BaseShadeGrid.LENGTH) : bg.halves) : null;
+  }
+
+  // the front grid sent to one task a frame (the front's 96 layers alone, the base's only when the task has not got this base version; the message kept for a worker made later has both): the task answers warmed when it has composed it, and no
+  // job is asked while one is not warmed
+  frontShipStep(): void {
+    const g = this.frontGrid, feed = this.baseFeed, base = this.frontBaseView();
+    if (g.shipQueue.length === 0 || !feed || feed.noiseStretch === null || g.front === null || base === null) {
+      return;
+    }
+    const i = g.shipQueue.shift()!, task = this.frontTasks[i];
+    if (!task) {
+      return;
+    }
+    const start = M.TEST ? performance.now() : 0, full = { stretch: feed.noiseStretch, version: feed.noiseVersion, gridVersion: g.version, front: g.front, base };
+    const needBase = g.baseShipped[i] !== g.seen.base;
+    task.warmWith(full, { ...full, base: needBase ? base : null });
+    g.baseShipped[i] = g.seen.base;
+    this.frontTime("ship", start, g.front.byteLength + (needBase ? base.byteLength : 0), "shipBytes");
   }
 
   // the front's shade grid on the CPU for the jobs: the layers 0..95 baked in bands by the 'baseshade' tasks for a time (M.FrontVolumeJob.GridPolicy decides: at the start, on a front setting's or the base's strength change, and again at half
   // the age bound), put together with the base's 96 layers (M.BaseShadeGrid) into the 192 the job reads; nothing is read back from the GPU
   frontGridUpdate(time: number): void {
-    const g = this.frontGrid, bg = this.baseGrid, state = this.frontAccumState, J = FrontVolumeJob;
+    const g = this.frontGrid, bg = this.baseGrid, state = this.frontAccumState;
     if (!this.baseWorker) {
       this.baseGridUpdate(time);
     }
@@ -2632,7 +2915,12 @@ export class Fog extends M.Effect {
     const per = BaseShadeGrid.LAYERS / M.BaseShadeWorker.BAND, band = M.BaseShadeWorker.BAND;
     if (g.building === null && g.policy.due(time)) {
       g.policy.begin(time);
-      g.building = { front: new Uint16Array(BaseShadeGrid.LENGTH), queue: Array.from({ length: per }, (_v, i) => i), total: per, done: 0, busy: this.baseShadeTasks.map(() => false), time: time - (M.TEST ? this.frontGridLag : 0), sigma, tail, scale };
+      const allocStart = M.TEST ? performance.now() : 0, slot = g.front !== null && g.front === g.buffers[0] ? 1 : 0;
+      if (g.buffers[slot] === null) {
+        g.buffers[slot] = new Uint16Array(BaseShadeGrid.LENGTH);
+      }
+      g.building = { front: g.buffers[slot]!, queue: Array.from({ length: per }, (_v, i) => i), total: per, done: 0, busy: this.baseShadeTasks.map(() => false), time: time - (M.TEST ? this.frontGridLag : 0), sigma, tail, scale };
+      this.frontTime("gridAlloc", allocStart);
     }
     const b = g.building;
     if (b === null) {
@@ -2656,8 +2944,9 @@ export class Fog extends M.Effect {
           if (b.done === b.total) {
             g.building = null;
             if (g.policy.complete() && bg.halves) {
-              g.halves = J.assembleGrid(b.front, bg.front ? bg.halves.subarray(BaseShadeGrid.LENGTH) : bg.halves);
+              g.front = b.front;
               g.version++;
+              g.shipQueue = this.frontTasks.map((_t, n) => n);
               state.gridBakes++;
             }
           }
@@ -2702,7 +2991,7 @@ export class Fog extends M.Effect {
       second: Array.from(this.lightSecond),
       noiseVersion: feed.noiseVersion,
       noiseStretch: NOISE_STRETCH,
-      light: { version: g.version, grid: g.halves, sky: this.ambient(), moon: [moon[0]! * this.moonGain[0]!, moon[1]! * this.moonGain[1]!, moon[2]! * this.moonGain[2]!], shaded },
+      light: { version: g.version, grid: null, sky: this.ambient(), moon: [moon[0]! * this.moonGain[0]!, moon[1]! * this.moonGain[1]!, moon[2]! * this.moonGain[2]!], shaded },
     };
     return J.inputOf(null, M.BaseMistJob.viewOf(frame, this.columns[0]!, this.columns[1]!, this.ubo.data[15]!), M.BaseMistJob.eyeOf(frame), params, this.frontFactorNow(), FogAccum.jitter(M.TEST && this.frontJitterMode === 1 && this.accumulator ? this.accumulator.frames : M.TEST && this.frontJitterMode === 2 ? 0 : k), { slices: SLICES, cull: this.heldNow !== null, drop: this.lod ? this.drop.slice() : undefined });
   }
@@ -2710,19 +2999,16 @@ export class Fog extends M.Effect {
   // the job asked of the tasks, a band of rows each (each task is sent the grid once per version: M.FrontVolumeJob.Shipper), the bands laid into one output when all have answered (kept by the ask's id for the stream's release)
   frontDispatch(id: number, whole: FrontVolumeInput): void {
     this.frontJitters.set(id, whole.jitter);
-    const tasks = this.frontTasks, g = this.frontGrid, ranges = M.FrontVolumeWorker.bandsOf(this.frontRows(), tasks.length), deadline = Math.max(50, M.ParallaxLead.lead(this.leadDelay) * 1000);
-    const t0 = performance.now(), bands = ranges.map((range, i) => {
-      const task = tasks[i]!, gen = task.alive + ":" + task.restarts + ":" + (task.inline ? 1 : 0);
-      if (this.frontShipGen[i] !== gen) {
-        this.frontShipGen[i] = gen;
-        this.frontShippers[i]!.reset();
-      }
-      const grid = this.frontShippers[i]!.ship(g.version, g.halves!);
-      return task.ask({ ...whole, rows: range, params: { ...whole.params, light: { ...whole.params.light, grid } } }, deadline);
-    });
+    const tasks = this.frontTasks, ranges = M.FrontVolumeWorker.bandsOf(this.frontRows(), tasks.length), t0 = performance.now();
+    // (the answer is waited for 400 ms: a band later than that is not run here, it is an empty answer and the job is lost)
+    const bands = ranges.map((range, i) => tasks[i]!.ask({ ...whole, rows: range, recycle: (this.frontPool[i] || []).pop() }, 400));
     Promise.all(bands).then(
       (outs) => {
-        this.frontAnswers.set(id, { whole: null, bands: outs, ranges, input: whole });
+        if (outs.every((o) => o.length > 0)) {
+          this.frontAnswers.set(id, { whole: null, bands: outs, ranges, input: whole });
+        } else {
+          this.frontRelease({ whole: null, bands: outs, ranges, input: whole });
+        }
         if (M.TEST) {
           this.baseTime(this.frontAccumState.workerMs, performance.now() - t0);
         }
@@ -2746,13 +3032,16 @@ export class Fog extends M.Effect {
     if (!feed || feed.noiseStretch === null) {
       return;
     }
-    const key = feed.noiseStretch + ":" + feed.noiseVersion;
+    const key = feed.noiseStretch + ":" + feed.noiseVersion + ":" + (feed.hasGrid ? feed.gridVersion : 0);
     if (key === this.baseWarmed) {
       return;
     }
-    if (this.baseTask) {
-      this.baseTask.warmWith({ stretch: feed.noiseStretch, version: feed.noiseVersion });
-    }
+    // (every base mist task: the bands are asked of all of them, none may meet its first job cold: each is warmed with the noise's stretch and, once the base's shade grid is installed, with the grid itself (what its slot is then not sent again at its first job); the slot's shipper is told)
+    const tasks = this.baseTasks.length > 0 ? this.baseTasks : this.baseTask ? [this.baseTask] : [];
+    tasks.forEach((task, slot) => {
+      const sent = feed.hasGrid ? feed.ship(slot) : null;
+      task.warmWith(sent && sent.grid ? { stretch: feed.noiseStretch!, version: feed.noiseVersion, grid: sent.grid, gridVersion: feed.gridVersion } : { stretch: feed.noiseStretch!, version: feed.noiseVersion });
+    });
     for (const task of this.baseShadeTasks) {
       task.warmWith({ stretch: feed.noiseStretch });
     }
@@ -2920,8 +3209,12 @@ export class Fog extends M.Effect {
     const c = this.camera, J = M.BaseMistJob, g = this.baseMist!.geometry();
     const input = this.baseJobInput(0, { yaw: c.yaw, pitchShift: c.pitchShift, eyeX: c.eyeX, eyeShift: c.eyeShift }, this.ubo.data[11]! > 1.5);
     const run: BaseMistInput = { ...input, factor: options.factor, jitter: options.jitter, rows: options.rows };
+    // (the hook's reference is the job at one factor)
+    delete run.factors;
     if (!options.cut || options.factor !== J.FACTOR) {
       delete run.cut;
+    } else if (input.factors && input.cut) {
+      run.cut = J.cutOf(input.cut, g.across, g.down, ...(J.reducedOf(g.across, g.down, J.FACTOR) as [number, number]));
     }
     const [ra, rd] = J.reducedOf(g.across, g.down, options.factor) as [number, number];
     return { out: J.columns(run), across: g.across, down: g.down, ra, rd };
@@ -2935,6 +3228,9 @@ export class Fog extends M.Effect {
       this.baseStream.reset();
     }
     this.baseReady.clear();
+    this.baseFactors.clear();
+    this.baseBandOf.clear();
+    this.baseFirstIds.clear();
   }
 
   // the base mist's accumulating frame with the job (Feature P1, story P6 = M7): the jobs of a view change are asked a lead ahead (one a frame, the accumulation's index k: M.BaseMistLead.Stream) for the pose the view shows at
@@ -2955,12 +3251,18 @@ export class Fog extends M.Effect {
     if (lead.askMoved) {
       this.baseStart = { time, released: false };
       this.baseArmed = false;
+      // (a new view change: the bands asked for the earlier one that are released from now on are stale; the tests' count of the retired slices the bands blended starts again with the accumulation)
+      this.baseEpoch++;
+      if (M.TEST && this.baseMist) {
+        this.baseMist.bandRetired = {};
+      }
     } else if (this.baseStart !== null && !this.baseStart.released && lead.ahead.moved && time > this.baseStart.time) {
       this.baseStart.released = true;
     }
     const ms = time * 1000, c = this.camera;
     stream.delay = this.leadDelay;
-    const ready = bm.exactBuilds > 0 && feed.ready(bakes, shaded) && task.warmed;
+    const plan = this.baseBandPlanNow();
+    const ready = bm.exactBuilds > 0 && feed.ready(bakes, shaded) && (plan !== null ? this.baseTasks.every((q) => q.warmed) : task.warmed);
     if (M.TEST) {
       if (lead.askMoved) {
         this.baseWhy("askMoved");
@@ -2971,41 +3273,86 @@ export class Fog extends M.Effect {
       }
     }
     // (the schedule's index: 0 for a start before the schedule restarts for this change, the schedule's frames for a late start, after the GPU drew the first frames)
+    STALL.push();
     const start = this.baseStart;
     if (start !== null && !this.baseArmed && start.released && mode === "idle") {
       this.baseStart = null;
     } else if ((ready || this.baseArmed) && start !== null && M.BaseMistWorker.asks({ option: this.baseWorker, worker: true, delay: this.leadDelay, started: true, settings: false, size: false, accumulating: true })) {
       let made: BaseMistInput | null = null;
-      const arming = !this.baseArmed;
-      const id = stream.ask(ms, lead.target, arming, (k) => (made = this.baseJobInput(k, lead.target, shaded)), start.released && mode === "accumulating" ? bm.schedule.frames : 0);
+      const arming = !this.baseArmed, count = plan !== null ? plan.count : 1;
+      let askK = 0;
+      const fromIdx = start.released && mode === "accumulating" ? bm.schedule.frames : 0;
+      if (arming) {
+        this.baseStartIdx = fromIdx;
+      }
+      stream.per = count;
+      const id = stream.ask(ms, lead.target, arming, (k) => { askK = k; return (made = this.baseJobInput(k, lead.target, shaded, plan)); }, fromIdx * count);
       if (id === null) {
         this.baseStart = null;
       } else if (made !== null) {
         this.baseArmed = true;
         state.asks++;
-        // (with no worker alive the job is run at its release, inline, by the stream: the same output, once)
-        if (!task.inline) {
-          const t0 = performance.now();
-          task.ask(made, this.leadDelay * 1000).then((output) => {
+        const factors = (made as BaseMistInput | null)?.factors;
+        if (factors) {
+          this.baseFactors.set(id, factors);
+        }
+        const askIdx = plan !== null ? Math.floor(askK / plan.count) : askK, isFirst = askIdx === this.baseStartIdx;
+        if (isFirst && plan === null) {
+          this.baseFirstIds.add(id);
+        }
+        const band = (made as BaseMistInput | null)?.band;
+        if (band && plan !== null) {
+          this.baseBandOf.set(id, { from: band.from, to: band.to, core: M.BaseMistBands.bandAt(askK, plan.rows, plan.per).core, head: band.head, pass: Math.floor(askK / plan.count), last: askK % plan.count === plan.count - 1, epoch: this.baseEpoch, first: isFirst });
+        }
+        // (the band's task: band i on task i mod K; with no worker alive the job is run at its release, inline, by the stream: the same job function on the same input, the same output, once)
+        const slotAt = plan !== null ? (askK % plan.count) % this.baseTasks.length : 0, runner = plan !== null ? this.baseTasks[slotAt]! : task;
+        if (!runner.inline) {
+          const t0 = performance.now(), idle = !this.baseSlotBusy[slotAt], steps = band && plan !== null ? (band.to - band.from) * plan.spr + plan.coarse : 0;
+          this.baseSlotBusy[slotAt] = (this.baseSlotBusy[slotAt] || 0) + 1;
+          runner.ask(made, this.leadDelay * 1000).then((output) => {
+            this.baseSlotBusy[slotAt] = Math.max(0, (this.baseSlotBusy[slotAt] || 0) - 1);
             this.baseReady.set(id, output);
-            if (M.TEST) {
-              this.baseTime(state.workerMs, performance.now() - t0);
+            const ms = performance.now() - t0;
+            // (a band asked of an idle task: its latency is the job's time, within a message's: the worker's ms a step, smoothed)
+            if (idle && steps > 0) {
+              // (a latency includes the main thread's own delay in handling the answer: the sample is kept within a quarter and twice the estimate, so one slow frame cannot make every band look too big for the lead)
+              this.basePerStep = 0.8 * this.basePerStep + 0.2 * Math.min(Math.max(ms / steps, M.BaseMistBands.PER_STEP_MS / 4), M.BaseMistBands.PER_STEP_MS * 2);
             }
-          }, () => undefined);
+            if (M.TEST) {
+              this.baseTime(state.workerMs, ms);
+            }
+          }, () => {
+            this.baseSlotBusy[slotAt] = Math.max(0, (this.baseSlotBusy[slotAt] || 0) - 1);
+          });
         }
       }
     }
+    STALL.pop(S_B_ASK);
+    STALL.push();
     const live: ParallaxOffsets = { yaw: c.yaw, pitchShift: c.pitchShift, eyeX: c.eyeX, eyeShift: c.eyeShift };
     let drawn = 0;
     for (const t of stream.take(ms, live, (id) => this.baseReady.get(id))) {
       this.baseReady.delete(t.id);
+      const factors = this.baseFactors.get(t.id), info = this.baseBandOf.get(t.id), firstJob = this.baseFirstIds.delete(t.id);
+      this.baseFactors.delete(t.id);
+      this.baseBandOf.delete(t.id);
       if (!t.apply) {
         state.dropped++;
+        // (a pass whose last band was dropped still ends: the schedule counts passes)
+        if (info && info.last && info.epoch === this.baseEpoch && bm.schedule.mode === "accumulating") {
+          bm.schedule.next();
+        }
+        continue;
+      }
+      if (info && factors) {
+        if (this.baseApplyBand(info, factors, t.output!, t.by, t.inlineMs)) {
+          drawn++;
+        }
         continue;
       }
       const index = bm.schedule.frames, decision = bm.schedule.next();
       if (decision.draw && !decision.exact) {
-        bm.frame(decision, index, this.baseStrength(), { factor: M.BaseMistJob.FACTOR, output: t.output! });
+        bm.frame(decision, index, this.baseStrength(), factors ? { factor: M.BaseMistJob.FACTOR, output: t.output!, factors, first: firstJob } : { factor: M.BaseMistJob.FACTOR, output: t.output!, first: firstJob });
         state.uploads++;
         if (t.by === "worker") {
           state.byWorker++;
@@ -3018,35 +3365,76 @@ export class Fog extends M.Effect {
         drawn++;
       }
     }
+    STALL.pop(S_B_TAKE);
     const took = drawn > 0 || (bm.schedule.mode === "accumulating" && stream.pending() > 0);
     if (M.TEST && !took && bm.schedule.mode === "accumulating") {
       this.baseWhy(ready ? "fallbackReady" : "fallbackNotReady");
+      if (!ready) {
+        // (which term of `ready` was false: no exact build yet, the feed (noise stretch and, with the base's shade, the grid) not ready, or a task not warmed)
+        this.baseWhy(bm.exactBuilds <= 0 ? "notReadyNoExact" : !feed.ready(bakes, shaded) ? "notReadyFeed" : plan !== null ? "notReadyTasks" + this.baseTasks.filter((q) => !q.warmed).length : "notReadyTask");
+      }
     }
     return took;
   }
 
+  // a row band applied (story B): to its rows at its pass (the alpha of a row's n-th update is the pass n's), the schedule advancing at the pass's last band; a band of an accumulation that a newer view change replaced is stale and dropped; returns whether it was applied
+  baseApplyBand(info: { from: number; to: number; core: number[]; head: boolean; pass: number; last: boolean; epoch: number; first: boolean }, factors: Uint8Array, output: Uint16Array, by: string, inlineMs: number): boolean {
+    const bm = this.baseMist!, state = this.baseAccumState;
+    if (info.epoch !== this.baseEpoch || bm.schedule.mode !== "accumulating") {
+      state.dropped++;
+      return false;
+    }
+    bm.frame({ draw: true, exact: false, alpha: M.StaticMist.viewAlpha(info.pass) }, info.pass, this.baseStrength(), { factor: M.BaseMistJob.FACTOR, output, factors, band: { from: info.from, to: info.to, core: info.core, head: info.head }, first: info.first });
+    if (bm.lastBand) {
+      bm.lastBand.epoch = info.epoch;
+    }
+    state.uploads++;
+    state.bands++;
+    if (by === "worker") {
+      state.byWorker++;
+    } else {
+      state.byInline++;
+      state.inlineBandMs.push(inlineMs);
+      if (state.inlineBandMs.length > 4000) {
+        state.inlineBandMs.shift();
+      }
+      if (M.TEST) {
+        this.baseTime(state.inlineMs, inlineMs);
+      }
+    }
+    if (info.last) {
+      bm.schedule.next();
+      state.passes++;
+    }
+    return true;
+  }
+
   // the job's input for the accumulation's index k and the target pose: the volume's columns' rays for the pose and the lens the volume is built for, the eye, the light (the atmosphere's ambient, the Orb's irradiance, the clouds'
   // colours, the shade grid's snapshot: each version sent to the worker once), the jitter of the index, and the columns the last build's plan reads (a few slices more: the view moved since)
-  baseJobInput(k: number, target: ParallaxOffsets, shaded: boolean): BaseMistInput {
-    const J = M.BaseMistJob, c = this.camera, bm = this.baseMist!, feed = this.baseFeed!, task = this.baseTask!;
+  baseJobInput(k: number, target: ParallaxOffsets, shaded: boolean, plan: { rows: number; per: number; count: number } | null = null): BaseMistInput {
+    const J = M.BaseMistJob, c = this.camera, bm = this.baseMist!, feed = this.baseFeed!;
+    // (a row band: its ordinal k is the pass x the bands of a pass + the band's index; the jitter and the retire cap are the pass's, the task is the band's slot, and what that task's worker was told is its own)
+    const slot = plan !== null ? (k % plan.count) % this.baseTasks.length : 0, task = plan !== null ? this.baseTasks[slot]! : this.baseTask!, idx = plan !== null ? Math.floor(k / plan.count) : k;
     const gen = task.alive + ":" + task.restarts + ":" + (task.inline ? 1 : 0);
-    if (gen !== this.baseShipGen) {
-      this.baseShipGen = gen;
-      feed.forgetWorker();
+    if (gen !== this.baseShipGens[slot]) {
+      this.baseShipGens[slot] = gen;
+      feed.forgetWorker(slot);
     }
     const frame = M.Frame.atPose(c.frameInput(), { yaw: target.yaw, pitch: target.pitchShift, eyeX: target.eyeX, eyeY: target.eyeShift });
     frame.lensX = this.builtLens.x;
     frame.lensY = this.builtLens.y;
     const g = bm.geometry(), [ra, rd] = J.reducedOf(g.across, g.down, J.FACTOR) as [number, number];
+    // (the resolution by distance: the job's slices on lattices of their own factor, and the cut is the full-resolution counts: the job reduces it for each lattice)
+    const byDistance = bm.baseLodRes && this.baseLodActive();
     let cut: Uint16Array | undefined;
     if (bm.slicesNeeded.length === g.across * g.down) {
-      const counts = new Uint16Array(bm.slicesNeeded.length);
+      const counts = new Uint16Array(bm.slicesNeeded.length), cap = idx > this.baseStartIdx ? bm.retireFrom() : BaseMist.SLICES;
       for (let i = 0; i < counts.length; i++) {
-        counts[i] = Math.min(BaseMist.SLICES, bm.slicesNeeded[i]! + CUT_SLACK);
+        counts[i] = Math.min(cap, bm.slicesNeeded[i]! + CUT_SLACK);
       }
-      cut = J.cutOf(counts, g.across, g.down, ra, rd);
+      cut = byDistance ? counts : J.cutOf(counts, g.across, g.down, ra, rd);
     }
-    const sent = feed.ship();
+    const sent = feed.ship(slot);
     const moon = M.QualityFogVolume.MOON_BASE;
     const params = {
       hb: BaseMist.HB,
@@ -3058,7 +3446,39 @@ export class Fog extends M.Effect {
       noiseStretch: NOISE_STRETCH,
       light: { version: feed.gridVersion, grid: sent.grid, front: this.baseGrid.front, sky: this.ambient(), moon: [moon[0]! * this.moonGain[0]!, moon[1]! * this.moonGain[1]!, moon[2]! * this.moonGain[2]!], shaded },
     };
-    return J.inputOf(sent.noise, J.viewOf(frame, g.across, g.down, this.ubo.data[15]!), J.eyeOf(frame), params, J.FACTOR, FogAccum.jitter(k), cut);
+    const input = J.inputOf(sent.noise, J.viewOf(frame, g.across, g.down, this.ubo.data[15]!), J.eyeOf(frame), params, J.FACTOR, FogAccum.jitter(idx), cut);
+    if (byDistance) {
+      if (this.baseTable === null || this.baseTableFocal !== bm.focal) {
+        this.baseTable = M.BaseLodRes.table(bm.focal, J.FACTOR);
+        this.baseTableFocal = bm.focal;
+      }
+      input.factors = this.baseTable;
+    }
+    return plan !== null && byDistance ? M.BaseMistBands.bandInput(input, M.BaseMistBands.bandAt(k, plan.rows, plan.per)) : input;
+  }
+
+  // the plan of the view change's row bands (M.BaseMistBands): the rows of the finest lattice, the rows of a band and the bands of a pass; null (the unbanded job) when the option is off, the job has no factors (the level of detail or the resolution by distance off) or not even a one-row band fits the lead
+  baseBandPlanNow(): { rows: number; per: number; count: number; spr: number; coarse: number } | null {
+    const bm = this.baseMist;
+    if (!this.baseBands || !bm || !bm.baseLodRes || !this.baseLodActive() || this.baseTasks.length === 0) {
+      return null;
+    }
+    const g = bm.geometry(), key = this.baseBandKey, step = Math.round(this.basePerStep * 10000);
+    if (this.baseBandCached !== null && key[0] === g.across && key[1] === g.down && key[2] === bm.focal && key[3] === this.leadDelay && key[4] === this.baseBandRows && key[5] === this.baseTasks.length && (key[6] === step || this.baseArmed)) {
+      return this.baseBandCached;
+    }
+    if (this.baseTable === null || this.baseTableFocal !== bm.focal) {
+      this.baseTable = M.BaseLodRes.table(bm.focal, M.BaseMistJob.FACTOR);
+      this.baseTableFocal = bm.focal;
+    }
+    // (the plan is kept while an accumulation runs: a changed band count would change what its ordinals mean; a band takes at most a quarter of the lead on a worker, at the worker's measured ms a step: a band late at its release waits for its answer, and one run here would be a stall)
+    const B = M.BaseMistBands, fin = B.finest(this.baseTable, BaseMist.SLICES, g.across, g.down), st = B.stepsOf(this.baseTable, BaseMist.SLICES, g.across, g.down);
+    const per = this.baseBandRows > 0 ? Math.min(this.baseBandRows, fin.rd) : B.perFor(M.ParallaxLead.lead(this.leadDelay) * 1000, this.baseTasks.length, fin.rd, st.perRow, st.coarse, step / 10000, 0.25, INLINE_BAND_MS, true);
+    // (a band of one row is the least there is: when even that does not fit the lead the bands are still used, never the whole job)
+    const rowsPer = per > 0 ? per : 1;
+    this.baseBandCached = { rows: fin.rd, per: rowsPer, count: B.cycle(fin.rd, rowsPer), spr: st.perRow, coarse: st.coarse };
+    this.baseBandKey = [g.across, g.down, bm.focal, this.leadDelay, this.baseBandRows, this.baseTasks.length, step];
+    return this.baseBandCached;
   }
 
   // the view's decision the lead releases at this frame (null without a lead: the plan decides from the camera's offsets): the pose the view shows `lead` later is asked of poseSource (the camera's own offsets
@@ -3085,6 +3505,7 @@ export class Fog extends M.Effect {
     const ahead: ViewDecision = { moved: released.moved, builtFor: released.builtFor };
     this.leadFrame = { time, ahead, askMoved, target };
     if (askMoved) {
+      STALL.count(E_VIEW);
       this.shadeViewAsk(target, time);
     }
     return ahead;
@@ -3542,6 +3963,7 @@ export class Fog extends M.Effect {
       gl.enable(gl.SCISSOR_TEST);
     }
     this.guard.begin(name, "slice");
+    STALL.push();
     for (let k = from; k < to; k++) {
       if (inView) {
         const box = this.boxes[k];
@@ -3557,6 +3979,7 @@ export class Fog extends M.Effect {
         this.guard.piece();
       }
     }
+    STALL.pop(S_BAKE);
     this.guard.end();
     if (inView) {
       gl.disable(gl.SCISSOR_TEST);

@@ -52,6 +52,8 @@ import type { MistBeyond } from "../models/mistbeyond";
 import type { MistAlbedo } from "../models/mistalbedo";
 import type { StaticMist } from "../models/staticmist";
 import type { BaseLod } from "../models/baselod";
+import type { BaseLodRes } from "../models/baselodres";
+import type { BaseMistBands } from "../models/basemistbands";
 import type { FogPair } from "../models/fogpair";
 import type { NoiseMin } from "../models/noisemin";
 import type { BaseMist } from "./basemist";
@@ -83,6 +85,7 @@ import type { ShadeAccumLead } from "../models/shadeaccumlead";
 import type { ShadeBands } from "../models/shadebands";
 import type { ShadeDelta } from "../models/shadedelta";
 import type { ShadeLod } from "../models/shadelod";
+import type { StallCause } from "../models/stallcause";
 import type { ShadeViewBands } from "../models/shadeviewbands";
 import type { ShadeAccumulation } from "./shadeaccum";
 import type { FogPlanWorker } from "../workers/fogplanworker";
@@ -212,6 +215,7 @@ export interface Matrix3DNamespace {
   ShadeBands: typeof ShadeBands;
   ShadeDelta: typeof ShadeDelta;
   ShadeLod: typeof ShadeLod;
+  StallCause: typeof StallCause;
   ShadeViewBands: typeof ShadeViewBands;
   ShadeAccumulation: typeof ShadeAccumulation;
   FogPlanWorker: typeof FogPlanWorker;
@@ -283,6 +287,8 @@ export interface Matrix3DNamespace {
   MistAlbedo: typeof MistAlbedo;
   StaticMist: typeof StaticMist;
   BaseLod: typeof BaseLod;
+  BaseLodRes: typeof BaseLodRes;
+  BaseMistBands: typeof BaseMistBands;
   FogPair: typeof FogPair;
   NoiseMin: typeof NoiseMin;
   BaseMist: typeof BaseMist;
@@ -355,6 +361,8 @@ export interface Matrix3DNamespace {
   putSnapshot: typeof putSnapshot;
   serveTask: typeof serveTask;
   SupportReadout: typeof SupportReadout;
+  // the build's stamp (debug/readout.ts): the commit, a '+' for changes, the build's UTC date and minute
+  BUILD: string;
   AudioGen: typeof AudioGen;
   AudioLevels: typeof AudioLevels;
   PerfMeter: typeof PerfMeter;

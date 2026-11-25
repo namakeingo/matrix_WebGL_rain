@@ -49,6 +49,17 @@ uniform bool uNoWaveShadow;
 uniform bool uNoStrikeWater;
 uniform bool uNoFilteredNormal;
 uniform bool uNoGlossyRead;
+// the cost breakdown's knockouts (the picture is wrong with any on): the fog's read at the hit, the sky seen, the air beyond the volume, the sky's shade, the mirrored picture's read, the water's own
+// shading, the moon's glint, the flat path forced on every water pixel, and the bare pass (a constant colour right after the pixel's ray: the fill and the attachments' bandwidth alone)
+uniform bool uNoFogRead;
+uniform bool uNoAtmos;
+uniform bool uNoAirBeyond;
+uniform bool uNoSkyShade;
+uniform bool uNoMirrorRead;
+uniform bool uNoOwnShade;
+uniform bool uNoGlint;
+uniform bool uForceFlat;
+uniform bool uBare;
 // the wave hit's march with its gates open (every pixel, every block)
 uniform bool uForceWaveHit;
 // the waveHeight view's sweep: the grid cell at pixel p is (probe.x + p.x * probe.y, probe.z + p.y * probe.w)
@@ -61,10 +72,28 @@ const bool uNoWaveShadow = false;
 const bool uNoStrikeWater = false;
 const bool uNoFilteredNormal = false;
 const bool uNoGlossyRead = false;
+const bool uNoFogRead = false;
+const bool uNoAtmos = false;
+const bool uNoAirBeyond = false;
+const bool uNoSkyShade = false;
+const bool uNoMirrorRead = false;
+const bool uNoOwnShade = false;
+const bool uNoGlint = false;
+const bool uForceFlat = false;
+const bool uBare = false;
 const bool uForceWaveHit = false;
 #endif
 // the global gate of the wave hit's march (waveHitOn: effects/water.ts): 0 off, the water as it is without the march
 uniform int uWaveHit;
+// the march ends at the reach (WaveHit.clipDepth: the depth past which the highest wave shifts the picture by under WAVEHIT_PX) instead of at the flat hit
+uniform bool uWaveHitClip;
+// the pixel's place in the full-resolution picture: the far water rows are drawn into a half-resolution target (uPixelScale 2, uPixelOrigin the band's first row), each fragment standing for the 2 x 2 block
+// around its centre; (1, 0) for the picture's own pixels
+uniform float uPixelScale;
+uniform vec2 uPixelOrigin;
+vec2 fragXY() {
+  return uPixelOrigin + gl_FragCoord.xy * uPixelScale;
+}
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec4 outReflected;
 // the crest picture (the third attachment, R32F): the eye's distance to the crest the pixel shows (the wave hit's hit), CREST_FAR where there is none (calm water, the sky, no crest found).
@@ -417,6 +446,9 @@ bool waveHit(vec3 eye, vec3 d, inout float t) {
   float zc = -eye.z;
   float ta = max((eye.y - top) / -d.y, 0.0);
   float tb = min(t, (wGrid.y - zc) / q);
+  if (uWaveHitClip && thr > 0.0) {
+    tb = min(tb, (top * cEye.w / thr - zc) / q);
+  }
   float za = max(zc + q * ta, wGrid.x);
   ta = (za - zc) / q;
   float zb = zc + q * tb;
@@ -481,8 +513,8 @@ vec3 airBeyond(inout vec4 fog, vec3 d, float end) {
   return tint;
 }
 void main() {
-  vec3 d = rayOf(gl_FragCoord.xy);
-  ivec2 pixel = ivec2(gl_FragCoord.xy);
+  vec3 d = rayOf(fragXY());
+  ivec2 pixel = ivec2(fragXY());
   outReflected = vec4(0.0, 0.0, 0.0, 1.0);
   outCrest = CREST_FAR;
 #ifdef TEST_VIEWS
@@ -525,6 +557,12 @@ void main() {
     return;
   }
 #endif
+  if (uBare) {
+    outColor = vec4(0.1, 0.1, 0.1, 1.0);
+    outReflected = vec4(0.0, 0.0, 0.0, 1.0);
+    outCrest = CREST_FAR;
+    return;
+  }
   bool water = uMode != MODE_SKY && d.y < 0.0 && !uWaterOff;
   float hit = water ? cEye.y / -d.y : 0.0;
   // (the wave hit: where the march finds a crest on the eye's ray, hit is the crest's distance; flatHit stays the plane's, which the pixel's footprint is measured on)
@@ -541,7 +579,7 @@ void main() {
   vec3 sPre = crest ? cEye.xyz + hit * d : sFlat;
   if (water && !uNoFilteredNormal) {
     for (int k = 0; k < 2; k++) {
-      vec3 dk = rayOf(gl_FragCoord.xy + (k == 0 ? vec2(1.0, 0.0) : vec2(0.0, 1.0)));
+      vec3 dk = rayOf(fragXY() + (k == 0 ? vec2(uPixelScale, 0.0) : vec2(0.0, uPixelScale)));
       if (dk.y < -1e-4) {
         vec3 sk = cEye.xyz + (cEye.y / -dk.y) * dk;
         foot = max(foot, abs(vec2(sk.x - sFlat.x, sk.z - sFlat.z)));
@@ -558,16 +596,16 @@ void main() {
   // horizon, the pixel the mirrored ray crosses and the far distance)
   float end = BASE_FAR;
   if (water) end = hit;
-  vec2 fogPixel = gl_FragCoord.xy;
+  vec2 fogPixel = fragXY();
   if (!water && uWaterOff && d.y < 0.0) {
     vec4 up = cViewProj * vec4(cEye.xyz + vec3(d.x, -d.y, d.z), 1.0);
     vec2 margin = cScreen.xy * fVolume.w;
     if (up.w > 0.0) fogPixel = clamp((up.xy / up.w * 0.5 + 0.5) * cScreen.xy, -margin, cScreen.xy + margin);
   }
-  fog = fogAt(fogPixel, end, false, strike);
+  if (!uNoFogRead) fog = fogAt(fogPixel, end, false, strike);
   // (the air from the volume's far end to the water's hit)
   vec3 airTint = vec3(1.0);
-  if (water) airTint = airBeyond(fog, d, end);
+  if (water && !uNoAirBeyond) airTint = airBeyond(fog, d, end);
   float transmittance = water ? fog.a : 1.0;
 #ifdef TEST_VIEWS
   bool sceneView = uMode == MODE_SCENE;
@@ -577,7 +615,7 @@ void main() {
   // (the level of detail: water whose light the fog leaves under FOG_CUT of the picture is the fog's colour alone)
   // (not a return: the derivatives below are taken by every pixel of a quad)
   bool unseen = water && uFlatPx > 0.0 && sceneView && !uNearness && transmittance < FOG_CUT;
-  bool isFlat = water && (unseen || flatWater(vec2(sPre.x, -sPre.z), foot, transmittance));
+  bool isFlat = water && (unseen || uForceFlat || flatWater(vec2(sPre.x, -sPre.z), foot, transmittance));
   vec3 nPre = water && !isFlat ? waterNormalOver(vec2(sPre.x, -sPre.z), foot) : vec3(0.0, 1.0, 0.0);
   vec3 rPre = reflect(d, nPre);
   vec3 drx = dFdx(rPre);
@@ -591,7 +629,7 @@ void main() {
     outColor = vec4(mix(vec3(grey), vec3(1.0, 0.0, 0.0), line), 1.0);
     return;
   }
-  vec3 color = unseen ? vec3(0.0) : atmosSeen(d);
+  vec3 color = unseen ? vec3(0.0) : uNoAtmos ? vec3(0.1) : atmosSeen(d);
   vec3 reflected = vec3(0.0);
   // (the water off, below the horizon: the sky of the mirrored ray, as the fog read above is; atmosSeen reads a ray's height clamped at 0, so an unmirrored downward ray showed the horizon's sky; the
   // sky variant (sky_fragment.glsl) draws only rays above the horizon and has no such line)
@@ -613,7 +651,7 @@ void main() {
     vec3 lit = strikeCount() > 0 && !uNoStrikeWater ? strikesOnWater(s, n, lod, transmittance, shadowStride(level), litStill) : vec3(0.0);
     // the water's light for the ripples' normal (pass 0) and, with the ripples' gain, the flat one (pass 1): one loop,
     // its count a value at run time (the bound checked inside)
-    vec2 shade = skyShade(s, lod, uMarched);
+    vec2 shade = uNoSkyShade ? vec2(0.5) : skyShade(s, lod, uMarched);
     vec3 mirrored = vec3(0.0);
     vec3 colorStill = vec3(0.0);
     vec3 reflectedStill = vec3(0.0);
@@ -629,8 +667,11 @@ void main() {
       vec3 nn = pass == 0 ? n : vec3(0.0, 1.0, 0.0);
       vec3 em;
       vec3 scn;
-      vec3 ownShaded = waterOwnShaded(shade, nn);
-      vec3 mir = reflectedAt(s, hit, hitM, reflect(d, nn), nn, pixel, lod, pass == 0 && !isFlat, drx, dry, ownShaded, em, scn);
+      vec3 ownShaded = uNoOwnShade ? vec3(0.1) : waterOwnShaded(shade, nn);
+      vec3 mir = vec3(0.1);
+      em = vec3(0.0);
+      scn = vec3(0.0);
+      if (!uNoMirrorRead) mir = reflectedAt(s, hit, hitM, reflect(d, nn), nn, pixel, lod, pass == 0 && !isFlat, drx, dry, ownShaded, em, scn);
       vec3 litPass = pass == 0 ? lit : litStill;
       // (the Fresnel reflectance of the water: the Reflection strength does not scale it, the water keeps its full look)
       float fPass = min(${WATER_F0} + ${1 - WATER_F0} * pow(1.0 - max(dot(-d, nn), 0.0), 5.0), 1.0);
@@ -640,7 +681,7 @@ void main() {
       // added with it after the gain)
       vec3 reflectedPass = (uNoWaterLight ? vec3(0.0) : litPass * uTone) * (1.0 - fPass) + (em - scn) * fPass;
       if (pass == 0) {
-        if (!isFlat) glintLight = moonGlint(reflect(d, nn), 0.5 * max(length(drx), length(dry)), shade.y) * fPass;
+        if (!isFlat && !uNoGlint) glintLight = moonGlint(reflect(d, nn), 0.5 * max(length(drx), length(dry)), shade.y) * fPass;
         mirrored = mir + scn * uStrength;
         sceneLight = scn * uStrength * fPass;
         color = colorPass;

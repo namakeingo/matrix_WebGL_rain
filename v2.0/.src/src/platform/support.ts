@@ -82,6 +82,10 @@ export interface PerformanceReport {
   quality: QualityReport | null;
   // the mouse parallax (missing: not reported)
   mouse?: MouseReport;
+  // the build the renderer is (M.BUILD; missing: an older renderer)
+  build?: string;
+  // the stall causes of the last 60 s as the overlay's line (models/stallcause.ts: Recorder.line; missing: not reported)
+  stalls?: string;
 }
 
 // what an audio array carries (AudioLevels.of)

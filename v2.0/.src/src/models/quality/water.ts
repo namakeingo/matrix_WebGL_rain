@@ -114,7 +114,10 @@ function skips(q: Pick<EffectQuality, "visible" | "units"> | undefined, madeFor:
   return !!q && !q.visible && q.units > 0 && madeFor === version && !dirty;
 }
 
-export const QualityWater = { EPSILON, QUALITY_LEVELS, READ_GRADIENT, readBound, reflectionShift, lowestRayY, seen, process, skips };
+// the water seen beyond this many metres is drawn at half resolution (effects/water.ts farHalf, QualityWaterBands.farRows)
+const FAR_HALF_M = 8;
+
+export const QualityWater = { FAR_HALF_M, EPSILON, QUALITY_LEVELS, READ_GRADIENT, readBound, reflectionShift, lowestRayY, seen, process, skips };
 
 QualityJobs.register("water", (statics, params, from, to, out) => {
   process(params as unknown as { inputs: Pick<QualityViewInputs, "viewProjection"> & Partial<QualityViewInputs>; lod?: boolean }, from, to, out);

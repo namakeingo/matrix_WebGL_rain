@@ -93,6 +93,10 @@
 // 2026-11-12: uMirrorMargin: the mirrored picture's margin past the view (the lookup, the glossy taps and the distance read map into the larger picture).
 // 2026-11-12: the moon's glint (moonGlint: the disc's radiance over the glossy beam, times the Fresnel reflectance and the moon's shade; the test view waterGlint); the
 //   diffuse sky and moon light from the shared glyphSkyMoonLight (the sky box's (1 + n.y) / 2).
+// 2026-11-25: farHalf: the water beyond QualityWater.FAR_HALF_M drawn at half resolution (uPixelScale, uPixelOrigin, drawFar, upsample_fragment.glsl).
+// 2026-11-25: waveHitClip (off by default: no measured gain): the wave hit's march ends at the reach (uWaveHitClip).
+// 2026-11-25: the cost breakdown's test knockouts (noFogRead, noAtmos, noAirBeyond, noSkyShade, noMirrorRead, noOwnShade, noGlint, forceFlat, bare).
+// 2026-11-25: bandSplit: a band as tall as the screen is drawn in two parts split at the horizon row (the sky-only program ran for none of its rows).
 // 2026-11-08: the sky-only program for the bands above the horizon (identical pixels).
 // 2026-11-07: the level of detail by the pixel's fog and footprint (flat tolerance, shadow stride and cut, early exit).
 // 2026-11-07: the flat path (flatWater): a pixel whose normal is up to the waves' own bound takes no heights, one evaluation, no glossy read; off with lod off (uFlatPx 0).
@@ -104,7 +108,7 @@
 //   parameters moved to materials/water.ts, values unchanged.
 import { M } from "../engine/core";
 import { fill } from "../engine/glsl";
-import type { ShaderProgram, Programs, ProgramSources } from "../engine/gl";
+import type { ShaderProgram, RenderTarget, Programs, ProgramSources } from "../engine/gl";
 import type { EffectContext, SharedGlsl } from "../engine/effect";
 import type { Capabilities } from "../engine/namespace";
 import { WATER_F0, WATER_ALBEDO, WATER_DIFFUSE } from "../materials/water";
@@ -117,6 +121,7 @@ import MODE_SOURCE from "../shaders/water/mode.glsl";
 import GRID_SOURCE from "../shaders/water/grid.glsl";
 import STRIKE_FRAGMENT_SOURCE from "../shaders/water/strike_fragment.glsl";
 import SKY_FRAGMENT_SOURCE from "../shaders/water/sky_fragment.glsl";
+import UPSAMPLE_SOURCE from "../shaders/water/upsample_fragment.glsl";
 
 // the strikes' light on the water's grid (see the header): its cells across and deep, its
 // nearest distance (m), its light's scale (half floats keep faint light)
@@ -126,6 +131,8 @@ const GRID_NEAR = 0.5;
 const GRID_FAR = 300;
 const GRID_SCALE = 64;
 const SLOTS = M.STRIKES_MOST;
+// the units the upsample program reads the half-resolution target on (the crest's, the work unit and the HDR input): nothing reads them after the water's draws, and drawFar puts back what they held
+const UP_UNITS = [M.UNITS.crest, M.UNITS.work, M.UNITS.hdr];
 const WATER_NO_TONE = Float32Array.of(1, 1, 1);
 
 // the tests' options of a draw (Water.draw)
@@ -148,6 +155,17 @@ export class Water extends M.Effect {
   // (made in init)
   program!: ShaderProgram;
   skyProgram!: ShaderProgram;
+  // the draw is split at the horizon row when the guard's band is as tall as the screen (off: the whole screen with the full program, the A/B)
+  bandSplit = true;
+  // the wave hit's march ends at the reach (WaveHit.clipDepth), not at the flat hit (off: the A/B)
+  waveHitClip = false;
+  // the water seen beyond M.QualityWater.FAR_HALF_M is drawn at half resolution (the same program, a half-resolution target, then a 2x upsample: bilinear for the colour and the reflected light, the nearest
+  // for the crest's distance); off: every row at full resolution (the A/B). Allocated at the first use and at a size change, never per frame
+  farHalf = true;
+  upProgram!: ShaderProgram;
+  half: RenderTarget | null = null;
+  // (with M.TEST only: the last draw's band at half resolution, [from, to) rows from the bottom, and the half-resolution pixels it shaded)
+  farDrawn!: { from: number; to: number; pixels: number };
   // (with M.TEST only: the last draw's bands, the sky-only ones, the full ones and the rows in the sky-only ones)
   bandsDrawn!: { sky: number; full: number; skyRows: number };
   strikeProgram!: ShaderProgram;
@@ -160,6 +178,16 @@ export class Water extends M.Effect {
   // (the footprint-filtered normal and the glossy read of the reflection skipped: the water as it was before them)
   noFilteredNormal!: boolean;
   noGlossyRead!: boolean;
+  // (the cost breakdown's knockouts: see fragment.glsl)
+  noFogRead!: boolean;
+  noAtmos!: boolean;
+  noAirBeyond!: boolean;
+  noSkyShade!: boolean;
+  noMirrorRead!: boolean;
+  noOwnShade!: boolean;
+  noGlint!: boolean;
+  forceFlat!: boolean;
+  bare!: boolean;
   // (the wave hit's march forced off / on with its gates open)
   noWaveHit!: boolean;
   forceWaveHit!: boolean;
@@ -243,10 +271,31 @@ export class Water extends M.Effect {
       this.noRippleGain = false;
       this.noFilteredNormal = false;
       this.noGlossyRead = false;
+      this.noFogRead = false;
+      this.noAtmos = false;
+      this.noAirBeyond = false;
+      this.noSkyShade = false;
+      this.noMirrorRead = false;
+      this.noOwnShade = false;
+      this.noGlint = false;
+      this.forceFlat = false;
+      this.bare = false;
       this.noWaveHit = false;
       this.forceWaveHit = false;
       this.noCrestHide = false;
       this.bandsDrawn = { sky: 0, full: 0, skyRows: 0 };
+      this.farDrawn = { from: 0, to: 0, pixels: 0 };
+    }
+    if (this.caps.floats) {
+      this.half = this.target({ formats: [gl.RGBA16F, gl.RGBA16F, gl.R32F] });
+    }
+  }
+
+  // the canvas's size changed: the half-resolution target for the far water rows made (or made again, the old textures deleted) at half the size, rounded up, here and not at the first frame that draws far water: it is
+  // kept for good, so an object count over later resizes sees only replacements
+  resize(width: number, height: number) {
+    if (this.half && this.farHalf) {
+      this.half.resize(Math.ceil(width / 2), Math.ceil(height / 2));
     }
   }
 
@@ -255,6 +304,7 @@ export class Water extends M.Effect {
       water: [M.FULL_VERTEX, Water.fragment(glsl, M.TEST, caps.floats)],
       waterStrike: [M.FULL_VERTEX, Water.strikeFragment(glsl, M.TEST)],
       waterSky: [M.FULL_VERTEX, Water.skyFragment(glsl, M.TEST, caps.floats)],
+      waterUp: [M.FULL_VERTEX, UPSAMPLE_SOURCE],
     };
   }
 
@@ -353,7 +403,8 @@ export class Water extends M.Effect {
   }
 
   init(programs: Programs) {
-    [this.program, this.strikeProgram, this.skyProgram] = this.ownPrograms(programs, ["water", "waterStrike", "waterSky"]);
+    [this.program, this.strikeProgram, this.skyProgram, this.upProgram] = this.ownPrograms(programs, ["water", "waterStrike", "waterSky", "waterUp"]);
+    this.upProgram.samplers({ uHalfColor: UP_UNITS[1]!, uHalfReflected: UP_UNITS[2]!, uHalfCrest: UP_UNITS[0]! });
     this.skyProgram.samplers({ uFogDirect: M.UNITS.fogDirect, uFogMirror: M.UNITS.fogMirror, uStrikeDirect: M.UNITS.strikeDirect, uStrikeMirror: M.UNITS.strikeMirror, uSkyTable: M.UNITS.sky });
     this.strikeProgram.samplers({ uNoise: M.UNITS.noise, uStrikeShade: M.UNITS.bloomFrom, uEmitter: M.UNITS.work });
     this.program.samplers({
@@ -395,6 +446,9 @@ export class Water extends M.Effect {
     const hitOn = M.TEST && this.noWaveHit ? false : M.TEST && this.forceWaveHit ? this.caps.floats : gate;
     this.waveHitOn = hitOn;
     gl.uniform1i(u.uWaveHit, hitOn ? 1 : 0);
+    gl.uniform1i(u.uWaveHitClip, this.waveHitClip ? 1 : 0);
+    gl.uniform1f(u.uPixelScale, 1);
+    gl.uniform2f(u.uPixelOrigin, 0, 0);
     if (M.TEST) {
       gl.uniform1i(u.uForceWaveHit, this.forceWaveHit && hitOn ? 1 : 0);
     }
@@ -420,6 +474,15 @@ export class Water extends M.Effect {
       gl.uniform1i(u.uNoStrikeWater, this.noStrikeWater ? 1 : 0);
       gl.uniform1i(u.uNoFilteredNormal, this.noFilteredNormal ? 1 : 0);
       gl.uniform1i(u.uNoGlossyRead, this.noGlossyRead ? 1 : 0);
+      gl.uniform1i(u.uNoFogRead, this.noFogRead ? 1 : 0);
+      gl.uniform1i(u.uNoAtmos, this.noAtmos ? 1 : 0);
+      gl.uniform1i(u.uNoAirBeyond, this.noAirBeyond ? 1 : 0);
+      gl.uniform1i(u.uNoSkyShade, this.noSkyShade ? 1 : 0);
+      gl.uniform1i(u.uNoMirrorRead, this.noMirrorRead ? 1 : 0);
+      gl.uniform1i(u.uNoOwnShade, this.noOwnShade ? 1 : 0);
+      gl.uniform1i(u.uNoGlint, this.noGlint ? 1 : 0);
+      gl.uniform1i(u.uForceFlat, this.forceFlat ? 1 : 0);
+      gl.uniform1i(u.uBare, this.bare ? 1 : 0);
     }
     // the bands above the horizon with the sky-only program (the same pixels: lod off draws every band with the full one, the A/B; the Nearness
     // view and the tests' views other than the scene need the full one)
@@ -427,35 +490,109 @@ export class Water extends M.Effect {
     const width = this.camera.width;
     const height = this.camera.height;
     const tile = this.guard.size("water", "band");
-    const first = split ? QualityWaterBands.skyFrom(this.camera) : height;
+    const parts = !split ? [{ from: 0, to: height, sky: false }] : this.bandSplit ? QualityWaterBands.splitBands(this.camera, tile) : QualityWaterBands.bands(this.camera, tile);
+    // the far water's band, drawn at half resolution after the rest (its rows are water rows, never in a sky part); its target is made here, before the draws: making it binds the default framebuffer
+    const far = split && this.farHalf && this.half ? QualityWaterBands.farRows(this.camera, this.camera.eyeY(), M.QualityWater.FAR_HALF_M, 2) : { from: 0, to: 0 };
+    const farOn = far.to > far.from && !!this.half;
+    const target = gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING) as WebGLFramebuffer | null;
+    if (farOn) {
+      this.half!.resize(Math.ceil(width / 2), Math.ceil(height / 2));
+      gl.bindFramebuffer(gl.FRAMEBUFFER, target);
+    }
+    const pieces: { from: number; to: number; sky: boolean }[] = [];
+    for (const part of parts) {
+      if (!farOn || part.sky || part.to <= far.from || part.from >= far.to) {
+        pieces.push(part);
+        continue;
+      }
+      if (part.from < far.from) {
+        pieces.push({ from: part.from, to: far.from, sky: false });
+      }
+      if (part.to > far.to) {
+        pieces.push({ from: far.to, to: part.to, sky: false });
+      }
+    }
     let sky = 0;
     let full = 0;
+    let skyRows = 0;
     gl.bindVertexArray(this.quad.plain);
     gl.enable(gl.SCISSOR_TEST);
     this.guard.begin("water", "band");
     let skyUsed = false;
-    for (let y = 0; y < height; y += tile) {
-      if (y >= first) {
+    for (const part of pieces) {
+      if (part.sky) {
         if (!skyUsed) {
           this.skyProgram.use();
           skyUsed = true;
         }
         sky++;
+        skyRows += part.to - part.from;
       } else {
         full++;
       }
-      gl.scissor(0, y, width, Math.min(tile, height - y));
+      gl.scissor(0, part.from, width, part.to - part.from);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       this.guard.piece();
+    }
+    if (skyUsed || farOn) {
+      this.program.use();
+    }
+    if (farOn) {
+      this.drawFar(far.from, far.to, width, height, tile, target);
     }
     this.guard.end();
     gl.disable(gl.SCISSOR_TEST);
     if (M.TEST) {
-      this.bandsDrawn = { sky, full, skyRows: sky ? height - Math.ceil(first / tile) * tile : 0 };
+      this.bandsDrawn = { sky, full, skyRows };
+      this.farDrawn = farOn ? { from: far.from, to: far.to, pixels: ((far.to - far.from) / 2) * Math.ceil(width / 2) } : { from: 0, to: 0, pixels: 0 };
     }
-    if (skyUsed) {
-      this.program.use();
+  }
+
+  // the far water rows [from, to) at half resolution, inside the water pass's guard section: the water program into the half-resolution target (each fragment the 2 x 2 block around its
+  // centre: uPixelScale 2, uPixelOrigin the band's first row), then the picture's rows from it (the upsample program, its three textures on units that nothing reads after the water's draws, put back
+  // as they were)
+  drawFar(from: number, to: number, width: number, height: number, tile: number, target: WebGLFramebuffer | null) {
+    const gl = this.gl;
+    const half = this.half!;
+    const hw = Math.ceil(width / 2);
+    const hh = (to - from) / 2;
+    const viewport = gl.getParameter(gl.VIEWPORT) as Int32Array;
+    const u = this.program.use();
+    gl.uniform1f(u.uPixelScale, 2);
+    gl.uniform2f(u.uPixelOrigin, 0, from);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, half.framebuffer);
+    gl.viewport(0, 0, hw, hh);
+    const rows = Math.max(1, Math.ceil(tile / 2));
+    for (let y = 0; y < hh; y += rows) {
+      gl.scissor(0, y, hw, Math.min(rows, hh - y));
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      this.guard.piece();
     }
+    gl.uniform1f(u.uPixelScale, 1);
+    gl.uniform2f(u.uPixelOrigin, 0, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target);
+    gl.viewport(viewport[0]!, viewport[1]!, viewport[2]!, viewport[3]!);
+    const saved = UP_UNITS.map((unit) => {
+      gl.activeTexture(gl.TEXTURE0 + unit);
+      return gl.getParameter(gl.TEXTURE_BINDING_2D) as WebGLTexture | null;
+    });
+    UP_UNITS.forEach((unit, i) => {
+      gl.activeTexture(gl.TEXTURE0 + unit);
+      gl.bindTexture(gl.TEXTURE_2D, half.textures[i === 0 ? 2 : i === 1 ? 0 : 1]!);
+    });
+    const up = this.upProgram.use();
+    gl.uniform2i(up.uHalfSize, hw, hh);
+    gl.uniform1f(up.uOriginY, from);
+    for (let y = from; y < to; y += tile) {
+      gl.scissor(0, y, width, Math.min(tile, to - y));
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      this.guard.piece();
+    }
+    UP_UNITS.forEach((unit, i) => {
+      gl.activeTexture(gl.TEXTURE0 + unit);
+      gl.bindTexture(gl.TEXTURE_2D, saved[i]!);
+    });
+    this.program.use();
   }
 }
 

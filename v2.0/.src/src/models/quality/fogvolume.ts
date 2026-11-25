@@ -87,6 +87,18 @@ function columnRay(view: RayView, fx: number, fy: number): number[] {
   return [d[0]! / n, d[1]! / n, d[2]! / n];
 }
 
+// columnRay without allocations: the ray through the column's middle written to out[at .. at + 2] (the same arithmetic)
+function columnRayInto(view: RayView, fx: number, fy: number, out: Float64Array, at: number): void {
+  const x = ((fx / view.across) * (1 + 2 * view.margin) - view.margin) * view.width;
+  const y = ((fy / view.down) * (1 + 2 * view.margin) - view.margin) * view.height;
+  const u = (x - view.width * 0.5 - view.lensX) / view.focal, v = (y - view.height * 0.5 - view.lensY) / view.focal;
+  const d0 = view.forward[0]! + u * view.right[0]! + v * view.up[0]!, d1 = view.forward[1]! + u * view.right[1]! + v * view.up[1]!, d2 = view.forward[2]! + u * view.right[2]! + v * view.up[2]!;
+  const n = Math.hypot(d0, d1, d2);
+  out[at] = d0 / n;
+  out[at + 1] = d1 / n;
+  out[at + 2] = d2 / n;
+}
+
 // the shade grid's coordinates of a place (the shader's shadeCoord): x across the world's width at the depth, the height's square root, the depth's logarithm, the texels' middles
 function shadeCoord(p: number[]): number[] {
   const z = Math.max(-p[2]!, SHADE.NEAR);
@@ -190,6 +202,6 @@ function column(params: Params, d: number[], k: number): { direct: number[]; mir
   return { direct, mirror };
 }
 
-export const QualityFogVolume = { SLICES, NEAR, LOG, NOISE, MULTIPLE, FOUR_PI, AIR_EXTINCTION, TOP_MIP, SHADE, MOON_DIR, MOON_BASE, sliceAt, lodOf, sliceLod, columnRay, shadeCoord, sample3, skyShade, albedoAt, phaseHG, density, fogLight, gather, column };
+export const QualityFogVolume = { SLICES, NEAR, LOG, NOISE, MULTIPLE, FOUR_PI, AIR_EXTINCTION, TOP_MIP, SHADE, MOON_DIR, MOON_BASE, sliceAt, lodOf, sliceLod, columnRay, columnRayInto, shadeCoord, sample3, skyShade, albedoAt, phaseHG, density, fogLight, gather, column };
 
 M.QualityFogVolume = QualityFogVolume;

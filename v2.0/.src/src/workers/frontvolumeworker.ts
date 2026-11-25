@@ -8,6 +8,7 @@
 // - bandsOf(rows, count): the [from, to) ranges of the reduced rows, count bands as even as possible
 //
 // Changelog:
+// 2026-11-24: job answers an empty array when the thread cannot run it (no noise or grid kept: a late band run on the main thread); transferInputOf(input): the recycled buffer goes to the worker with the input.
 // 2026-11-23: new (Feature P1, story P8a).
 import { M } from "../engine/core";
 import { workerScope } from "../platform/scope";
@@ -32,7 +33,11 @@ const NAME = "frontvolume";
 const BANDS = 3;
 
 function job(input: FrontVolumeInput): Uint16Array {
-  return FrontVolumeJob.columns(input);
+  return FrontVolumeJob.canRun(input) ? FrontVolumeJob.columns(input) : new Uint16Array(0);
+}
+
+function transferInputOf(input: FrontVolumeInput): Transferable[] {
+  return input.recycle && input.recycle.buffer.byteLength > 0 ? [input.recycle.buffer as ArrayBuffer] : [];
 }
 
 function transferOf(output: Uint16Array): Transferable[] {
@@ -55,6 +60,6 @@ function serve(): void {
   serveJob(workerScope(), job, transferOf, (input) => FrontVolumeJob.prepare(input as { stretch: number; version: number }));
 }
 
-export const FrontVolumeWorker = { NAME, BANDS, job, transferOf, asks, bandsOf, serve };
+export const FrontVolumeWorker = { NAME, BANDS, job, transferInputOf, transferOf, asks, bandsOf, serve };
 
 M.FrontVolumeWorker = FrontVolumeWorker;

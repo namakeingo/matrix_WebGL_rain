@@ -92,12 +92,13 @@ export class SupportReadout {
   static performanceLines(p: PerformanceReport, nowMs: number = performance.now()): string[] {
     const limit = `limit ${p.limit}: Frame cap ${p.frameCap}, Wallpaper Engine's FPS ${p.wallpaperFps > 0 ? p.wallpaperFps : "-"}`;
     return [
-      `Performance: ${p.fps.toFixed(1)} fps [${averageOf("fps", p.fps, nowMs).toFixed(1)}] (${limit})${p.frozen ? `, frozen ${p.frozenFor} s` : ""}`,
+      `Performance [build ${p.build || "unknown"}]: ${p.fps.toFixed(1)} fps [${averageOf("fps", p.fps, nowMs).toFixed(1)}] (${limit})${p.frozen ? `, frozen ${p.frozenFor} s` : ""}`,
       `  script ${p.scriptMs.toFixed(2)} ms a frame [${averageOf("script", p.scriptMs, nowMs).toFixed(2)}]`,
       p.timer && p.gpuMs !== null ? `  GPU ${p.gpuMs.toFixed(2)} ms a frame [${averageOf("gpu", p.gpuMs, nowMs).toFixed(2)}] (the GPU guard's timer queries)` : `  GPU: not measured (${p.timer ? "no pass timed yet" : "no timer queries"})`,
       `  screen ${p.width} x ${p.height}, drops ${p.drops} falling, splashes ${p.splashes}, strikes ${p.strikes}`,
       SupportReadout.framesLine(p.frames),
       SupportReadout.latencyLine(p.frames),
+      ...(p.stalls ? [p.stalls] : []),
       ...SupportReadout.qualityLines(p.quality, nowMs),
       ...(p.mouse ? [SupportReadout.mouseLine(p.mouse)] : []),
     ];
@@ -347,3 +348,5 @@ export class SupportReadout {
 }
 
 M.SupportReadout = SupportReadout;
+// the build's stamp: webpack's DefinePlugin gives __BUILD__ (a source run without it, the tests' type checks, is the zero hash)
+M.BUILD = typeof __BUILD__ === "string" ? __BUILD__ : "0000000 1970-01-01 00:00";

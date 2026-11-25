@@ -7,6 +7,7 @@
 // - change(time), want(time, bakes, shaded), pump(), setEpoch(seconds): kept as no-ops (the earlier read-back feed's calls)
 //
 // Changelog:
+// 2026-11-25: ship(slot) and forgetWorker(slot?): the versions each task's worker has, and the inline twin (INLINE), for the row bands asked of K tasks.
 // 2026-11-23: story M7b: no GL: the noise generated in the thread, the base shade grid from the CPU (setGrid); the read-backs, the front snapshot's reads and AsyncRead's use removed; registered as M.BaseMistFeed.
 // 2026-11-23: new (Feature P1, story P6 = M7).
 import { M } from "./core";
@@ -17,11 +18,18 @@ export class BaseMistFeed {
   gridVersion = 0;
   private stretch: number | null = null;
   private grid: Uint16Array | null = null;
-  private shipper = new BaseMistJob.Shipper();
+  // what each slot's thread has: a base mist task's worker (slot 0 .. K - 1: the row bands are asked of K tasks) and the render thread's own (INLINE: the inline twin, which runs a band the worker did not answer)
+  private shippers = new Map<number, InstanceType<typeof BaseMistJob.Shipper>>();
+  static readonly INLINE = -1;
 
   // (the effect is not used: the feed holds no GL object)
   constructor(_fog?: unknown) {
     void _fog;
+  }
+
+  // whether a grid is installed (the warm message carries it to the tasks)
+  get hasGrid(): boolean {
+    return this.grid !== null;
   }
 
   get noiseStretch(): number | null {
@@ -67,12 +75,23 @@ export class BaseMistFeed {
     void _seconds;
   }
 
-  ship(): { noise: Uint8Array | null; grid: Uint16Array | null } {
-    return this.shipper.ship(this.noiseVersion, null, this.gridVersion, this.grid || new Uint16Array(0));
+  // the job's data not yet sent to the slot's thread (each version is sent once to each slot)
+  ship(slot = 0): { noise: Uint8Array | null; grid: Uint16Array | null } {
+    let shipper = this.shippers.get(slot);
+    if (!shipper) {
+      shipper = new BaseMistJob.Shipper();
+      this.shippers.set(slot, shipper);
+    }
+    return shipper.ship(this.noiseVersion, null, this.gridVersion, this.grid || new Uint16Array(0));
   }
 
-  forgetWorker(): void {
-    this.shipper.reset();
+  // a worker lost or made again (a slot), or every slot's
+  forgetWorker(slot?: number): void {
+    if (slot === undefined) {
+      this.shippers.forEach((s) => s.reset());
+    } else {
+      this.shippers.get(slot)?.reset();
+    }
   }
 
   release(): void {
@@ -80,7 +99,7 @@ export class BaseMistFeed {
     this.stretch = null;
     this.noiseVersion = 0;
     this.gridVersion = 0;
-    this.shipper.reset();
+    this.shippers.forEach((s) => s.reset());
     BaseMistJob.forget();
   }
 }

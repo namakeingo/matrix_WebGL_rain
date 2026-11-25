@@ -25,6 +25,8 @@ export interface WallpaperPropertyListener {
 }
 
 declare global {
+  // the build's stamp, defined by webpack.config.ts (DefinePlugin)
+  var __BUILD__: string;
   interface Window {
     Matrix3D: Matrix3DNamespace;
     Matrix3DTest?: boolean | Matrix3DTestOptions;

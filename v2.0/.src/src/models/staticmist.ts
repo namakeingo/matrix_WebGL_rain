@@ -145,6 +145,16 @@ function baseNoise(p: number[], read: (q: number[], lod: number) => number, lod 
   return n;
 }
 
+// baseNoise at (x, y, z) read by a scalar reader read3(x, y, z, level): the same octaves and arithmetic without the arrays (the base mist job's, called once for each gather of a slice that is not flat)
+function baseNoiseXYZ(x: number, y: number, z: number, read3: (x: number, y: number, z: number, lod: number) => number, lod = 0): number {
+  let n = 0;
+  for (let i = 0; i < OCTAVES.length; i++) {
+    const o = OCTAVES[i]!;
+    n += o.weight * read3(x / o.size + o.offset[0]!, y / o.size + o.offset[1]!, z / o.size + o.offset[2]!, Math.max(0, lod - Math.log2(o.size)));
+  }
+  return n;
+}
+
 function windowAt(n: number, narrow = 0): number {
   return smooth(0.4 - 0.1 * narrow, 0.6 - 0.2 * narrow, n);
 }
@@ -218,7 +228,7 @@ function needsDraw(state: { change: string; frames: number }): boolean {
 
 export const StaticMist = {
   WINDOW_MEAN, FRONT_WINDOW_MEAN, CLOUD_WINDOW_MEAN, OCTAVES, FEATURE_SIZE, STALE_LIMIT,
-  layerIntensity, totalAtWater, splitStrengths, frontWindow, frontProfile, frontColumn, TAIL_SHARE, TAIL_SCALE, TAIL_FLAT, FLAT_WINDOW, flatHeight, frontDensityLod, TAIL_SCALE_MIN, TAIL_SCALE_MAX, CORE_SCALE, EXPIRY, clampTail, clampScale, frontDensity, expiryHeight, frontDepth, baseDensity, baseNoise,
+  layerIntensity, totalAtWater, splitStrengths, frontWindow, frontProfile, frontColumn, TAIL_SHARE, TAIL_SCALE, TAIL_FLAT, FLAT_WINDOW, flatHeight, frontDensityLod, TAIL_SCALE_MIN, TAIL_SCALE_MAX, CORE_SCALE, EXPIRY, clampTail, clampScale, frontDensity, expiryHeight, frontDepth, baseDensity, baseNoise, baseNoiseXYZ,
   window: windowAt, windowMean, meanOne, coarsen, resolvableDistance, modulation, baseDepth, baseDepthNumeric,
   viewAccumulates, viewAlpha, staleWeight, converged, needsDraw,
 };

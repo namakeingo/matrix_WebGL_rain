@@ -42,7 +42,7 @@ function asks(s: BaseMistAsk): boolean {
 }
 
 function serve(): void {
-  serveJob(workerScope(), job, transferOf, (input) => BaseMistJob.prepare(input as { stretch: number; version: number }));
+  serveJob(workerScope(), job, transferOf, (input) => BaseMistJob.prepare(input as { stretch: number; version: number; grid?: Uint16Array; gridVersion?: number }));
 }
 
 export const BaseMistWorker = { NAME, job, transferOf, asks, serve };

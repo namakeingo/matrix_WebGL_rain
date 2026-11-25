@@ -67,6 +67,8 @@ import "./models/mistbeyond";
 import "./models/mistalbedo";
 import "./models/staticmist";
 import "./models/baselod";
+import "./models/baselodres";
+import "./models/basemistbands";
 import "./models/fogpair";
 import "./models/noisemin";
 import "./models/atmosphere";
@@ -148,6 +150,7 @@ import "./models/shadeaccumlead";
 import "./models/shadebands";
 import "./models/shadedelta";
 import "./models/shadelod";
+import "./models/stallcause";
 import "./models/shadeviewbands";
 import "./workers/basemistworker";
 import "./models/noisefield";
@@ -214,6 +217,7 @@ import type { HdrPath } from "./engine/hdrpath";
 import type { BoltTask } from "./workers/boltworker";
 import type { SceneWorker, SceneTask } from "./workers/sceneworker";
 import type { PerfMeter, FrameHealth, AudioRate, RatePacer } from "./debug/debug";
+import type { Probe, Recorder } from "./models/stallcause";
 import type { SimMusicTask } from "./workers/simmusicworker";
 import type { LayoutJob, LayoutOut } from "./workers/textlayoutworker";
 import type { ShadeFreshJob } from "./workers/shadeaccumworker";
@@ -360,6 +364,13 @@ export class Wallpaper implements WallpaperControl {
   ownHashes: Uint32Array | null;
   onFrame: (now: number) => void;
   perf: PerfMeter | null;
+  // the main-thread sections of a frame timed into the probe's slots (models/stallcause.ts: made once, an array write at a section's end) and the recorder of the frames' causes (the overlay's Stall causes line, Rain3D.stall)
+  stallProbe: Probe | null;
+  stallRecorder: Recorder | null;
+  // the last frame's script time (the quality host's advance and draw, the work the Performance readout's script figure is made of), for the tests
+  lastAdvanceMs: number;
+  lastScriptMs: number;
+  stallSlots: { advance: number[]; update: number[]; follow: number; reflection: number; water: number; rain: number; splashes: number; bolt: number; text: number; bloom: number; tone: number; guardBegin: number; guardEnd: number; fence: number } | null;
   // Debug mode's frames' health (dropped, missed, stalls), and the last frame's fence (null: none)
   health: FrameHealth | null;
   frameFence: WebGLSync | null;
@@ -472,6 +483,8 @@ export class Wallpaper implements WallpaperControl {
   shadeAccumTasks: JobTask<ShadeFreshJob, Uint16Array>[] = [];
   // the base mist's view-change job (workers/basemistworker.ts), asked by Fog.forkBase when Fog.baseWorker is on
   baseMistTask: JobTask<BaseMistInput, Uint16Array> | null = null;
+  // the base mist's tasks for the row bands (M.BaseMistBands.TASKS: baseMistTask is the first)
+  baseMistTasks: JobTask<BaseMistInput, Uint16Array>[] = [];
   // the front volume's job (workers/frontvolumeworker.ts): a JobTask for each band of rows of the reduced columns, made here and started by Fog when Fog.frontWorker is on
   frontVolumeTasks: JobTask<FrontVolumeInput, Uint16Array>[] = [];
   // the base mist's shade grid bands (workers/baseshadeworker.ts): three tasks, each with its own worker
@@ -584,6 +597,11 @@ export class Wallpaper implements WallpaperControl {
     // second; Simulated music's generator, its start, its last array's time and its array; the
     // readouts' parts, made once and filled in place; when Freeze began)
     this.perf = null;
+    this.stallProbe = null;
+    this.stallRecorder = null;
+    this.stallSlots = null;
+    this.lastAdvanceMs = 0;
+    this.lastScriptMs = 0;
     this.health = null;
     this.frameFence = null;
     this.frameFenceAt = 0;
@@ -1160,6 +1178,8 @@ export class Wallpaper implements WallpaperControl {
       this.readout = this.platform.readout(Support);
       this.guard = new M.GpuGuard();
       this.perf = new M.PerfMeter();
+      this.stallProbe = M.StallCause.probe;
+      this.stallRecorder = new M.StallCause.Recorder();
       this.health = new M.FrameHealth();
       this.audioRate = new M.AudioLevels.Rate();
       this.platform.watch(this);
@@ -1366,13 +1386,31 @@ export class Wallpaper implements WallpaperControl {
       },
     });
     this.baseMistTask = baseMist;
+    this.baseMistTasks.push(baseMist);
     this.tasks.basemist = baseMist as unknown as ThreadedTask;
     baseMist.start();
+    // (the other tasks of the row bands: a JobTask each over the same pure job, one worker each, started now so that each is warmed before the first band)
+    for (let i = 1; i < M.BaseMistBands.TASKS; i++) {
+      const extra = new M.JobTask({
+        fn: M.BaseMistWorker.job,
+        name: M.BaseMistWorker.NAME,
+        base: this.platform.base,
+        force: refused("baseMistWorker"),
+        observe: (event) => {
+          if (event.name === "adopt") {
+            this.mark("baseMistWorker");
+          }
+        },
+      });
+      this.baseMistTasks.push(extra);
+      extra.start();
+    }
     // (the front volume's fresh columns: M.FrontVolumeWorker.BANDS JobTasks over models/frontvolumejob.ts, one worker each; made, not started: Fog starts them when its frontWorker option is on)
     for (let i = 0; i < M.FrontVolumeWorker.BANDS; i++) {
       this.frontVolumeTasks.push(
         new M.JobTask({
           fn: M.FrontVolumeWorker.job,
+          transferInput: M.FrontVolumeWorker.transferInputOf,
           name: M.FrontVolumeWorker.NAME,
           base: this.platform.base,
           force: refused("frontVolumeWorker"),
@@ -1653,6 +1691,7 @@ export class Wallpaper implements WallpaperControl {
     this.fog.shadeTask = this.shadeAccumTask;
     this.fog.shadeTasks = this.shadeAccumTasks;
     this.fog.baseTask = this.baseMistTask;
+    this.fog.baseTasks = this.baseMistTasks;
     this.fog.frontTasks = this.frontVolumeTasks;
     this.fog.baseShadeTasks = this.baseShadeTasks;
     this.lightning.onPlanned = (s) => this.fog.announceStrike(s.uid!, s.start, s.flash!);
@@ -1893,9 +1932,13 @@ export class Wallpaper implements WallpaperControl {
   advanceTo(time: number, forked = false) {
     this.mark("firstAdvance");
     this.wavesDeferred = false;
+    const probe = this.stallProbe!;
+    const slots = this.stallSlotsOf();
+    probe.push();
     this.followMusic();
     this.followParallax();
     this.followSpawnBox();
+    probe.pop(slots.follow);
     // (the rain's layouts for the pose the view shows a lead later; no lead: none given, the layouts are for the view now)
     const aheadLead = this.settings.parallax.on && !this.parallaxHold && this.M ? this.M.ParallaxLead.lead(this.settings.parallax.delay) : 0;
     this.rain.setAhead(aheadLead > 0 ? { time, lead: aheadLead, poseAt: (seconds: number) => this.poseAt(seconds * 1000) } : null);
@@ -1904,7 +1947,9 @@ export class Wallpaper implements WallpaperControl {
         this.wavesDeferred = true;
         continue;
       }
+      probe.push();
       this.effects![i].advance(time);
+      probe.pop(slots.advance[i]!);
     }
     this.time = time;
   }
@@ -2046,8 +2091,13 @@ export class Wallpaper implements WallpaperControl {
       this.waveGridTone = this.fog.moonTone;
       this.waves.setFullGrid(M.WaveGrid.choose(M.WaveGrid.brightnessOf({ brightness: this.waveGridBrightness, orbTone: this.waveGridTone }), this.waves.full));
     }
+    const probe = this.stallProbe!;
+    const slots = this.stallSlotsOf();
+    let at: number;
     for (let i = 0; i < this.effects!.length; i++) {
+      probe.push();
       this.effects![i].update(this.time);
+      probe.pop(slots.update[i]!);
     }
     // (calm waves: no mip chain of the reflection, and the water reads its point: set before the reflection is drawn)
     this.reflection.setCalm(this.waves.calm);
@@ -2082,7 +2132,9 @@ export class Wallpaper implements WallpaperControl {
       ri.covered = covers;
       ri.strikes = lit ? ++this.strikeFrames : 0;
       ri.fog = this.fogStamp;
+      at = performance.now();
       this.reflection.render(this.waterState.reflectionPass ? this.drawMirrored : this.drawNothing);
+      probe.add(slots.reflection, performance.now() - at);
     }
     const mode = all || p.water ? "scene" : this.viewOf(p);
     this.exposure.begin(mode === "scene", all && this.bloom.wanted && !nearView);
@@ -2095,7 +2147,9 @@ export class Wallpaper implements WallpaperControl {
       this.water.mirrorMargin[0] = this.reflection.frame.marginX;
       this.water.mirrorMargin[1] = this.reflection.frame.marginY;
       this.fog.bindSky();
+      at = performance.now();
       this.water.draw(mode, this.test);
+      probe.add(slots.water, performance.now() - at);
     }
     // (the crest picture the water's pass just wrote hides the glyphs behind a crest, in the direct pass only, while the wave hit's march is on: waveHitOn, once a frame. Off, calm water
     // included, the picture holds no crest and the programs skip it; no water pass this frame (the tests' parts): the picture was not drawn, nothing is hidden)
@@ -2114,16 +2168,22 @@ export class Wallpaper implements WallpaperControl {
     if (nearView) {
       gl.blendEquation(gl.MAX);
     }
+    at = performance.now();
     if (all || p.rain) {
       this.rain.draw(this.step, false);
     }
+    probe.add(slots.rain, performance.now() - at);
+    at = performance.now();
     if (all || p.splashes) {
       this.splashes.draw(this.step, false);
     }
+    probe.add(slots.splashes, performance.now() - at);
     // (the bolt is light in the air, no surface: not in the Nearness view)
+    at = performance.now();
     if ((all || p.bolt) && !nearView) {
       this.bolt.draw(false);
     }
+    probe.add(slots.bolt, performance.now() - at);
     if (nearView) {
       gl.blendEquation(gl.FUNC_ADD);
     }
@@ -2135,10 +2195,15 @@ export class Wallpaper implements WallpaperControl {
     // (the camera's bloom of the emitters' light, not in the tests' raw views)
     this.exposure.resolveGlyphs();
     // (the clock and the message over the scene, before the bloom: the text blooms)
+    at = performance.now();
     if ((all || p.text) && !nearView) {
       this.text.composite(this.exposure.scene, this.exposure.glyphs.resolved, this.rain.colorState);
     }
+    probe.add(slots.text, performance.now() - at);
+    at = performance.now();
     const bloom = all && !nearView ? this.bloom.render(this.exposure.glyphsTexture, this.exposure.reflectedTexture) : null;
+    probe.add(slots.bloom, performance.now() - at);
+    at = performance.now();
     // (the HDR output: the tone map into the HDR picture, handed to WebGPU; every other frame, and every frame where
     // HDR is not used, the SDR path as before)
     this.exposure.hdr = toHdr;
@@ -2149,6 +2214,32 @@ export class Wallpaper implements WallpaperControl {
     }
     this.bloom.done();
     gl.bindVertexArray(null);
+    probe.add(slots.tone, performance.now() - at);
+  }
+
+  // the probe's slots for the frame's sections, made once (the effects' advances and updates by their classes' names)
+  stallSlotsOf(): NonNullable<Wallpaper["stallSlots"]> {
+    if (!this.stallSlots) {
+      const probe = this.stallProbe!;
+      const names = this.effects!.map((effect) => effect.constructor.name.toLowerCase());
+      this.stallSlots = {
+        advance: names.map((n) => probe.section("advance " + n)),
+        update: names.map((n) => probe.section("update " + n)),
+        follow: probe.section("music, parallax, spawn box"),
+        reflection: probe.section("reflection"),
+        water: probe.section("water draw"),
+        rain: probe.section("rain draw"),
+        splashes: probe.section("splashes draw"),
+        bolt: probe.section("bolt draw"),
+        text: probe.section("text"),
+        bloom: probe.section("bloom"),
+        tone: probe.section("tone map"),
+        guardBegin: probe.section("GPU guard begin (timer queries read)"),
+        guardEnd: probe.section("GPU guard end"),
+        fence: probe.section("fence (clientWaitSync, fenceSync)"),
+      };
+    }
+    return this.stallSlots;
   }
 
   // the water's test view among the parts asked for (sky: the sky and fog alone; none: no water)
@@ -2231,6 +2322,7 @@ export class Wallpaper implements WallpaperControl {
             this.drawn++;
             const work = performance.now() - start;
             this.perf!.frame(now, work);
+            this.stallRecorder!.recordProbe(now, work + (busy ? this.fencePendingMs : 0), this.stallProbe!);
             if (counting) {
               this.health!.frame(now, interval, busy, work, busy ? this.fencePendingMs : 0);
               this.fenceFrame();
@@ -2282,8 +2374,12 @@ export class Wallpaper implements WallpaperControl {
     }
     this.frameFence = null;
     const gl = this.gl;
+    const t0 = performance.now();
     const status = gl.clientWaitSync(fence, 0, 0);
     gl.deleteSync(fence);
+    if (this.stallSlots) {
+      this.stallProbe!.add(this.stallSlots.fence, performance.now() - t0);
+    }
     this.fencePendingMs = performance.now() - this.frameFenceAt;
     return status === gl.TIMEOUT_EXPIRED;
   }
@@ -2291,12 +2387,16 @@ export class Wallpaper implements WallpaperControl {
   // a fence after the frame's GPU work (the next frame reads it)
   fenceFrame(): void {
     const gl = this.gl;
+    const t0 = performance.now();
     if (this.frameFence) {
       gl.deleteSync(this.frameFence);
     }
     this.frameFence = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
     this.frameFenceAt = performance.now();
     this.fineAdd(gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0), this.frameFenceAt);
+    if (this.stallSlots) {
+      this.stallProbe!.add(this.stallSlots.fence, performance.now() - t0);
+    }
   }
 
   // a frame's fence into the pending ones (the oldest let go, counted as the time it waited, when too many are pending), and the
@@ -2390,7 +2490,9 @@ export class Wallpaper implements WallpaperControl {
       pool: null,
       advance: () => {
         const start = performance.now();
+        this.stallProbe!.push();
         this.guard.beginFrame();
+        this.stallProbe!.pop(this.stallSlotsOf().guardBegin);
         // (the splashes' fall is left to the fork's task, and the waves' advance to the end of the fork: the splashes' impacts come in the fork's answer)
         const forks = this.splashes.task !== null && this.quality.forking();
         this.splashes.forking = forks;
@@ -2399,8 +2501,9 @@ export class Wallpaper implements WallpaperControl {
         } finally {
           this.splashes.forking = false;
         }
+        this.lastAdvanceMs = performance.now() - start;
         if (this.qFrame) {
-          this.qFrame.advanceMs = performance.now() - start;
+          this.qFrame.advanceMs = this.lastAdvanceMs;
         }
       },
       jobs: () => {
@@ -2449,16 +2552,20 @@ export class Wallpaper implements WallpaperControl {
         const start = performance.now();
         this.finishAdvance();
         this.render();
+        this.stallProbe!.push();
         this.guard.endFrame();
+        this.stallProbe!.pop(this.stallSlotsOf().guardEnd);
         if (this.readout.shown) {
           this.webgpu.drawPanel(this.time);
         }
+        this.lastScriptMs = this.lastAdvanceMs + (performance.now() - start);
         const f = this.qFrame;
         if (f) {
           this.qFrame = null;
           this.drawn++;
           const work = f.advanceMs + (performance.now() - start);
           this.perf!.frame(f.now, work);
+          this.stallRecorder!.recordProbe(f.now, work + (f.busy ? this.fencePendingMs : 0), this.stallProbe!);
           if (f.counting) {
             this.health!.frame(f.now, f.interval, f.busy, work, f.busy ? this.fencePendingMs : 0);
             this.fenceFrame();
@@ -2867,6 +2974,8 @@ export class Wallpaper implements WallpaperControl {
     p.splashes = this.splashes ? this.splashes.count : 0;
     p.strikes = this.lightning ? this.lightning.slots.filter(Boolean).length : 0;
     p.frames = this.countsHealth() ? this.health!.summary(now) : null;
+    p.stalls = this.stallRecorder!.line(now);
+    p.build = this.M.BUILD;
     p.quality = this.qualityReport();
     p.mouse = {
       on: s.parallax.on,

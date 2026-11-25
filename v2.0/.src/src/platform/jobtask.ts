@@ -10,6 +10,7 @@
 // serveJob is the worker's side: `{ type: "job", id, input }` answered with `{ type: "result", id, output }` (the output's transferables given by transferOf).
 //
 // Changelog:
+// 2026-11-24: option transferInput(input): the transferables of an input's message (a buffer the worker writes its output into and returns); warmWith(input, live?): the message the live workers get may differ from the one kept for a worker made later.
 // 2026-11-23: warmWith(input) and `warmed`: the task posts {type: 'warm', input} to each worker it makes (and to the live ones now) and the worker's serveJob(scope, fn, transferOf, warm) runs warm(input) and answers {type: 'warmed'}; warmed is true only while a worker is alive and every live worker has answered (a worker busy preparing its data is not asked: the caller waits for `warmed`).
 // 2026-11-11: the late answer of a job asked by `ask` (after its timeout) is dropped in arrive, no longer kept for take().
 // 2026-11-10: new.
@@ -69,6 +70,8 @@ class JobHandle implements TaskWorker {
 export interface JobTaskOptions<I, O> extends TaskOptions {
   // the function, run here when no worker is alive
   fn: (input: I) => O;
+  // the transferables of an input's message (default none)
+  transferInput?: (input: I) => Transferable[];
   // the worker's name in the bundle (src/index.ts) and the bundle's URL, or the tests' stand-in: a promise of the worker's link (null: none could be made)
   name?: string;
   base?: string;
@@ -91,6 +94,7 @@ export class JobTask<I, O> extends ThreadedTask<null, JobHandle> {
   private lateRun: number;
   private waiters: Map<number, Waiter<I, O>>;
   private fn: (input: I) => O;
+  private transferInput: ((input: I) => Transferable[]) | undefined;
   private warmInput: unknown;
   private workerName: string;
   private base: string;
@@ -105,6 +109,7 @@ export class JobTask<I, O> extends ThreadedTask<null, JobHandle> {
   constructor(options: JobTaskOptions<I, O>) {
     super(null, options);
     this.fn = options.fn;
+    this.transferInput = options.transferInput;
     this.workerName = options.name || "";
     this.base = options.base || "";
     this.makeLink = options.makeLink;
@@ -136,13 +141,13 @@ export class JobTask<I, O> extends ThreadedTask<null, JobHandle> {
   }
 
   // the data the workers prepare before their first job (a message {type: 'warm', input} to each worker made, and to the live ones now); `warmed` says when every live worker has answered
-  warmWith(input: unknown): void {
+  warmWith(input: unknown, live: unknown = input): void {
     this.warmInput = input;
     for (const slot of this.liveSlots()) {
       const handle = this.workerOf(slot);
       if (handle) {
         handle.warmed = false;
-        handle.link.postMessage({ type: "warm", input });
+        handle.link.postMessage({ type: "warm", input: live });
       }
     }
   }
@@ -192,7 +197,7 @@ export class JobTask<I, O> extends ThreadedTask<null, JobHandle> {
       return id;
     }
     this.flying.add(id);
-    this.workerOf(live[0]!)!.link.postMessage({ type: "job", id, input });
+    this.workerOf(live[0]!)!.link.postMessage({ type: "job", id, input }, this.transferInput ? this.transferInput(input) : undefined);
     return id;
   }
 
@@ -227,7 +232,7 @@ export class JobTask<I, O> extends ThreadedTask<null, JobHandle> {
       }, deadlineMs);
       this.waiters.set(id, { input, resolve, timer });
       this.flying.add(id);
-      this.workerOf(live[0]!)!.link.postMessage({ type: "job", id, input });
+      this.workerOf(live[0]!)!.link.postMessage({ type: "job", id, input }, this.transferInput ? this.transferInput(input) : undefined);
     });
   }
 

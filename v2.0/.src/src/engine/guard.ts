@@ -29,6 +29,7 @@
 // Changelog:
 // 2026-11-04: TypeScript, a module of src/engine/ (was engine/guard.js).
 // 2026-11-11: size() throws an Error naming an unknown kind, in every mode (was undefined or a TypeError).
+// 2026-11-26: noFlush and noQuery (M.TEST): the cost measurements' switches.
 import { M } from "./core";
 
 // a kind's sizes: at the start, the least, the most, and without timer queries
@@ -83,6 +84,9 @@ export class GpuGuard {
   pieces: number;
   frames: number;
   every: number;
+  // (the cost measurements' switches, M.TEST only: no flush after a piece, no query at all)
+  noFlush = false;
+  noQuery = false;
   held: Record<string, number>;
   sizes: Record<string, number>;
   fixed: Record<string, number>;
@@ -243,7 +247,7 @@ export class GpuGuard {
 
   // a section of the frame starts: a pass named `name`, of pieces of a kind
   begin(name: string, kind: string) {
-    if (this.query || !this.adapt || !this.timer) {
+    if (this.query || !this.adapt || !this.timer || (M.TEST && this.noQuery)) {
       return;
     }
     // (a settled pass: timed every `every` frames only)
@@ -268,7 +272,9 @@ export class GpuGuard {
   piece() {
     this.pieces++;
     this.sectionPieces++;
-    this.gl.flush();
+    if (!(M.TEST && this.noFlush)) {
+      this.gl.flush();
+    }
   }
 
   end() {

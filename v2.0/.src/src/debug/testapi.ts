@@ -296,6 +296,26 @@ const makeTestApi = (wallpaper: Wallpaper, ready: Promise<void>) => {
       return sum;
     },
     qualityPoolReport: () => (wallpaper.qualityPool ? wallpaper.qualityPool.report() : null),
+    // the stall attribution (models/stallcause.ts): the recorder of the frames' causes, a frame given its wall-clock ms (the sections and events the frame collected are taken with it), the overlay's line and the Performance readout's lines,
+    // the sections collected for the frame in progress
+    // the last frame's script time (ms): the quality host's advance and draw, the work the Performance readout's script figure is made of
+    scriptMs: () => wallpaper.lastScriptMs,
+    stall: {
+      get recorder() {
+        return wallpaper.stallRecorder!;
+      },
+      frame: (at: number, frameMs: number) => wallpaper.stallRecorder!.recordProbe(at, frameMs, wallpaper.stallProbe!),
+      reset: () => {
+        wallpaper.stallRecorder!.reset();
+        wallpaper.stallProbe!.clear();
+      },
+      line: (nowMs: number) => wallpaper.stallRecorder!.line(nowMs),
+      overlayLines: () => {
+        wallpaper.performanceReport.stalls = wallpaper.stallRecorder!.line(performance.now());
+        return M().SupportReadout.performanceLines(wallpaper.performanceReport);
+      },
+      sections: () => wallpaper.stallProbe!.pending().sections,
+    },
     // the quality model's inputs for the frame as the pool would take them (the rain's: the place of a drop, its levels' inputs)
     qualityParams: () => wallpaper.qualityParamsOf(),
     draw: (seconds: number, parts?: Parts) => {

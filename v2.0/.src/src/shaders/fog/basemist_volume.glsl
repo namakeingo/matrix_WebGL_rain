@@ -21,6 +21,8 @@ uniform vec4 uCoarse;
 uniform float uBase;
 uniform sampler2D uSumDirect;
 uniform sampler2D uSumMirror;
+// the previous slice's picture when its lattice is not this one's (the resolution by distance: models/baselodres.ts): xy the columns of the full volume one of its columns covers, zw its size in columns; zw 0: the same lattice, read at the same texel
+uniform vec4 uPrev;
 const float BASE_HB = ${BASE_HB};
 // the distance from the eye of a base slice's boundary (u = k / BASE_SLICES)
 float baseSliceAt(float u) {
@@ -57,6 +59,12 @@ vec4 baseGather(vec4 acc, vec3 o, vec3 d, float a, float b, float t, bool mirror
   acc.a += density * dt;
   return acc;
 }
+// the previous slice's sums at this column's sample: its own texel, or bilinear between the nodes of the previous lattice (nodes at (x + jitter) its width), the edge's beyond them
+vec4 prevSums(sampler2D s, ivec2 c, vec2 fc) {
+  if (uPrev.z <= 0.0) return texelFetch(s, c, 0);
+  vec2 u = clamp(fc / uPrev.xy - (uAccum.zw + 0.5), vec2(0.0), uPrev.zw - 1.0);
+  return textureLod(s, (u + 0.5) / uPrev.zw, 0.0);
+}
 layout(location = 0) out vec4 outDirect;
 layout(location = 1) out vec4 outMirror;
 void main() {
@@ -66,8 +74,8 @@ void main() {
   vec3 d = columnRay(fc);
   float a = baseSliceAt(float(uSlice) / BASE_SLICES);
   float b = baseSliceAt(float(uSlice + 1) / BASE_SLICES);
-  vec4 direct = uSlice == 0 ? vec4(0.0) : texelFetch(uSumDirect, c, 0);
-  vec4 mirror = uSlice == 0 ? vec4(0.0) : texelFetch(uSumMirror, c, 0);
+  vec4 direct = uSlice == 0 ? vec4(0.0) : prevSums(uSumDirect, c, fc);
+  vec4 mirror = uSlice == 0 ? vec4(0.0) : prevSums(uSumMirror, c, fc);
   // (the direct ray, then the mirrored one from where it meets still water: one gather site in a loop of a count given at run time, so its code is in the program once)
   int rays = d.y < 0.0 ? 2 : 1;
   for (int k = 0; k < rays; k++) {

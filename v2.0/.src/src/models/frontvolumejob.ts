@@ -17,6 +17,8 @@
 // The job keeps its own noise and grid by version (not M.BaseMistJob's: that grid has other layers); it never reads anything from the GPU.
 //
 // Changelog:
+// 2026-11-24: allocation-free steady state: input.recycle (the output written into a buffer the caller sends back and the worker returns), assembleParts into reused buffers, prepare({ stretch, version, gridVersion, front, base }) composing the
+//   grid in the worker (the main thread never builds or clones the 192 layers), canRun(input) (the inline run of a thread with no kept noise or grid answers nothing instead of generating them), hold(version, halves).
 // 2026-11-24: sliceCount, extents and assembleParts: the upload and the assembly of what the frame blends only.
 // 2026-11-23: new (Feature P1, story P8a).
 import { M } from "../engine/core";
@@ -47,6 +49,8 @@ export interface FrontVolumeExtra {
   drop?: Uint8Array;
   cull?: boolean;
   rows?: number[];
+  // a buffer of the output's length to write the output into (sent to the worker, which returns it as the output: no allocation); any other length is ignored
+  recycle?: Uint16Array;
 }
 
 export interface FrontVolumeInput extends FrontVolumeExtra {
@@ -202,7 +206,7 @@ function columns(input: FrontVolumeInput): Uint16Array {
   const [ra, rd] = BaseMistJob.reducedOf(view.across, view.down, input.factor) as [number, number];
   const from = input.rows ? input.rows[0]! : 0, to = input.rows ? input.rows[1]! : rd, rows = to - from;
   const sx = view.across / ra, sy = view.down / rd, covered = slicesCovered(input), cut = cutOf(input);
-  const out = new Uint16Array(covered * 2 * rows * ra * 4);
+  const need = covered * 2 * rows * ra * 4, out = input.recycle && input.recycle.length === need ? input.recycle : new Uint16Array(need);
   const read3 = (u: number[]): number[] => Q.sample3(grid, GRID[0]!, GRID[1]!, GRID[2]!, u);
   const tp = { sigma: P.sigma, time: P.time, tail: P.tail, tailScale: P.tailScale, flat: P.flat, far: P.far, drop: 0, main: P.main, second: P.second, sky: L.sky, moon: L.moon, moonDir: L.moonDir, front: read3, base: L.shaded ? read3 : null, read: kept.reader!, eye, columnWidth: P.columnWidth, focal: P.focal };
   const a: number[] = [], lod: number[] = [];
@@ -272,10 +276,20 @@ function extents(from: number, count: number): number[][] {
 }
 
 // the bands' outputs (each the rows bandRanges[i] of the reduced picture) laid into one array for each extent: the slices [from, to) in the job's layout, nothing else allocated
-function assembleParts(bands: Uint16Array[], bandRanges: number[][], input: FrontVolumeInput, parts: number[][]): Uint16Array[] {
+function assembleParts(bands: Uint16Array[], bandRanges: number[][], input: FrontVolumeInput, parts: number[][], reuse?: Uint16Array[]): Uint16Array[] {
   const [ra, rd] = BaseMistJob.reducedOf(input.view.across, input.view.down, input.factor) as [number, number];
-  return parts.map((e) => {
-    const from = e[0]!, layers = (e[1]! - from) * 2, out = new Uint16Array(layers * rd * ra * 4);
+  return parts.map((e, j) => {
+    const from = e[0]!, layers = (e[1]! - from) * 2, need = layers * rd * ra * 4;
+    // (with `reuse` the buffers are kept by the caller: one of the whole output's size for each extent, made once)
+    let out: Uint16Array;
+    if (reuse) {
+      if (!reuse[j] || reuse[j]!.length < SLICES * 2 * rd * ra * 4) {
+        reuse[j] = new Uint16Array(SLICES * 2 * rd * ra * 4);
+      }
+      out = reuse[j]!.subarray(0, need);
+    } else {
+      out = new Uint16Array(need);
+    }
     bands.forEach((band, i) => {
       const row = bandRanges[i]![0]!, rows = bandRanges[i]![1]! - row;
       for (let l = 0; l < layers; l++) {
@@ -288,8 +302,37 @@ function assembleParts(bands: Uint16Array[], bandRanges: number[][], input: Fron
 }
 
 // the noise generated and kept for a version (a worker's warm message: the first job then finds it)
-function prepare(input: { stretch: number; version: number }): void {
-  keepNoise(input.version, NoiseField.bytes(input.stretch));
+function prepare(input: { stretch: number; version: number; gridVersion?: number; front?: Uint16Array | null; base?: Uint16Array | null }): void {
+  if (kept.noiseVersion !== input.version || kept.reader === null) {
+    keepNoise(input.version, NoiseField.bytes(input.stretch));
+  }
+  if (input.front || input.base) {
+    // (the grid composed here from the front's 96 layers and the base's 96, in a buffer of this thread's own: the sender clones the front alone, the base only when it changed)
+    if (composed === null) {
+      composed = new Uint16Array(192 * PLANE);
+    }
+    if (input.front) {
+      composed.set(input.front.subarray(0, 96 * PLANE), 0);
+    }
+    if (input.base) {
+      composed.set(input.base.subarray(0, 96 * PLANE), 96 * PLANE);
+    }
+    keepGrid(input.gridVersion === undefined ? kept.gridVersion + 1 : input.gridVersion, composed);
+  }
+}
+
+// the grid this thread composes from the front and base layers it is sent
+let composed: Uint16Array | null = null;
+
+// whether this thread can run the input without making its noise or its grid: the noise given or kept, the grid given or kept at the input's version
+function canRun(input: FrontVolumeInput): boolean {
+  const L = input.params.light;
+  return (!!input.noise || (kept.noiseVersion === input.params.noiseVersion && kept.reader !== null)) && (!!L.grid || (kept.gridVersion === L.version && kept.raw !== null));
+}
+
+// the grid kept by this thread for a version (the main thread's, for a run here)
+function hold(version: number, halves: Uint16Array): void {
+  keepGrid(version, halves);
 }
 
 // what the worker has been sent: the version of its grid
@@ -369,6 +412,6 @@ class GridPolicy {
   }
 }
 
-export const FrontVolumeJob = { SLICES, FACTOR, STALE_SECONDS, PERIOD_SECONDS, inputOf, columns, slicesCovered, cutOf, stepsOf, assemble, sliceCount, extents, assembleParts, prepare, forget, Shipper, assembleGrid, GridPolicy };
+export const FrontVolumeJob = { SLICES, FACTOR, STALE_SECONDS, PERIOD_SECONDS, inputOf, columns, slicesCovered, cutOf, stepsOf, assemble, sliceCount, extents, assembleParts, canRun, hold, prepare, forget, Shipper, assembleGrid, GridPolicy };
 
 M.FrontVolumeJob = FrontVolumeJob;

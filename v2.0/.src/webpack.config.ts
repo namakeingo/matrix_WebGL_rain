@@ -13,6 +13,7 @@
 //   out=FILE          the bundle written to FILE (from the repository's root) instead
 //   coverage=1        a bundle for measuring test coverage (npm run coverage:matrix_web_3d_rain): not minified, its modules not merged, with a source map beside it (never the shipped bundle)
 import path from "node:path";
+import { execSync } from "node:child_process";
 import webpack from "webpack";
 import TerserPlugin from "terser-webpack-plugin";
 import type { Compiler, Configuration, ResolveData, WebpackPluginInstance } from "webpack";
@@ -20,6 +21,21 @@ import type { Compiler, Configuration, ResolveData, WebpackPluginInstance } from
 const HERE = import.meta.dirname;
 const REPO = path.resolve(HERE, "..", "..");
 const SRC = path.join(HERE, "src");
+
+// the build's stamp, M.BUILD (src/debug/readout.ts): the commit's short hash, a '+' when the working tree has changes, the build's UTC date and minute: '0bb36fc+ 2026-11-24 23:43'
+// (a git that fails gives the hash 0000000); the same text in the page's and every worker's copy of the bundle, which is one build
+function buildStamp(): string {
+  const git = (args: string): string => {
+    try {
+      return execSync(`git ${args}`, { cwd: REPO, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    } catch {
+      return "";
+    }
+  };
+  const hash = git("rev-parse --short=7 HEAD") || "0000000";
+  const dirty = git("status --porcelain") !== "" ? "+" : "";
+  return `${hash}${dirty} ${new Date().toISOString().slice(0, 16).replace("T", " ")}`;
+}
 
 // the registering function every bundle starts with: it records its body by name and runs it
 // (the same text as platform/workers.ts's FACTORY)
@@ -50,7 +66,7 @@ class RegisterBundle implements WebpackPluginInstance {
 }
 
 export default (env: BuildEnv = {}): Configuration => {
-  const plugins: WebpackPluginInstance[] = [new RegisterBundle()];
+  const plugins: WebpackPluginInstance[] = [new RegisterBundle(), new webpack.DefinePlugin({ __BUILD__: JSON.stringify(buildStamp()) })];
   if (env.swap) {
     const [from, to] = String(env.swap).split("=");
     const target = path.resolve(SRC, from);

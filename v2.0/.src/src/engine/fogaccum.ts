@@ -12,6 +12,8 @@
 // The held volume stays on its units (M.UNITS.fogDirect, fogMirror); the units of the sums (fogSum, fogSumMirror) carry the pictures of this build during it and the volume's own sums after it.
 //
 // Changelog:
+// 2026-11-24: WARMED (the programs warm() draws once: the five this file draws); the job's texture array made at its real size and drawn once with the blendArray program and given one upload at the effect's warm-up when the front worker is on (the first accumulating
+//   frame after a view change no longer pays the driver's first draw of the program on that array, nor the array's creation); firstDraw (M.TEST: the ms of the first draw of each program) and uploadStats (M.TEST: the upload calls' ms and bytes).
 // 2026-11-24: upload(output, fresh, ranges?): one texSubImage3D for each range of slices (the layers of those slices, a view of the output); the generation and the jitter are the slice's (sliceGeneration, sliceJitter): a slice is blended
 //   iff the data its layers hold has not been blended; dropFresh() and a new array drop every slice's data; uploadedLayers.
 // 2026-11-23: warm(): the program fogAccumBlendArray drawn once over a one-pixel array.
@@ -33,6 +35,11 @@ import SEED_SOURCE from "../shaders/fog/fogaccum_seed.glsl";
 import BLEND_SOURCE from "../shaders/fog/fogaccum_blend.glsl";
 import BLEND_ARRAY_SOURCE from "../shaders/fog/fogaccum_blend_array.glsl";
 import STORE_SOURCE from "../shaders/fog/fogaccum_store.glsl";
+import { StallCause } from "../models/stallcause";
+
+// the stall probe's event counts of the texture uploads (models/stallcause.ts)
+const E_UP_CALLS = StallCause.probe.event("uploadCalls");
+const E_UP_BYTES = StallCause.probe.event("uploadBytes");
 
 // the columns of the volume that a column of the fresh picture covers, each way (the tests change it: FogAccumulation.factor)
 const REDUCE = 2;
@@ -67,6 +74,9 @@ interface Volumes {
 }
 
 export class FogAccumulation {
+  // the programs warm() draws once (the driver finishes a program at its first draw): every program this class draws
+  static readonly WARMED = ["fogAccumVolume", "fogAccumSeed", "fogAccumBlend", "fogAccumBlendArray", "fogAccumStore"];
+
   effect: Fog;
   gl: WebGL2RenderingContext;
   slices: number;
@@ -87,6 +97,9 @@ export class FogAccumulation {
   sliceJitter: number[][];
   blendedGeneration: Uint32Array;
   uploadedLayers: number;
+  // (the tests' timings: the ms of the first draw of each program, and of the upload's calls)
+  firstDraw: Record<string, number>;
+  uploadStats: { calls: number; ms: number; bytes: number; max: number; array: number };
   freshDraws: number;
   uploadCalls: number;
   blends: number;
@@ -130,6 +143,8 @@ export class FogAccumulation {
     this.sliceJitter = Array.from({ length: slices }, () => [0.5, 0.5, 0.5]);
     this.blendedGeneration = new Uint32Array(slices);
     this.uploadedLayers = 0;
+    this.firstDraw = {};
+    this.uploadStats = { calls: 0, ms: 0, bytes: 0, max: 0, array: 0 };
     this.freshDraws = 0;
     this.uploadCalls = 0;
     this.blends = 0;
@@ -215,37 +230,69 @@ export class FogAccumulation {
     }
   }
 
+  // one full-screen draw of the program just made current (the first of each program timed under M.TEST: the driver's compile shows there)
+  private draw(name: string): void {
+    if (M.TEST && !(name in this.firstDraw)) {
+      const t0 = performance.now();
+      this.effect.quad.drawFull();
+      this.firstDraw[name] = Math.round((performance.now() - t0) * 100) / 100;
+      return;
+    }
+    this.effect.quad.drawFull();
+  }
+
+  // the job's texture array at a size (made at the first use and when the size changes: its slices' data is then gone); whether it was made
+  private ensureArray(ra: number, rd: number): boolean {
+    const gl = this.gl;
+    if (this.array !== null && ra === this.arrayAcross && rd === this.arrayDown) {
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.array);
+      return false;
+    }
+    const t0 = M.TEST ? performance.now() : 0;
+    if (this.array !== null) {
+      gl.deleteTexture(this.array);
+    }
+    this.array = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.array);
+    gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, gl.RGBA16F, ra, rd, 2 * this.slices);
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    this.arrayAcross = ra;
+    this.arrayDown = rd;
+    this.sliceGeneration.fill(0);
+    if (M.TEST) {
+      this.uploadStats.array += performance.now() - t0;
+    }
+    return true;
+  }
+
   // a job's output taken in: for each range [from, to) of slices (all the covered ones without ranges) ONE texSubImage3D of the layers of those slices (2 k direct, 2 k + 1 mirrored: a view of the output, whose first slice is
   // fresh.first, 0 for a whole output) into the texture array of the reduced size (the volume's columns divided by the job's factor); the slices of the ranges take the generation of the upload and its jitter (each slice is blended once
   // per generation, with its own jitter); the generation of the upload
   upload(output: Uint16Array, fresh: { factor: number; covered: number; jitter: number[]; first?: number }, ranges?: number[][]): number {
     const gl = this.gl, columns = this.effect.columns, ra = FogAccum.reduced(columns[0]!, fresh.factor), rd = FogAccum.reduced(columns[1]!, fresh.factor);
     gl.activeTexture(gl.TEXTURE0 + M.UNITS.fogSum);
-    if (this.array === null || ra !== this.arrayAcross || rd !== this.arrayDown) {
-      if (this.array !== null) {
-        gl.deleteTexture(this.array);
-      }
-      this.array = gl.createTexture();
-      gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.array);
-      gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, gl.RGBA16F, ra, rd, 2 * this.slices);
-      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      this.arrayAcross = ra;
-      this.arrayDown = rd;
-      this.sliceGeneration.fill(0);
-    } else {
-      gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.array);
-    }
+    this.ensureArray(ra, rd);
     const generation = ++this.freshGeneration, plane = ra * rd * 4, first = fresh.first || 0;
     for (const range of ranges || [[0, fresh.covered]]) {
       const from = range[0]!, to = Math.min(range[1]!, fresh.covered);
       if (to <= from) {
         continue;
       }
+      const callStart = M.TEST ? performance.now() : 0;
       gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, 2 * from, ra, rd, 2 * (to - from), gl.RGBA, gl.HALF_FLOAT, from === first && 2 * (to - from) * plane === output.length ? output : output.subarray((from - first) * 2 * plane, (to - first) * 2 * plane));
+      if (M.TEST) {
+        const took = performance.now() - callStart, stats = this.uploadStats;
+        stats.calls++;
+        stats.ms += took;
+        stats.bytes += 2 * (to - from) * plane * 2;
+        stats.max = Math.max(stats.max, took);
+      }
       this.uploadCalls++;
+      StallCause.probe.count(E_UP_CALLS);
+      StallCause.probe.count(E_UP_BYTES, 2 * (to - from) * plane * 2);
       this.uploadedLayers += 2 * (to - from);
       for (let k = from; k < to; k++) {
         this.sliceGeneration[k] = generation;
@@ -291,7 +338,7 @@ export class FogAccumulation {
     gl.uniform1i(s.uSlice, 0);
     gl.uniform4f(s.uMap, sx, sy, 0, 0);
     gl.uniform3f(s.uVolume, this.across, this.down, light.layers);
-    this.effect.quad.drawFull();
+    this.draw("seed");
     this.bindSums(this.chain[0]![0]!, this.chain[0]![1]!);
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.chainFramebuffers[1]!);
     const u = this.volume.use();
@@ -303,7 +350,7 @@ export class FogAccumulation {
     gl.uniform4f(u.uAccum, sx - 1, sy - 1, 0, 0);
     gl.uniform1f(u.uAccumZ, 0.5);
     this.effect.testValues(this.volume);
-    this.effect.quad.drawFull();
+    this.draw("volume");
     gl.viewport(0, 0, this.across, this.down);
     this.bindSums(this.chain[1]![0]!, this.chain[1]![1]!);
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.blendFramebuffer);
@@ -312,11 +359,11 @@ export class FogAccumulation {
     gl.uniform1f(b.uAlpha, 1);
     gl.uniform4f(b.uMap, 1 / sx, 1 / sy, 0, 0);
     gl.uniform4f(b.uSize, ra, rd, ra, rd);
-    this.effect.quad.drawFull();
+    this.draw("blend");
     this.bindSums(this.blended[0]!, this.blended[1]!);
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.chainFramebuffers[0]!);
     this.store.use();
-    this.effect.quad.drawFull();
+    this.draw("store");
     // (the job's blend: over a one-pixel array of two layers, into the blended picture)
     const array = gl.createTexture();
     gl.activeTexture(gl.TEXTURE0 + M.UNITS.fogSum);
@@ -332,9 +379,26 @@ export class FogAccumulation {
     gl.uniform1f(a.uAlpha, 1);
     gl.uniform4f(a.uMap, 1 / sx, 1 / sy, 0, 0);
     gl.uniform4f(a.uSize, 1, 1, 1, 1);
-    this.effect.quad.drawFull();
+    this.draw("blendArray");
     gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
     gl.deleteTexture(array);
+    // (the job's array at its real size, drawn once and given one upload, when the front worker is on: its first use is then not the first accumulating frame after a view change)
+    const fx = this.effect as unknown as { frontWorker?: boolean; frontFactorNow?: () => number; columns: number[] };
+    if (fx.frontWorker && typeof fx.frontFactorNow === "function") {
+      const ra2 = FogAccum.reduced(fx.columns[0]!, fx.frontFactorNow()), rd2 = FogAccum.reduced(fx.columns[1]!, fx.frontFactorNow());
+      gl.activeTexture(gl.TEXTURE0 + M.UNITS.fogSum);
+      this.ensureArray(ra2, rd2);
+      gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, 0, ra2, rd2, 2, gl.RGBA, gl.HALF_FLOAT, new Uint16Array(ra2 * rd2 * 8));
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.blendFramebuffer);
+      gl.viewport(0, 0, this.across, this.down);
+      const w = this.blendArray.use();
+      gl.uniform1i(w.uSlice, 1);
+      gl.uniform1i(w.uLayer, 0);
+      gl.uniform1f(w.uAlpha, 1);
+      gl.uniform4f(w.uMap, 1 / sx, 1 / sy, 0, 0);
+      gl.uniform4f(w.uSize, ra2, rd2, ra2, rd2);
+      this.draw("blendArray");
+    }
     gl.disable(gl.SCISSOR_TEST);
     this.bindSums(light.sums[0]!, light.sums[1]!);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -375,7 +439,7 @@ export class FogAccumulation {
       gl.uniform1i(u.uSlice, from - 1);
       gl.uniform4f(u.uMap, sx, sy, jx, jy);
       gl.uniform3f(u.uVolume, this.across, this.down, light.layers);
-      this.effect.quad.drawFull();
+      this.draw("seed");
     }
     for (let k = from; k < to; k++) {
       // the fresh slice at the reduced columns, from the chain's picture of the slice before
@@ -396,7 +460,7 @@ export class FogAccumulation {
       gl.uniform4f(u.uAccum, sx - 1, sy - 1, jx, jy);
       gl.uniform1f(u.uAccumZ, this.jitter[2]!);
       this.effect.testValues(this.volume);
-      this.effect.quad.drawFull();
+      this.draw("volume");
       if (timedFresh) {
         guard.end();
       }
@@ -410,7 +474,7 @@ export class FogAccumulation {
       gl.uniform1f(b.uAlpha, FogAccum.alpha(this.counts[k]!, n));
       gl.uniform4f(b.uMap, 1 / sx, 1 / sy, jx, jy);
       gl.uniform4f(b.uSize, ra, rd, ra, rd);
-      this.effect.quad.drawFull();
+      this.draw("blend");
       if (timedBlend) {
         guard.end();
       }
@@ -420,7 +484,7 @@ export class FogAccumulation {
       gl.bindFramebuffer(gl.FRAMEBUFFER, light.slices[k]!);
       const timedStore = time("store", k);
       this.store.use();
-      this.effect.quad.drawFull();
+      this.draw("store");
       if (timedStore) {
         guard.end();
       }
@@ -458,13 +522,13 @@ export class FogAccumulation {
       gl.uniform1f(b.uAlpha, FogAccum.alpha(this.counts[k]!, n));
       gl.uniform4f(b.uMap, 1 / sx, 1 / sy, jx, jy);
       gl.uniform4f(b.uSize, ra, rd, ra, rd);
-      this.effect.quad.drawFull();
+      this.draw("blendArray");
       this.counts[k] = Math.min(255, this.counts[k]! + 1);
       this.blendedGeneration[k] = generation;
       this.bindSums(this.blended[0]!, this.blended[1]!);
       gl.bindFramebuffer(gl.FRAMEBUFFER, light.slices[k]!);
       this.store.use();
-      this.effect.quad.drawFull();
+      this.draw("store");
       this.blends++;
       if (++done % each === 0) {
         guard.piece();

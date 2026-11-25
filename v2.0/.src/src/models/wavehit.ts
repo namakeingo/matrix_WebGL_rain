@@ -13,6 +13,7 @@
 //
 // Changelog:
 // 2026-11-13: new.
+// 2026-11-25: clipDepth (the march's far end at the reach).
 import { M } from "../engine/core";
 
 const THRESHOLD_PX = 1;
@@ -41,6 +42,15 @@ function hitDistance(flatDistance: number, eyeHeight: number, plateau: number): 
   return flatDistance * (1 - plateau / eyeHeight);
 }
 
-export const WaveHit = { THRESHOLD_PX, shiftPx, reach, rowsBelowHorizon, globalOn, blockNeeds, hitDistance };
+// the depth the march ends at: the flat hit's depth zFar, or the reach when that is nearer (a block past the reach shifts the picture by under the threshold and counts as 0, so the march
+// there finds nothing); zFar for a threshold of 0 (the forced march has no reach), 0 for no crest
+function clipDepth(zFar: number, top: number, focal: number, thresholdPx: number): number {
+  if (thresholdPx <= 0) {
+    return zFar;
+  }
+  return top > 0 ? Math.min(zFar, reach(top, focal, thresholdPx)) : 0;
+}
+
+export const WaveHit = { THRESHOLD_PX, shiftPx, reach, rowsBelowHorizon, globalOn, blockNeeds, hitDistance, clipDepth };
 
 M.WaveHit = WaveHit;

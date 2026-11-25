@@ -22,6 +22,17 @@
 // time input.
 //
 // Changelog:
+// 2026-11-25: fresh.first (the job or band is the first applied of its accumulation, or of its rows): frame treats it as frame 0 whatever `index`: the retired slices are drawn at weight 1; a retired slice the output does not cover is not drawn at all (never blended from the last covered slice).
+// 2026-11-25: the tests' diagnostic switches of the row bands (M.TEST only): noBandUpload (the band's sub-rectangle upload is skipped: the content is garbage), noBandBlend (no blend or store of a band's frame) and wholeBandUpload (the band's rows are written into a CPU copy of the class's whole array and the WHOLE array is uploaded:
+//   a partial update against a full one), to tell which of the band's costs a later pass pays for.
+// 2026-11-25: story B (M.BaseMistBands): frame(.., fresh) with fresh.band = { from, to, core, head } (and fresh.factors) applies ONE ROW BAND of a pass: the finest class's rows [from, to) are uploaded as one sub-rectangle texSubImage3D (the head band also the coarser classes whole), the blends
+//   and the stores of every slice are scissored to the band's core rows in the volume's columns (y from floor(core0 sy) to floor(core1 sy), the last band to the top: the bands partition the rows), `index` is the PASS of those rows (pass 0 blends the retired slices at weight 1, a later pass none of them), lastBand = { pass, core, head }.
+// 2026-11-25: baseLodRes default true (on by decision; the paired cost showed no change in the pass time: -0.03 ms change window, +0.09 ms base mist pass, floor 0.09 ms; the picture is within the off-against-off floors).
+//   warm() makes the chains of the table's factors only with baseLodRes, and the job's class arrays only with the base worker option.
+// 2026-11-24: story 2 of the base mist's resolution by distance (M.BaseLodRes): with baseLodRes (default true) the GPU's slice k is drawn on the chain of its own factor (the path's factor or the stride by distance, whichever is larger), the previous slice's picture read
+//   through uPrev (bilinear between the lattice's nodes) when the lattice changed; a job's output with `factors` is uploaded by class (one texSubImage3D for each distinct factor, into that chain's array) and each blend reads its class's array; freshPixels counts the fresh draws' pixels, jobBytes the job bytes uploaded.
+// 2026-11-24: story 1 of the base mist's resolution by distance: the flat slices (M.BaseLod.retired) are drawn in an accumulation's frame 0 with the blend weight 1 and not at all from frame 1 on (retireFlat, retiredSlices, retireFrom()); the cut layer
+//   is written only when its counts changed or the volume's textures are not the ones it was written into (cutOnChange, cutUploads, M.BaseLod.cutChanged).
 // 2026-11-23: story M7b: a job's output is uploaded WHOLE with ONE texSubImage3D into a 2D-array texture of the chain (layer 2 k direct, 2 k + 1 mirrored: the job's order) and the blend is the program fogAccumBlendArray (uLayer = 2 min(k, covered - 1); a job holds only the slices under the plan's largest count); perSlice (the tests' option) keeps the per-slice upload into the pair; the probe reads the array's layers.
 // 2026-11-23: sliceSums(list): the tests' statistics, the direct volume's sums of the light and the optical depth over the cells the plan reads, by slice.
 // 2026-11-23: the tests' hooks: frame(..., job, gpuFactor) runs the GPU's fresh pass at a given reduction (the hop-by-hop comparison with a job's output at the same factor); probe lists slices whose uploaded planes are read back into probed.
@@ -39,8 +50,20 @@ import type { FogQualityView } from "../models/quality/fog";
 import { BaseLod } from "../models/baselod";
 import { StaticMist } from "../models/staticmist";
 import { FogAccum } from "../models/fogaccum";
+import { BaseLodRes } from "../models/baselodres";
 import { MIST_HEIGHT, AIR_EXTINCTION, COLOUR_LO, COLOUR_HI } from "../materials/fog";
 import VOLUME_SOURCE from "../shaders/fog/basemist_volume.glsl";
+import { StallCause } from "../models/stallcause";
+
+// the stall probe's event counts of the texture uploads (models/stallcause.ts)
+const E_UP_CALLS = StallCause.probe.event("uploadCalls");
+const E_UP_BYTES = StallCause.probe.event("uploadBytes");
+// the sections of a base mist frame (the stall probe: own time, what is inside a section is not counted twice)
+const P = StallCause.probe;
+const S_UPLOAD = P.section("base mist: job output upload (texSubImage3D)");
+const S_PLAN = P.section("base mist: plan (cullView, BaseLod)");
+const S_DRAWS = P.section("base mist: slice draws submitted (fresh, blend, store, guard pieces)");
+const S_CUT = P.section("base mist: cut layer build and upload (texSubImage3D)");
 
 const FAR = 5000;
 const NEAR = QualityFog.SLICE_NEAR;
@@ -56,6 +79,8 @@ const LOG = Math.log(1 + FAR / NEAR);
 const ALBEDO = { size: 40, offset: [0.37, 0.11, 0.53] };
 // the columns of the volume that a column of the fresh picture covers, each way, in an accumulation frame
 const REDUCE = 2;
+// the factor of the job's own path (M.BaseMistJob.FACTOR): the classes of its output are made at warm-up
+const JOB_FACTOR = 8;
 
 const sliceStart = (k: number): number => NEAR * (Math.exp((k / SLICES) * LOG) - 1);
 const thickness = (k: number): number => sliceStart(k + 1) - sliceStart(k);
@@ -79,6 +104,39 @@ const cutLayer = (slices: ArrayLike<number>, across: number, down: number): Floa
   }
   return out;
 };
+// the cut layer kept between builds: one array per size, refilled in place only when the counts change
+class CutLayer {
+  builds = 0;
+  allocations = 0;
+  changed = false;
+  private data: Float32Array | null = null;
+  private last: number[] = [];
+  of(counts: ArrayLike<number>, across: number, down: number): Float32Array {
+    const n = across * down;
+    let data = this.data;
+    if (data === null || data.length !== n * 4) {
+      data = this.data = new Float32Array(n * 4);
+      this.allocations++;
+      this.last = [];
+    }
+    let same = this.builds > 0 && this.last.length === n;
+    for (let i = 0; same && i < n; i++) {
+      if (this.last[i] !== (counts[i] ?? 1)) {
+        same = false;
+      }
+    }
+    this.changed = !same;
+    if (!same) {
+      for (let i = 0; i < n; i++) {
+        const c = counts[i] ?? 1;
+        this.last[i] = c;
+        data[i * 4] = Math.max(1, c);
+      }
+      this.builds++;
+    }
+    return data;
+  }
+}
 
 interface Decision {
   draw: boolean;
@@ -90,6 +148,12 @@ interface Decision {
 export interface BaseMistFresh {
   factor: number;
   output: Uint16Array;
+  // the factor of each slice's lattice (M.BaseLodRes.table): the output is then M.BaseMistJob.layoutOf's, by class
+  factors?: Uint8Array;
+  // a row band of a pass (M.BaseMistBands; with factors): the output is the band's layout (M.BaseLodRes.layoutOf's band); the band's rows of the finest class are uploaded and blended, its core rows are the ones scissored
+  band?: { from: number; to: number; core: number[]; head: boolean };
+  // this output is the first applied of its accumulation (of its rows, for a band): the retired slices are refreshed by it whatever its index
+  first?: boolean;
 }
 
 // the builds' state machine
@@ -237,6 +301,29 @@ export class BaseMistVolume {
   exactBuilds: number;
   // the volume program's slice draws made since the start (the GPU's fresh pass: an upload of a job's output makes none)
   freshDraws: number;
+  // the exact economies (story 1): retireFlat (default true; false is the earlier build) retires the flat slices after an accumulation's frame 0, cutOnChange (default true) writes the cut layer only when it changed; retiredSlices counts the slices
+  // skipped as retired, cutUploads the texSubImage3D calls of the cut layer; cutCounts and cutVolumes are what the cut layer was last written from and into
+  retireFlat: boolean;
+  cutOnChange: boolean;
+  // the resolution by distance (story 2; default true: on by decision, though it showed no gain in the pass time: change window all passes -0.03 ms, base mist pass +0.09 ms against a floor of 0.09 ms; false is every slice at the path's factor), the pixels of the fresh draws' viewports and the bytes of the job outputs uploaded, since the start
+  baseLodRes: boolean;
+  freshPixels: number;
+  jobBytes: number;
+  retiredSlices: number;
+  // the row band applied last (story B): its pass, core rows and whether it was the head; null before one
+  lastBand: { pass: number; core: number[]; head: boolean; epoch?: number } | null;
+  // the tests' count: the retired slices blended at weight 1 by the bands of pass 0, by the band's first core row
+  bandRetired: Record<number, number>;
+  // the tests' diagnostic switches (M.TEST only; see the changelog)
+  noBandUpload: boolean;
+  noBandBlend: boolean;
+  wholeBandUpload: boolean;
+  private bandShadow: Map<number, Uint16Array>;
+  cutUploads: number;
+  // the cut layer's writes made though its counts and its textures were the ones last written (what cutOnChange saves: 0 with it on)
+  cutRedundant: number;
+  private cutCounts: Uint16Array | null;
+  private cutVolumes: WebGLTexture[] | null;
   // the tests' probe: the slices whose uploaded pair is read back right after the upload (null: none), and what was read (the pair's direct and mirror pictures, RGBA floats, rows from the bottom)
   probe: number[] | null;
   probed: Map<number, { direct: Float32Array; mirror: Float32Array }>;
@@ -249,6 +336,18 @@ export class BaseMistVolume {
   private planKey: string;
   private planned: { slices: Uint16Array; levels: Uint8Array } | null;
   private chains: Chain[];
+  // the table of factors made for a focal and a path factor, and the layout of a job's output by class (kept while the factors, the covered slices and the columns are the same)
+  private tableFocal: number;
+  private tableBase: number;
+  private table: Uint8Array | null;
+  private layoutFactors: Uint8Array;
+  private layoutCovered: number;
+  private layoutAcross: number;
+  private layoutDown: number;
+  private layout: ReturnType<typeof BaseLodRes.layoutOf> | null;
+  private classOf: Uint8Array;
+  private placeOf: Uint8Array;
+  readonly cut = new CutLayer();
   private blended: Pair | null;
   private size: string;
 
@@ -267,6 +366,22 @@ export class BaseMistVolume {
     this.drawFrames = 0;
     this.exactBuilds = 0;
     this.freshDraws = 0;
+    this.retireFlat = true;
+    this.cutOnChange = true;
+    this.baseLodRes = true;
+    this.freshPixels = 0;
+    this.jobBytes = 0;
+    this.retiredSlices = 0;
+    this.lastBand = null;
+    this.bandRetired = {};
+    this.noBandUpload = false;
+    this.noBandBlend = false;
+    this.wholeBandUpload = false;
+    this.bandShadow = new Map();
+    this.cutUploads = 0;
+    this.cutRedundant = 0;
+    this.cutCounts = null;
+    this.cutVolumes = null;
     this.probe = null;
     this.probed = new Map();
     this.audit = { builds: 0, slices: 0, cells: 0, full: 0, culledColumns: 0, flatSlices: 0 };
@@ -275,8 +390,23 @@ export class BaseMistVolume {
     this.planKey = "";
     this.planned = null;
     this.chains = [];
+    this.tableFocal = 0;
+    this.tableBase = 0;
+    this.table = null;
+    this.layoutFactors = new Uint8Array(SLICES);
+    this.layoutCovered = 0;
+    this.layoutAcross = 0;
+    this.layoutDown = 0;
+    this.layout = null;
+    this.classOf = new Uint8Array(SLICES);
+    this.placeOf = new Uint8Array(SLICES);
     this.blended = null;
     this.size = "";
+  }
+
+  // the first slice an accumulation's frames from 1 on do not draw (the flat slices are retired): SLICES without the economy or the level of detail
+  retireFrom(): number {
+    return this.retireFlat && this.effect.baseLodActive() ? BaseLod.firstFlat(this.focal) : SLICES;
   }
 
   get converged(): boolean {
@@ -340,6 +470,32 @@ export class BaseMistVolume {
     return chain;
   }
 
+  // the chain of a factor already made by chain() in this frame (no string made: a lookup a slice); made if absent
+  private chainOf(factor: number): Chain {
+    for (const c of this.chains) {
+      if (c.factor === factor) {
+        return c;
+      }
+    }
+    return this.chain(factor);
+  }
+
+  // the texture array of a chain (2 x SLICES layers of the chain's size), made if absent
+  private ensureArray(chain: Chain): WebGLTexture {
+    const gl = this.gl;
+    if (chain.array === null) {
+      chain.array = gl.createTexture();
+      gl.activeTexture(gl.TEXTURE0 + M.UNITS.fogSum);
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, chain.array);
+      gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, gl.RGBA16F, chain.across, chain.down, 2 * SLICES);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    }
+    return chain.array;
+  }
+
   // the pictures let go (the columns changed, or the effect is destroyed)
   release(): void {
     const gl = this.gl;
@@ -353,8 +509,13 @@ export class BaseMistVolume {
       }
     }
     this.chains = [];
+    this.layout = null;
+    this.layoutCovered = 0;
     this.blended = null;
     this.size = "";
+    // (the cut layer is written again into whatever textures the next build has: a size change makes new ones, and the effect's destroy ends the volume)
+    this.cutCounts = null;
+    this.cutVolumes = null;
   }
 
   private bindSums(pair: WebGLTexture[]): void {
@@ -387,19 +548,27 @@ export class BaseMistVolume {
 
   // THE SEAM: the fresh slice k of this frame, at the chain's reduction and jittered; returns the pair of pictures that holds it (slice k of the chain is in pair k & 1, read from pair (k + 1) & 1). Called for
   // k = 0 .. SLICES - 1 in order, once a frame, with the frame's `begin` made; a slice produced elsewhere would be uploaded into the pair returned here and nothing else of the frame changes
-  fresh(chain: Chain, k: number, jitter: number[], base: number, focal: number, flat = false): WebGLTexture[] {
+  // `prev`: the previous slice's picture when it is not in this chain's other pair (the slice before is on another chain): its textures and lattice; read through uPrev, bilinear when the lattice is not this one's
+  fresh(chain: Chain, k: number, jitter: number[], base: number, focal: number, flat = false, prev?: Chain): WebGLTexture[] {
     const gl = this.gl;
     const s = this.stack();
     const sx = s.across / chain.across, sy = s.down / chain.down;
     gl.viewport(0, 0, chain.across, chain.down);
+    this.freshPixels += chain.across * chain.down;
+    const from = prev && prev !== chain ? prev : null;
     if (k > 0) {
-      this.bindSums(chain.pairs[(k + 1) & 1]!.textures);
+      this.bindSums(from ? from.pairs[(k + 1) & 1]!.textures : chain.pairs[(k + 1) & 1]!.textures);
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER, chain.pairs[k & 1]!.framebuffer);
     const u = this.volume.use();
     gl.uniform1i(u.uSlice, k);
     gl.uniform4f(u.uAccum, sx - 1, sy - 1, jitter[0]! - 0.5, jitter[1]! - 0.5);
     gl.uniform1f(u.uAccumZ, jitter[2]!);
+    if (from && (from.across !== chain.across || from.down !== chain.down)) {
+      gl.uniform4f(u.uPrev, s.across / from.across, s.down / from.down, from.across, from.down);
+    } else {
+      gl.uniform4f(u.uPrev, 1, 1, 0, 0);
+    }
     const c = this.coarse(k, focal, flat);
     gl.uniform4f(u.uCoarse, c[0]!, c[1]!, c[2]!, c[3]!);
     gl.uniform1f(u.uBase, base);
@@ -446,11 +615,126 @@ export class BaseMistVolume {
       gl.bindTexture(gl.TEXTURE_2D_ARRAY, chain.array);
     }
     gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, 0, chain.across, chain.down, layers, gl.RGBA, gl.HALF_FLOAT, output);
+    StallCause.probe.count(E_UP_CALLS);
+    StallCause.probe.count(E_UP_BYTES, output.byteLength);
+    this.jobBytes += output.byteLength;
     const covered = Math.floor(layers / 2);
     if (this.probe !== null) {
       for (const k of this.probe) {
         if (k < covered) {
           this.probed.set(k, this.readLayers(chain, k));
+        }
+      }
+    }
+    return covered;
+  }
+
+  // the slices a job's output of this length covers, given each slice's factor (the output is the covered slices' planes, two a slice, by class: its length is the sum of their lattices)
+  private coveredOf(length: number, factors: Uint8Array, band?: { from: number; to: number; head: boolean }): number {
+    const s = this.stack();
+    if (band) {
+      // (a row band's output: the finest class of the covered slices holds the band's rows, the coarser classes are there for the head band only; the covered slices are the first whose layout is this long)
+      const finest = BaseLodRes.bandFactorOf(factors);
+      for (let covered = 1; covered <= SLICES; covered++) {
+        let size = 0;
+        for (let k = 0; k < covered; k++) {
+          const f = factors[k]!, ra = FogAccum.reduced(s.across, f);
+          size += f === finest ? 8 * ra * (band.to - band.from) : band.head ? 8 * ra * FogAccum.reduced(s.down, f) : 0;
+        }
+        if (size >= length) {
+          return covered;
+        }
+      }
+      return SLICES;
+    }
+    let at = 0;
+    for (let k = 0; k < SLICES; k++) {
+      const f = factors[k]!;
+      at += 8 * FogAccum.reduced(s.across, f) * FogAccum.reduced(s.down, f);
+      if (at >= length) {
+        return k + 1;
+      }
+    }
+    return SLICES;
+  }
+
+  // M.BaseMistJob.layoutOf of the factors for the covered slices and the volume's columns, with each slice's class and place in it; kept while they are the same (a job's output is made each frame, its layout seldom)
+  private layoutFor(factors: Uint8Array, covered: number): NonNullable<BaseMistVolume["layout"]> {
+    const s = this.stack();
+    let same = this.layout !== null && this.layoutCovered === covered && this.layoutAcross === s.across && this.layoutDown === s.down;
+    for (let k = 0; same && k < SLICES; k++) {
+      same = factors[k] === this.layoutFactors[k];
+    }
+    if (!same) {
+      const lay = BaseLodRes.layoutOf(factors, covered, s.across, s.down);
+      this.layoutFactors.set(factors);
+      this.layoutCovered = covered;
+      this.layoutAcross = s.across;
+      this.layoutDown = s.down;
+      this.layout = lay;
+      lay.classes.forEach((cl, ci) => cl.slices.forEach((k, j) => {
+        this.classOf[k] = ci;
+        this.placeOf[k] = j;
+      }));
+    }
+    return this.layout!;
+  }
+
+  // the table of factors for a focal and a path's factor (M.BaseLodRes.table), kept while they are the same
+  private tableFor(focal: number, base: number): Uint8Array {
+    if (this.table === null || this.tableFocal !== focal || this.tableBase !== base) {
+      this.table = BaseLodRes.table(focal, base);
+      this.tableFocal = focal;
+      this.tableBase = base;
+    }
+    return this.table;
+  }
+
+  // a job's output by class (the output's layout with factors): ONE texSubImage3D for each class, into that class's chain's array (layer 2 j direct, 2 j + 1 mirrored, j the slice's place in the class); returns the slices covered
+  private uploadClasses(output: Uint16Array, factors: Uint8Array, band?: { from: number; to: number; head: boolean }): number {
+    const s = this.stack(), gl = this.gl, covered = this.coveredOf(output.length, factors, band), lay = this.layoutFor(factors, covered);
+    // (a row band: the output's own layout, the finest class's rows only, uploaded as a sub-rectangle at the band's first row; the head band's coarser classes whole)
+    const sent = band ? BaseLodRes.layoutOf(factors, covered, s.across, s.down, band) : lay;
+    gl.activeTexture(gl.TEXTURE0 + M.UNITS.fogSum);
+    const bandFactor = BaseLodRes.bandFactorOf(factors);
+    sent.classes.forEach((cl) => {
+      const chain = this.chainOf(cl.factor);
+      this.ensureArray(chain);
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, chain.array);
+      const part = output.subarray(cl.offset, cl.offset + cl.length), isBand = band !== undefined && cl.factor === bandFactor;
+      if (M.TEST && isBand && this.noBandUpload) {
+        return;
+      }
+      if (M.TEST && isBand && this.wholeBandUpload) {
+        // (the band's rows into the CPU copy of the whole class array, and the whole array uploaded: layer-major, so the copy holds up to SLICES slices)
+        const whole = lay.classes.find((c) => c.factor === cl.factor)!, need = 2 * SLICES * whole.rd * whole.ra * 4;
+        let shadow = this.bandShadow.get(cl.factor);
+        if (!shadow || shadow.length !== need) {
+          shadow = new Uint16Array(need);
+          this.bandShadow.set(cl.factor, shadow);
+        }
+        for (let j = 0; j < cl.slices.length; j++) {
+          for (let m = 0; m < 2; m++) {
+            for (let y = 0; y < cl.rd; y++) {
+              shadow.set(output.subarray(cl.offset + (((j * 2 + m) * cl.rd + y) * cl.ra) * 4, cl.offset + (((j * 2 + m) * cl.rd + y + 1) * cl.ra) * 4), (((j * 2 + m) * whole.rd + band!.from + y) * whole.ra) * 4);
+            }
+          }
+        }
+        const all = shadow.subarray(0, 2 * whole.slices.length * whole.rd * whole.ra * 4);
+        gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, 0, whole.ra, whole.rd, 2 * whole.slices.length, gl.RGBA, gl.HALF_FLOAT, all);
+        StallCause.probe.count(E_UP_CALLS);
+        StallCause.probe.count(E_UP_BYTES, all.byteLength);
+        return;
+      }
+      gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, band && cl.factor === bandFactor ? band.from : 0, 0, cl.ra, cl.rd, 2 * cl.slices.length, gl.RGBA, gl.HALF_FLOAT, part);
+      StallCause.probe.count(E_UP_CALLS);
+      StallCause.probe.count(E_UP_BYTES, part.byteLength);
+    });
+    this.jobBytes += output.byteLength;
+    if (this.probe !== null) {
+      for (const k of this.probe) {
+        if (k < covered) {
+          this.probed.set(k, this.readLayers(this.chainOf(lay.classes[this.classOf[k]!]!.factor), this.placeOf[k]!));
         }
       }
     }
@@ -526,15 +810,18 @@ export class BaseMistVolume {
     // (a job's output feeds an accumulating frame only: the exact build is the GPU's)
     const made = !exact && job ? job : null;
     const chain = this.chain(exact ? 1 : made ? made.factor : gpuFactor || REDUCE);
-    // (a job's output: all of it in one upload, the blend reading the array; or, the tests' reference, slice by slice)
-    const covered = made && !this.perSlice ? this.uploadArray(chain, made.output) : 0;
+    // (a job's output: all of it in one upload, the blend reading the array, or by class when it has the factors of each slice; or, the tests' reference, slice by slice)
+    const byClass = made !== null && made.factors !== undefined && !this.perSlice;
+    P.push();
+    const covered = byClass ? this.uploadClasses(made!.output, made!.factors!, made!.band) : made && !this.perSlice ? this.uploadArray(chain, made.output) : 0;
+    P.pop(S_UPLOAD);
     const jitter = exact ? [0.5, 0.5, 0.5] : FogAccum.jitter(frameIndex);
     const focal = this.focal;
     const guard = this.effect.guard;
     const each = guard.size("base mist", "slice");
-    const sx = s.across / chain.across, sy = s.down / chain.down;
     // the plan (M.BaseLod): the slices each column needs, and the flat levels; the level of detail off is the whole build. The slices past the largest count are not drawn; the exact build also keeps each slice's
     // draws to the rectangle of the columns that need it (the accumulation's reduced pictures are read between columns, so it draws whole slices)
+    P.push();
     const active = this.effect.baseLodActive();
     const cv = this.cullView(base);
     this.lastBase = base;
@@ -545,6 +832,14 @@ export class BaseMistVolume {
     }
     const plan = this.planned;
     this.slicesNeeded = plan.slices;
+    P.pop(S_PLAN);
+    // (the GPU's slices by distance: each slice on the chain of its own factor)
+    const table = !exact && active && this.baseLodRes && !made ? this.tableFor(focal, chain.factor) : null;
+    const lay = byClass ? this.layout! : null;
+    // (a row band: the volume's rows its core rows of the finest lattice cover; the bands of a pass partition them: from floor(core0 sy) to floor(core1 sy), the last to the top)
+    const band = byClass ? made!.band : undefined, rows0 = band && made!.factors ? FogAccum.reduced(s.down, BaseLodRes.bandFactorOf(made!.factors)) : 1;
+    const bandY0 = band ? Math.floor((band.core[0]! * s.down) / rows0) : 0, bandY1 = band ? (band.core[1]! >= rows0 ? s.down : Math.floor((band.core[1]! * s.down) / rows0)) : 0;
+    let before: Chain | undefined;
     let most = 0, cells = 0, culled = 0, flat = 0;
     for (let c = 0; c < plan.slices.length; c++) {
       const n = plan.slices[c]!;
@@ -553,6 +848,15 @@ export class BaseMistVolume {
       if (n < SLICES) culled++;
     }
     for (let k = 0; k < SLICES; k++) if (active && plan.levels[k] === 0) flat++;
+    // the flat slices (the density the closed form, the sums smooth in the ray's direction) are exact after one frame: the accumulation's frame 0 blends them with the weight 1 (the held layers are the old view's), the frames from 1 on draw none of them
+    const retire = !exact && active && this.retireFlat, firstFlat = retire ? BaseLod.firstFlat(focal) : SLICES;
+    // (the accumulation's first update of these cells, the frame 0 or a job flagged first: the retired slices are drawn at weight 1; a later one draws none of them)
+    const firstUpdate = frameIndex === 0 || (made !== null && made.first === true);
+    const limit = retire && !firstUpdate ? Math.min(most, firstFlat) : most;
+    // (the tests' switch noBandBlend: a band's frame draws no blend and no store)
+    const drawLimit = M.TEST && this.noBandBlend && band ? 0 : limit;
+    this.retiredSlices += most - limit;
+    const alphaOf = (k: number): number => (retire && firstUpdate && k >= firstFlat ? 1 : decision.alpha);
     // (the tests' split timing: the draws of every `split`-th slice timed one by one, named by kind and slice, and no pass of the whole build)
     const split = M.TEST ? this.effect.timeSplit : 0;
     const time = (kind: string, k: number): boolean => {
@@ -570,12 +874,26 @@ export class BaseMistVolume {
     if (boxes) {
       gl.enable(gl.SCISSOR_TEST);
     }
-    for (let k = 0; k < most; k++) {
+    if (band) {
+      gl.enable(gl.SCISSOR_TEST);
+    }
+    P.push();
+    for (let k = 0; k < drawLimit; k++) {
+      // (a retired slice the job's output does not cover is left as it is: blending it would copy the last covered slice, which has far less optical depth)
+      if (retire && firstUpdate && made !== null && !this.perSlice && k >= firstFlat && k >= covered) {
+        continue;
+      }
       if (boxes) {
         gl.scissor(boxes[k * 4]!, boxes[k * 4 + 1]!, boxes[k * 4 + 2]! - boxes[k * 4]!, boxes[k * 4 + 3]! - boxes[k * 4 + 1]!);
+      } else if (band) {
+        gl.scissor(0, bandY0, s.across, bandY1 - bandY0);
       }
+      const kk = Math.min(k, covered - 1), cls = lay ? lay.classes[this.classOf[kk]!]! : null;
+      const ch = cls ? this.chainOf(cls.factor) : table ? this.chainOf(table[k]!) : chain;
+      const sx = s.across / ch.across, sy = s.down / ch.down;
       const timedFresh = time("fresh", k);
-      const fresh = made ? (this.perSlice ? this.upload(chain, k, made.output) : this.blended!.textures) : this.fresh(chain, k, jitter, base, focal, active && plan.levels[k] === 0);
+      const fresh = made ? (this.perSlice ? this.upload(chain, k, made.output) : this.blended!.textures) : this.fresh(ch, k, jitter, base, focal, active && plan.levels[k] === 0, before);
+      before = ch;
       if (timedFresh) {
         guard.end();
       }
@@ -587,10 +905,16 @@ export class BaseMistVolume {
         const timedBlend = time("blend", k);
         const b = this.blendArray.use();
         gl.uniform1i(b.uSlice, layerOf(k));
-        gl.uniform1i(b.uLayer, 2 * Math.min(k, covered - 1));
-        gl.uniform1f(b.uAlpha, decision.alpha);
+        if (cls) {
+          // (a row band that is not the head reads the coarse classes' arrays the head band filled: made here if no upload has yet, so a read never meets a missing texture)
+          this.ensureArray(ch);
+          gl.activeTexture(gl.TEXTURE0 + M.UNITS.fogSum);
+          gl.bindTexture(gl.TEXTURE_2D_ARRAY, ch.array);
+        }
+        gl.uniform1i(b.uLayer, cls ? 2 * this.placeOf[kk]! : 2 * Math.min(k, covered - 1));
+        gl.uniform1f(b.uAlpha, alphaOf(k));
         gl.uniform4f(b.uMap, 1 / sx, 1 / sy, jitter[0]! - 0.5, jitter[1]! - 0.5);
-        gl.uniform4f(b.uSize, chain.across, chain.down, chain.across, chain.down);
+        gl.uniform4f(b.uSize, ch.across, ch.down, ch.across, ch.down);
         this.effect.quad.drawFull();
         if (timedBlend) {
           guard.end();
@@ -602,9 +926,9 @@ export class BaseMistVolume {
         const timedBlend = time("blend", k);
         const b = this.blend.use();
         gl.uniform1i(b.uSlice, layerOf(k));
-        gl.uniform1f(b.uAlpha, decision.alpha);
+        gl.uniform1f(b.uAlpha, alphaOf(k));
         gl.uniform4f(b.uMap, 1 / sx, 1 / sy, jitter[0]! - 0.5, jitter[1]! - 0.5);
-        gl.uniform4f(b.uSize, chain.across, chain.down, chain.across, chain.down);
+        gl.uniform4f(b.uSize, ch.across, ch.down, ch.across, ch.down);
         this.effect.quad.drawFull();
         if (timedBlend) {
           guard.end();
@@ -612,21 +936,33 @@ export class BaseMistVolume {
         this.bindSums(this.blended!.textures);
       }
       gl.bindFramebuffer(gl.FRAMEBUFFER, s.slices[layerOf(k)]!);
+      if (band) {
+        gl.scissor(0, bandY0, s.across, bandY1 - bandY0);
+      }
       const timedStore = time("store", k);
       this.store.use();
       this.effect.quad.drawFull();
       if (timedStore) {
         guard.end();
       }
-      if (k % each === each - 1 || k === most - 1) {
+      if (k % each === each - 1 || k === limit - 1) {
         guard.piece();
       }
     }
-    if (boxes) {
+    P.pop(S_DRAWS);
+    if (boxes || band) {
       gl.disable(gl.SCISSOR_TEST);
     }
+    if (band) {
+      this.lastBand = { pass: frameIndex, core: band.core.slice(), head: band.head };
+      if (retire && firstUpdate) {
+        this.bandRetired[band.core[0]!] = (this.bandRetired[band.core[0]!] || 0) + Math.max(0, limit - firstFlat);
+      }
+    }
     guard.end();
+    P.push();
     this.writeCut(plan.slices, s);
+    P.pop(S_CUT);
     this.drawFrames++;
     if (exact) {
       this.exactBuilds++;
@@ -668,12 +1004,24 @@ export class BaseMistVolume {
 
   // the cut layer of the shared textures (both attachments' textures): each column's built slice count in red, written on every build
   private writeCut(counts: Uint16Array, s: Stack): void {
+    // (written only when the counts changed or the textures are not the ones it was written into: an accumulation's frames share one plan)
+    if (this.cutOnChange && this.cutVolumes !== null && !BaseLod.cutChanged(this.cutCounts, counts) && this.cutVolumes.length === s.volumes.length && this.cutVolumes.every((v, n) => v === s.volumes[n])) {
+      return;
+    }
+    if (this.cutVolumes !== null && !BaseLod.cutChanged(this.cutCounts, counts) && this.cutVolumes.length === s.volumes.length && this.cutVolumes.every((v, n) => v === s.volumes[n])) {
+      this.cutRedundant++;
+    }
+    this.cutCounts = counts.slice();
+    this.cutVolumes = s.volumes.slice();
     const gl = this.gl;
-    const data = cutLayer(counts, s.across, s.down);
+    const data = this.cut.of(counts, s.across, s.down);
     gl.activeTexture(gl.TEXTURE0 + M.UNITS.fogSum);
     for (const volume of s.volumes) {
       gl.bindTexture(gl.TEXTURE_3D, volume);
       gl.texSubImage3D(gl.TEXTURE_3D, 0, 0, 0, CUT_LAYER, s.across, s.down, 1, gl.RGBA, gl.FLOAT, data);
+      this.cutUploads++;
+      StallCause.probe.count(E_UP_CALLS);
+      StallCause.probe.count(E_UP_BYTES, data.byteLength);
     }
     gl.bindTexture(gl.TEXTURE_3D, null);
   }
@@ -682,6 +1030,17 @@ export class BaseMistVolume {
   warm(): void {
     const gl = this.gl;
     const chain = this.chain(REDUCE);
+    // (the chains of the factors by distance, and the arrays of the job's classes: made now, not at the first frame that uses them)
+    if (this.baseLodRes) {
+      for (const f of this.tableFor(this.focal, REDUCE)) {
+        this.chainOf(f);
+      }
+      if (this.effect.baseWorker) {
+        for (const f of BaseLodRes.table(this.focal, JOB_FACTOR)) {
+          this.ensureArray(this.chainOf(f));
+        }
+      }
+    }
     gl.enable(gl.SCISSOR_TEST);
     gl.scissor(0, 0, 1, 1);
     this.fresh(chain, 1, [0.5, 0.5, 0.5], 0, this.focal);
@@ -691,6 +1050,6 @@ export class BaseMistVolume {
   }
 }
 
-export const BaseMist = { Volume: BaseMistVolume, FAR, NEAR, SHARE, HB, SLICES, LAYERS, TOTAL_LAYERS, CUT_LAYER, clampSlice, readSums, cutLayer, FRONT_SLICES, LOG, ALBEDO, sliceStart, thickness, sliceOf, layerOf, Schedule, combine, colourWeight, albedo, gatherRay, VOLUME_GLSL: VOLUME_SOURCE };
+export const BaseMist = { Volume: BaseMistVolume, FAR, NEAR, SHARE, HB, SLICES, LAYERS, TOTAL_LAYERS, CUT_LAYER, clampSlice, readSums, cutLayer, CutLayer, FRONT_SLICES, LOG, ALBEDO, sliceStart, thickness, sliceOf, layerOf, Schedule, combine, colourWeight, albedo, gatherRay, VOLUME_GLSL: VOLUME_SOURCE };
 
 M.BaseMist = BaseMist;

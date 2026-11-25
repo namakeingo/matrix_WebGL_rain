@@ -10,6 +10,8 @@
 //
 // Changelog:
 // 2026-11-08: new.
+// 2026-11-25: farRows: the water rows drawn at half resolution.
+// 2026-11-25: splitBands: a band as tall as the screen is split at skyFrom (the sky-only program ran for no row at the guard's 16384-row band).
 import { M } from "../../engine/core";
 
 // rows above the last water row kept with the full program
@@ -53,10 +55,58 @@ function skyRows(view: BandsView, tile: number): number {
   return Math.max(0, view.height - start);
 }
 
+// the water draw's parts: the guard's bands as bands() makes them when they are shorter than the screen; a band as tall as the screen (the guard's size at the
+// defaults: 16384 rows) is split at skyFrom, the full part [0, skyFrom) first and the sky part [skyFrom, height) after it (a part with no rows is left out)
+function splitBands(view: BandsView, tile: number): Band[] {
+  if (tile < view.height) {
+    return bands(view, tile);
+  }
+  const first = skyFrom(view);
+  const out: Band[] = [];
+  if (first > 0) {
+    out.push({ from: 0, to: first, sky: false });
+  }
+  if (first < view.height) {
+    out.push({ from: first, to: view.height, sky: true });
+  }
+  return out;
+}
+
+// the water rows drawn at half resolution (story W3): the far water, the rows nearest the horizon whose centre's flat hit (eyeY / -d.y) is at least distanceM away, as a band [from, to) of rows
+// from the bottom, both multiples of `align` (a half-resolution pixel is a block of align rows: the far end rounded up from the first far row, the horizon's end rounded down from the
+// last water row, so the horizon's odd row stays with the full program); from = to = 0 when there is none. The flat hit's distance grows with the row, so the first far row is found by bisection.
+interface FarView extends BandsView {
+  width: number;
+  rayAt(px: number, py: number): ArrayLike<number>;
+}
+function farRows(view: FarView, eyeY: number, distanceM: number, align: number): { from: number; to: number } {
+  const last = lastWaterRow(view);
+  if (last < 0) {
+    return { from: 0, to: 0 };
+  }
+  const far = (k: number) => eyeY / -view.rayAt(view.width / 2, view.height - (k + 0.5))[1]! >= distanceM;
+  if (!far(last)) {
+    return { from: 0, to: 0 };
+  }
+  let lo = 0;
+  let hi = last;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (far(mid)) {
+      hi = mid;
+    } else {
+      lo = mid + 1;
+    }
+  }
+  const from = Math.ceil(lo / align) * align;
+  const to = Math.floor((last + 1) / align) * align;
+  return to > from ? { from, to } : { from: 0, to: 0 };
+}
+
 function skyShare(view: BandsView, tile: number): number {
   return skyRows(view, tile) / view.height;
 }
 
-export const QualityWaterBands = { MARGIN_ROWS, lastWaterRow, skyFrom, bands, skyRows, skyShare };
+export const QualityWaterBands = { MARGIN_ROWS, lastWaterRow, skyFrom, bands, splitBands, farRows, skyRows, skyShare };
 
 M.QualityWaterBands = QualityWaterBands;
