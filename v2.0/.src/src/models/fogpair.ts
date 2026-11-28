@@ -1,4 +1,4 @@
-// The calibration pair's sliders (Feature U3, story M6; units.ui.fogpair.ts): the pure model of the headed pair's controls (pages/fogpair/pair.html), TEMPORARY like the pair itself: the noise multiplier, the colour patches'
+// The calibration pair's sliders (Feature U3, story M6; units.ui.fogpair.ts): the pure model of the headed pair's controls (pages/fogpaircompare/pair.html), TEMPORARY like the pair itself: the noise multiplier, the colour patches'
 // contrast, the base mist's and the front cloud's own Fog intensities (one decimal), the base mist's height scale Hb and the front's tail scale Hf and share t. Pure, no GL, no page.
 // - SLIDERS: { id, kind ('reload': the right frame reloads with the query; 'live': set on its fog effect), query | prop, min, max, step, def, decimals, label }, in the page's order
 // - tenths(v), clampSlider(id, v), baseStrength(i), frontSigma(i) (the layers' terms of M.StaticMist.splitStrengths, each with its OWN intensity), defaults(), effective(state, single), live(state, single), query(state), format(id, v), colourEdges(c)

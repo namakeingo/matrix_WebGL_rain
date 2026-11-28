@@ -38,6 +38,7 @@
 // Changelog:
 // 2026-11-23: qualityLeadKey (the quality job's lead: what the job reads at the release frame besides the view).
 // 2026-11-12: the picture larger than the view by MARGIN on each side (frame), drawn with the mirrored pass's own camera block.
+// 2026-11-26: MARGIN 0.14, was 0.11 (the project's default ripples measure 0.1355).
 // 2026-11-08: the picture reused while its inputs hold (level of detail on).
 // 2026-11-07: the pass skipped for a view whose nearest water the fog hides (level of detail on).
 // 2026-11-06: the pass skipped for a view with no water (quality job "water").
@@ -57,9 +58,9 @@ import type { EffectQuality, QualityJob, QualityShared, QualityViewInputs } from
 import type { QualityStatics, QualityParams } from "../models/quality/jobs";
 
 export class Reflection extends M.Effect {
-  // the margin past the view on each side, a fraction of its width and height (the 99.9th percentile of the water's lookup displacement under the strongest ripples plus 1%: scenetest
-  // reflectionlookup; the picture's size and the camera block follow it each frame, so a test can set it)
-  static MARGIN = 0.11;
+  // the margin past the view on each side, a fraction of its width and height (the 99.9th percentile of the water's lookup displacement under the project's default ripples plus 1%: scenetest
+  // reflectionlookup, 0.1355 at the defaults; the picture's size and the camera block follow it each frame, so a test can set it)
+  static MARGIN = 0.14;
   // the picture's frame for the view's size and the margin
   frame: ReflectionFrameOf;
   distance: GLenum[];
